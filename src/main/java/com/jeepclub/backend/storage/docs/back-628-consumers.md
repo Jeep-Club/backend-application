@@ -32,3 +32,20 @@ nem DPI. Nenhuma alteração de preset foi justificada integralmente por esta
 qualidade, validação da exportação e testes de ACL/cache por superfície. As
 decisões D06–D08 e D13 continuam sendo as fontes de produto; a integração dos
 consumidores pertence às Stories posteriores.
+
+## Divergência a resolver no pipeline
+
+`MediaResolutionService.resolve` aceita `MASTER` quando a policy do consumidor
+autoriza; `StorageHttpFlowTest.authenticatedOwnerReadsMasterWhileOtherUsersAndModerationCannotBypassIt`
+espera HTTP 200 para o proprietário na rota comum. Isso não demonstra o requisito
+da BACK-628 de impedir resolução comum de MASTER por troca de código. A correção
+precisa definir e testar o acesso privado de reedição e a compatibilidade do
+fluxo legado antes de retirar essa via; a presença da policy não comprova o aceite.
+
+O semáforo de `SynchronousImageProcessor` limita somente processamento na JVM;
+leitura multipart, reserva SQL, gravação física e transação de catálogo estão fora
+dele. Não há cancelamento ponta a ponta demonstrado para codec ou I/O já em
+execução. Um deadline verificado apenas após essas chamadas não interromperia o
+trabalho. A reserva de `BlobCatalogAdapter` é transacionada antes do I/O e
+preservada para reconciliação; testes de falhas e concorrência em banco real são
+necessários para sustentar as garantias de custódia e retry.
