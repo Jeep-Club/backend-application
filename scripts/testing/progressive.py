@@ -129,6 +129,8 @@ def select(records, band, modules=(), focus=(), dependencies=(), edges=()):
             raise Invalid('F1 requires --test Class[#method]')
         resolved = []
         for item in focus:
+            if not isinstance(item, str):
+                raise Invalid('Test selectors must be strings')
             cls, _, method = item.partition('#')
             matches = [n for n in names if n == cls or n.rsplit('.', 1)[-1] == cls]
             if len(matches) != 1 or ('#' in item and not re.fullmatch(r'\w+', method)):
@@ -339,6 +341,7 @@ def run(root, plan, out):
 
 
 def main(argv=None):
+    started = time.monotonic()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--band', choices=['F1', 'F2', 'F3', 'F4', 'F5'])
     parser.add_argument('--migration', choices=['M1', 'M2', 'M3', 'M4'])
@@ -357,11 +360,11 @@ def main(argv=None):
         validate_maven(root)
         records, helpers = inventory(root)
         edges = relations(root, {r['module'] for r in records})
-        base = git(root, 'merge-base', 'HEAD', args.base)
+        base = git(root, 'merge-base', 'HEAD', args.base) if args.migration else None
         static = static_migrations(root, base) if args.migration else None
         if args.migration and (args.module or args.test or args.dependency):
             raise Invalid('Migration levels cannot be narrowed with functional selectors')
-        if args.band == 'F3' and not args.impact_review:
+        if args.band == 'F3' and not (args.impact_review and args.impact_review.strip()):
             raise Invalid('F3 requires --impact-review: review semantic/runtime dependencies and declare --dependency as needed')
         if args.migration:
             selected = [dict(r, selector=r['name']) for r in records if r['kind'] == 'mysql']
@@ -373,8 +376,12 @@ def main(argv=None):
                 selectors = [MYSQL + '#' + m for m in SMOKE] if args.migration == 'M2' else [MYSQL]
                 if args.migration == 'M3' and static['new']:
                     risks = json.loads(args.risk_file.read_text(encoding='utf-8')) if args.risk_file else {}
+                    if not isinstance(risks, dict):
+                        raise Invalid('Risk file must contain a JSON object keyed by migration sha256')
                     for new in static['new']:
                         risk = risks.get(new['sha256'], {})
+                        if not isinstance(risk, dict):
+                            raise Invalid('Each migration risk declaration must be a JSON object')
                         if not isinstance(risk.get('reason'), str) or not risk['reason'].strip() or not isinstance(risk.get('tests'), list) or not risk['tests']:
                             raise Invalid(f'Uncovered new migration {new["path"]}: require sha256-bound risk review and upgrade/constraint tests in --risk-file')
                         if all(t in [MYSQL + '#' + m for m in SMOKE] for t in risk['tests']):
@@ -402,6 +409,7 @@ def main(argv=None):
         out = root / 'target/progressive' / (dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ'))
         out.mkdir(parents=True)
         plan['commands'] = materialize_commands(cmds, out)
+        plan['selection_seconds'] = round(time.monotonic() - started, 3)
         (out / 'selection.json').write_text(json.dumps(plan, indent=2), encoding='utf-8')
         print(f'{args.band or args.migration}: {len(selected)} selectors; {"PARTIAL" if plan["partial"] else "FULL gates"}; manifest: {out / "selection.json"}')
         if args.inspect:

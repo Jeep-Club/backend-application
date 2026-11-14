@@ -1,7 +1,9 @@
 """Regression tests for progressive Maven test selection."""
 import hashlib
+import json
 import importlib.util
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -26,6 +28,41 @@ def record(name, module, kind="unit"):
 
 
 class ProgressiveTests(unittest.TestCase):
+    def test_m3_new_migration_requires_review_and_rejects_smoke_only(self):
+        row = dict(record(progressive.MYSQL, 'platform', 'mysql'), methods=progressive.SMOKE, inherited=False)
+        upgrade = dict(record('com.jeepclub.backend.platform.NewUpgradeMySqlIT', 'platform', 'mysql'), methods=['upgrade'], inherited=False)
+        risk_file = self.root / 'risk.json'
+        new = {'path': 'V99__new.sql', 'sha256': 'digest'}
+        args = ['--migration', 'M3', '--risk-file', str(risk_file), '--inspect']
+        with mock.patch.object(progressive, 'ROOT', self.root), mock.patch.object(progressive, 'validate_maven'), \
+             mock.patch.object(progressive, 'git', return_value='sha'), \
+             mock.patch.object(progressive, 'inventory', return_value=([row, upgrade], [])), \
+             mock.patch.object(progressive, 'relations', return_value=[]), \
+             mock.patch.object(progressive, 'static_migrations', return_value={'new': [new]}), \
+             mock.patch.object(progressive.subprocess, 'run', return_value=mock.Mock(stderr='Java 17')) as proc:
+            risk_file.write_text('{}')
+            self.assertEqual(2, progressive.main(args))
+            risk_file.write_text(json.dumps({'digest': {'reason': 'only smoke', 'tests': [progressive.MYSQL + '#' + progressive.SMOKE[0]]}}))
+            self.assertEqual(2, progressive.main(args))
+            risk_file.write_text(json.dumps({'digest': {'reason': 'previous-version upgrade and data/constraints preservation', 'tests': [upgrade['name'] + '#upgrade']}}))
+            self.assertEqual(0, progressive.main(args))
+            self.assertEqual(1, proc.call_count)  # Java version only; inspect never invokes Maven.
+
+    def test_audit_gate_accepts_complete_xml_and_rejects_missing_candidate(self):
+        audit_spec = importlib.util.spec_from_file_location('audit_reports', SCRIPT.with_name('audit_reports.py'))
+        audit = importlib.util.module_from_spec(audit_spec)
+        with mock.patch.dict(sys.modules, {'progressive': progressive}):
+            audit_spec.loader.exec_module(audit)
+        reports = self.root / 'reports'
+        reports.mkdir()
+        row = record('com.jeepclub.backend.tools.ToolTest', 'tools')
+        (reports / 'TEST-tool.xml').write_text('<testsuite><testcase classname="' + row['name'] + '" name="works"/></testsuite>')
+        argv = ['audit_reports.py', '--kind', 'unit', '--reports', str(reports), '--out', str(self.root / 'audit.json')]
+        with mock.patch.object(sys, 'argv', argv), mock.patch.object(audit, 'validate_maven'), mock.patch.object(audit, 'inventory', return_value=([row], [])):
+            self.assertEqual(0, audit.main())
+            (reports / 'TEST-tool.xml').unlink()
+            self.assertEqual(1, audit.main())
+
     def test_large_selection_uses_native_surefire_file_without_losing_entries(self):
         names = ['com.jeepclub.backend.newmodule.VeryLongName' + str(i) + 'Test' for i in range(200)]
         cmds = progressive.commands([record(n, 'newmodule') for n in names])

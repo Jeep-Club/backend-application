@@ -96,3 +96,38 @@ integral de seletores. Nenhuma mudança em `pom.xml` nem nos SQL existentes.
 
 M3 real em andamento: `target/progressive/20261114T222625747811Z/` (Java 17).
 Próximo: probes isolados, seleção F3 longa real, F4 real, gates finais e CI Linux.
+
+## Checkpoint 4 — BACK-686 / integração Codex
+
+Snapshot anterior à publicação; o resultado dos gates no HEAD está no PR e no CI,
+não deve ser inferido desta lista de implementação.
+
+- `AGENTS.md` referencia uma única fonte operacional: `progressive-validation.md`.
+- Matriz de risco F1–F5/M1–M4, exemplos reais, limites do discovery, revisão
+  semântica de F3, histórico e evidências de novos elementos documentados.
+- Workflow conserva integralmente os três comandos Maven, o ensaio V+1 e os jobs;
+  acrescenta unittest Python, inspeção Linux e auditoria dos XMLs contra candidatos.
+  Os artefatos JSON de auditoria são publicados junto aos XMLs existentes.
+- `audit_reports.py` compara inventário com gates originais, evitando tratar seleção
+  parcial como full. Sua regressão verifica sucesso e ausência de candidato.
+- 24 regressões Python aprovadas em 0,875 s; sem falhas/erros/skips.
+  Cobrem A–E, seleção longa, Docker ausente simulado, códigos, skips, XML obsoleto,
+  risco de migration nova (bloqueio sem revisão, recusa de smoke-only e seleção
+  explícita de upgrade), inspeção sem Maven e comparação de gate completo.
+- Corrigida dependência desnecessária de `origin/develop` nas faixas funcionais:
+  checkout raso de PR pode inspecionar F1–F5; somente M1–M4 exigem base histórica.
+
+| Critério Jira | Implementação | Prova/resultado neste snapshot |
+|---|---|---|
+| BACK-683 / CA-01, CA-05 | `select`, `commands`, wrappers | F1 6 casos; F2 34; regressões e inspeção F3/F4/F5 |
+| BACK-684 / CA-02, CA-03 | `inventory`, `relations`, `validate_maven`, `reconcile` | cenários A–E aprovados; fechamento fonte+revisão semântica |
+| BACK-685 / CA-04 | `static_migrations`, M2/M3/M4, `probe_migrations.py` | M1 aprovado; M2 real 2 casos; histórico/probes ainda em execução |
+| CA-06, CA-07 | manifests isolados, `run`, `audit_reports.py` | XML ausente/antigo, falha/skip e código real testados |
+| BACK-686 / CA-08, CA-DOC | `AGENTS.md`, guia e CI | implementado; aceite final depende dos gates publicados |
+| CA-ARQ, CA-CONF | investigação registrada; diff restrito a tooling/docs/CI | sem alteração em produção Java, SQL, fixtures ou frontend |
+| CA-TEST / Linux | regressões/inspeção acrescentadas ao CI | execução final pendente de publicação |
+
+Limites residuais a auditar: suficiência semântica das declarações de impacto/risco;
+engines/padrões/source roots novos; Windows cmd para seleção focal IT excepcionalmente
+longa (falha explícita); custo conservador de M3 e do fechamento F3. Nenhuma economia
+percentual ou de tokens foi presumida. Não há autorização de merge/deploy.
