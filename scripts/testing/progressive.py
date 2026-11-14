@@ -78,6 +78,7 @@ def inventory(root):
         # is the execution oracle; a candidate producing no cases fails reconciliation.
         records.append(dict(name=name, module=module(name), kind=kind,
                             path=str(path.relative_to(root)), disabled='@Disabled' in text,
+                            nested=bool(re.search(r'@(?:[\w.]+\.)?Nested\b', text)),
                             declared_tests=has_test, inherited=bool(re.search(r'\bextends\b', text)),
                             methods=sorted(set(re.findall(r'\bvoid\s+(\w+)\s*\(', text)))))
     if errors:
@@ -138,7 +139,7 @@ def select(records, band, modules=(), focus=(), dependencies=(), edges=()):
             if method and method not in names[matches[0]].get('methods', []):
                 raise Invalid(f'Unknown method selector: {item}')
             resolved.append(dict(names[matches[0]], selector=matches[0] + ('#' + method if method else '')))
-        return resolved
+        return list({r['selector']: r for r in resolved}.values())
     if focus:
         raise Invalid('--test is only supported with F1')
     if band == 'F5':
@@ -245,10 +246,21 @@ def commands(selected, full=False, migration=None):
         selectors = sorted({r['selector'] for r in selected if r['kind'] == kind})
         if not selectors:
             continue
-        args = ['-Dtest=' + ','.join(selectors), '-DfailIfNoTests=true', 'test'] if not profile else [
-            '-P' + profile, '-DskipUnitTests=true', '-Dit.test=' + ','.join(selectors),
-            '-Dfailsafe.failIfNoSpecifiedTests=true', 'verify']
-        result.append(mvn + args)
+        # A global Maven method filter can exclude nested cases of a different
+        # whole-class selector. Keep complete classes and methods in separate runs.
+        whole = {s for s in selectors if '#' not in s}
+        for group in (sorted(whole), [s for s in selectors if '#' in s and s.split('#')[0] not in whole]):
+            if not group:
+                continue
+            patterns = set(group)
+            for r in selected:
+                if r['selector'] in group and r.get('nested') and '#' in r['selector']:
+                    cls, method = r['selector'].split('#')
+                    patterns.add(cls + '$*#' + method)
+            args = ['-Dtest=' + ','.join(sorted(patterns)), '-DfailIfNoTests=true', 'test'] if not profile else [
+                '-P' + profile, '-DskipUnitTests=true', '-Dit.test=' + ','.join(sorted(patterns)),
+                '-Dfailsafe.failIfNoSpecifiedTests=true', 'verify']
+            result.append(mvn + args)
     return result
 
 
@@ -338,6 +350,15 @@ def run(root, plan, out):
         relevant = [r for r in plan['selected'] if r['kind'] == (
             'mysql' if '-Pmysql-migrations' in cmd or cmd[0] == 'bash' else
             'postgres' if '-Ppublications-postgresql' in cmd else 'unit')]
+        requested = next((a.split('=', 1)[1].split(',') for a in cmd if a.startswith(('-Dtest=', '-Dit.test='))), None)
+        include_file = next((a.split('=', 1)[1] for a in cmd if a.startswith('-Dsurefire.includesFile=')), None)
+        if include_file:
+            requested = Path(include_file).read_text(encoding='utf-8').splitlines()
+        if requested is not None:
+            relevant = [r for r in relevant if r['selector'] in requested or
+                        ('#' in r['selector'] and r['name'] in requested)]
+        if not relevant:
+            raise Invalid(f'Command has no resolved mandatory selectors: {cmd}')
         try:
             with log.open('w', encoding='utf-8') as stream:
                 docker = any(r['kind'] != 'unit' for r in relevant)
@@ -358,7 +379,7 @@ def run(root, plan, out):
         skipped = stats['counts'].get('skipped', 0)
         ok = not (code or stats['not_executed'] or stats['all_skipped_selectors'] or stats['unexpected_cases'] or stats['counts'].get('failure') or stats['counts'].get('error')
                   or (skipped and any(r['kind'] != 'unit' for r in relevant)))
-        runs.append(dict(command=cmd, exit_code=code, passed=ok, seconds=round(time.monotonic()-started, 3),
+        runs.append(dict(command=cmd, selected_selectors=[r['selector'] for r in relevant], exit_code=code, passed=ok, seconds=round(time.monotonic()-started, 3),
                          log=str(log), **stats))
         reported = {c['classname'].split('$')[0] for run in runs for c in run['cases']}
         (out / 'result.json').write_text(json.dumps(dict(plan=plan, runs=runs,
@@ -390,6 +411,7 @@ def main(argv=None):
             raise Invalid('Choose exactly one of --band or --migration')
         validate_maven(root)
         records, helpers = inventory(root)
+        risks = {}
         edges = relations(root, {r['module'] for r in records})
         base = git(root, 'merge-base', 'HEAD', args.base) if args.migration else None
         static = static_migrations(root, base) if args.migration else None
@@ -434,6 +456,8 @@ def main(argv=None):
                     not_selected=sorted({r['name'] for r in records}-{r['name'] for r in selected}),
                     relations=edges if args.band == 'F3' else [], impact_review=args.impact_review,
                     migrations=static, commands=cmds,
+                    request=dict(modules=args.module, tests=args.test, dependencies=args.dependency, base=args.base),
+                    risk_review=risks,
                     limitations=['Source candidates are not JUnit case counts; XML reconciles execution.',
                                  'Import closure cannot infer reflection, events, configuration or external consumers.',
                                  'Partial execution is not full validation or JaCoCo coverage.'])

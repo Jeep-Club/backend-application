@@ -68,6 +68,13 @@ dialeto no próprio perfil. F1 também aceita IT explícito e escolhe o perfil c
 As classes completas são resolvidas; são aceitos nome simples inequívoco ou FQCN,
 e opcionalmente um método. Não se aceitam wildcards, exclusões ou expressões Maven
 arbitrárias na interface: o objetivo é auditar uma seleção concreta.
+Classes completas e métodos de classes diferentes podem gerar invocações Maven
+separadas: o filtro global de métodos do Surefire pode excluir casos nested de
+outra classe completa. Cada gate conserva sua própria seleção e reconciliação.
+Quando a classe inteira já está selecionada, um método focal dessa mesma classe
+é conferido no XML da execução completa, sem repetir seus casos. Métodos nested
+recebem o padrão interno necessário ao Maven; as identidades observadas são
+conferidas contra o seletor concreto, sem ampliar métodos silenciosamente.
 
 Seleção Surefire longa usa o `surefire.includesFile` nativo, com um seletor por
 linha no diretório da rodada, evitando o limite do `cmd.exe` no Windows. Nos demais
@@ -148,6 +155,8 @@ code page Windows; a visão diagnóstica tolera bytes não UTF-8 sem adulterar o
 Cada seleção válida grava `target/progressive/<UTC>/selection.json`: SHA, branch,
 worktree dirty, ambiente/Java, candidatos/helpers, seletores, não selecionados,
 comandos, relações e limites. `result.json` preserva cada gate, duração, código
+original, inputs solicitados e declarações de risco ficam no manifesto. O resultado
+preserva a seleção de cada comando, além do código
 original, casos JUnit por estado (`passed`, `failure`, `error`, `skipped`), seletores
 sem casos, classes inesperadas, não executados e comandos restantes. O log completo
 fica em `gate-N/execution.log` e os XMLs daquela rodada em `gate-N/reports`.

@@ -191,3 +191,23 @@ Tempos são medições das rodadas descritas, não benchmark controlado entre m�
 ou JDKs. F3 foi conservador e próximo da suite integral; nenhuma economia percentual
 foi inferida. M2 e F1/F2 limitam o escopo durante desenvolvimento; M3 não pretende
 substituir a suite MySQL integral e os gates finais.
+
+## Seletores mistos e métodos nested
+
+Uma prova F1 adicional misturando `SessionTest` completa com método de Tools revelou
+que o filtro global de métodos Maven excluía os casos nested da outra classe. O
+runner falhou por ausência de execução (sem falso sucesso). Hipótese confirmada:
+`SessionTest` isolada executou 18 casos. Corrigida a composição para separar grupos
+de classes completas e métodos de outras classes, com seleção/reconciliação por gate.
+
+Provas reais do worktree corrigido: classes completas nested (18 casos, 6,718 s)
++ método Tools (1 caso, 7,742 s) na mesma chamada F1; método nested focal
+`SessionTest#shouldCreateActiveSession` (1 caso, 6,485 s). Todas sem falhas/skips.
+Manifestos `target/progressive/20261114T230040948345Z/` e
+`target/progressive/20261114T230057190375Z/`; identificam HEAD/dirty antes do commit.
+Quando classe e método dessa mesma classe são pedidos, a checagem explícita do método
+permanece no XML da classe, sem rerun nem aceitar helper não executado como cobertura.
+Uma regressão específica prova esse bloqueio, inclusive com Maven zero.
+
+Inputs originais e declarações de risco por hash são conservados no manifesto.
+30 regressões aprovadas em Windows (0,888 s) e Linux Python 3.12 (0,163 s).

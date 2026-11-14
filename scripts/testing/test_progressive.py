@@ -28,6 +28,45 @@ def record(name, module, kind="unit"):
 
 
 class ProgressiveTests(unittest.TestCase):
+    def test_whole_class_does_not_hide_a_requested_nonexecuted_method(self):
+        row = dict(record('com.jeepclub.backend.tools.UpgradeTest', 'tools'), methods=['helper'], inherited=False)
+        selected = progressive.select([row], 'F1', focus=[row['name'], row['name'] + '#helper'])
+        self.assertEqual(2, len(selected))
+        commands = progressive.commands(selected)
+        self.assertEqual(1, len(commands))  # Verify the method in the whole-class XML, without rerunning it.
+        out = self.root / 'out'
+        out.mkdir()
+        def maven(cmd, cwd, stdout, stderr):
+            reports = Path(cwd) / 'target/surefire-reports'
+            reports.mkdir(parents=True)
+            (reports / 'TEST-upgrade.xml').write_text('<testsuite><testcase classname="' + row['name'] + '" name="actualTest"/></testsuite>')
+            return mock.Mock(returncode=0)
+        with mock.patch.object(progressive.subprocess, 'run', side_effect=maven):
+            self.assertEqual(1, progressive.run(self.root, {'selected': selected, 'commands': commands}, out))
+        result = json.loads((out / 'result.json').read_text())
+        self.assertEqual([row['name'] + '#helper'], result['runs'][0]['not_executed'])
+
+    def test_complete_class_and_method_are_separate_commands_with_per_gate_reconciliation(self):
+        full = record('com.jeepclub.backend.tools.NestedTest', 'tools')
+        focal = record('com.jeepclub.backend.tools.FocusTest', 'tools')
+        focal['selector'] += '#chosen'
+        commands = progressive.commands([full, focal])
+        self.assertEqual(2, len(commands))
+        out = self.root / 'out'
+        out.mkdir()
+        def maven(cmd, cwd, stdout, stderr):
+            selected = full if full['name'] in next(a for a in cmd if a.startswith('-Dtest=')) else focal
+            report = Path(cwd) / 'target/surefire-reports'
+            report.mkdir(parents=True)
+            (report / 'TEST-case.xml').write_text('<testsuite name="' + selected['name'] + '"><testcase classname="' + selected['name'] + '" name="chosen"/></testsuite>')
+            return mock.Mock(returncode=0)
+        with mock.patch.object(progressive.subprocess, 'run', side_effect=maven):
+            self.assertEqual(0, progressive.run(self.root, {'selected': [full, focal], 'commands': commands}, out))
+        result = json.loads((out / 'result.json').read_text())
+        self.assertEqual([], result['not_run'])
+        self.assertEqual([full['selector']], result['runs'][0]['selected_selectors'])
+        self.assertEqual([focal['selector']], result['runs'][1]['selected_selectors'])
+
     def test_nested_display_name_uses_suite_owner_without_hiding_foreign_class(self):
         report = self.root / 'reports'
         report.mkdir()
