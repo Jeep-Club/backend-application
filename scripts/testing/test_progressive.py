@@ -60,6 +60,9 @@ class ProgressiveTests(unittest.TestCase):
         child = by_name["com.jeepclub.backend.identity.ChildMySqlIT"]
         self.assertEqual("mysql", child["kind"])
         self.assertTrue(child["inherited"])
+        self.assertIn("inherited", child["methods"])
+        self.assertEqual("com.jeepclub.backend.identity.ChildMySqlIT#inherited",
+                         progressive.select(records, "F1", focus=["ChildMySqlIT#inherited"])[0]["selector"])
         self.assertTrue(by_name["com.jeepclub.backend.identity.ParameterizedTest"]["declared_tests"])
         portable_helpers = {p.replace("\\", "/") for p in helpers}
         self.assertIn("src/test/java/com/jeepclub/backend/identity/AbstractContract.java", portable_helpers)
@@ -73,6 +76,65 @@ class ProgressiveTests(unittest.TestCase):
             progressive.select(rows, "F4", modules=["iam.identity"])
         with self.assertRaisesRegex(progressive.Invalid, "requires --module"):
             progressive.select(rows, "F2")
+
+    def test_a_new_eligible_test_is_added_to_existing_module_selection(self):
+        existing = record("com.jeepclub.backend.identity.UserTest", "iam.identity")
+        added = record("com.jeepclub.backend.identity.UserProfileTest", "iam.identity")
+        before = progressive.select([existing], "F2", modules=["iam.identity"])
+        after = progressive.select([existing, added], "F2", modules=["iam.identity"])
+        self.assertEqual([existing["name"]], [r["name"] for r in before])
+        self.assertEqual({existing["name"], added["name"]}, {r["name"] for r in after})
+
+    def test_b_new_mysql_and_postgres_candidates_route_to_their_profiles(self):
+        rows = [record("com.jeepclub.backend.identity.NewMySqlIT", "iam.identity", "mysql"),
+                record("com.jeepclub.backend.identity.NewPostgresIT", "iam.identity", "postgres")]
+        selected = rows
+        cmds = progressive.commands(selected)
+        mysql = next(c for c in cmds if any("mysql-migrations" in arg for arg in c))
+        postgres = next(c for c in cmds if any("publications-postgresql" in arg for arg in c))
+        self.assertIn("-Dit.test=com.jeepclub.backend.identity.NewMySqlIT", mysql)
+        self.assertIn("-Dit.test=com.jeepclub.backend.identity.NewPostgresIT", postgres)
+
+    def test_c_new_module_is_known_and_selectable_from_inventory(self):
+        java(self.root, "src/test/java/com/jeepclub/backend/tools/ToolsTest.java", """
+            package com.jeepclub.backend.tools; class ToolsTest { @Test void works() {} }
+        """)
+        rows, _ = progressive.inventory(self.root)
+        selected = progressive.select(rows, "F2", modules=["tools"])
+        self.assertEqual(["com.jeepclub.backend.tools.ToolsTest"], [r["name"] for r in selected])
+
+    def test_d_new_import_expands_f3_before_to_after_selection(self):
+        rows = [record("com.jeepclub.backend.identity.UserTest", "iam.identity"),
+                record("com.jeepclub.backend.billing.BillingTest", "billing")]
+        before = progressive.select(rows, "F3", modules=["iam.identity"])
+        java(self.root, "src/main/java/com/jeepclub/backend/billing/api/module/Contract.java", """
+            package com.jeepclub.backend.billing.api.module; public interface Contract {}
+        """)
+        java(self.root, "src/main/java/com/jeepclub/backend/identity/Consumer.java", """
+            package com.jeepclub.backend.identity; import com.jeepclub.backend.billing.api.module.Contract;
+            class Consumer { Contract contract; }
+        """)
+        edges = progressive.relations(self.root, {r["module"] for r in rows})
+        after = progressive.select(rows, "F3", modules=["iam.identity"], edges=edges)
+        self.assertEqual({"iam.identity"}, {r["module"] for r in before})
+        self.assertEqual({"iam.identity", "billing"}, {r["module"] for r in after})
+
+    def test_d_f3_rejects_unknown_manual_dependency(self):
+        rows = [record("com.jeepclub.backend.identity.UserTest", "iam.identity")]
+        with self.assertRaisesRegex(progressive.Invalid, "Unknown module: billing"):
+            progressive.select(rows, "F3", modules=["iam.identity"], dependencies=["billing"])
+
+    def test_e_inventory_rejects_unsupported_orphan_test_class(self):
+        java(self.root, "src/test/java/com/jeepclub/backend/identity/LegacyCheck.java", """
+            package com.jeepclub.backend.identity; class LegacyCheck { @Test void check() {} }
+        """)
+        with self.assertRaisesRegex(progressive.Invalid, "Unsupported executable test naming"):
+            progressive.inventory(self.root)
+
+    def test_e_f1_rejects_obsolete_class_selector(self):
+        rows = [record("com.jeepclub.backend.identity.CurrentTest", "iam.identity")]
+        with self.assertRaisesRegex(progressive.Invalid, "Unknown, ambiguous or unsupported selector"):
+            progressive.select(rows, "F1", focus=["OldTest"])
 
     def test_f1_rejects_unknown_methods_but_allows_inherited_method_resolution(self):
         rows = [dict(record("com.jeepclub.backend.identity.UserTest", "iam.identity"),
@@ -201,6 +263,66 @@ class ProgressiveTests(unittest.TestCase):
         self.assertEqual(3, result["runs"][0]["exit_code"])
         self.assertFalse(result["runs"][0]["passed"])
         self.assertEqual([selected[0]["name"]], result["runs"][0]["not_executed"])
+
+    def test_run_zero_exit_without_xml_is_failure(self):
+        out = self.root / "out"
+        out.mkdir()
+        selected = [record("com.jeepclub.backend.identity.UserTest", "iam.identity")]
+        with mock.patch.object(progressive.subprocess, "run", return_value=mock.Mock(returncode=0)):
+            status = progressive.run(self.root, {"selected": selected, "commands": [["mvnw", "test"]]}, out)
+        self.assertEqual(1, status)
+        result = __import__("json").loads((out / "result.json").read_text(encoding="utf-8"))
+        self.assertFalse(result["runs"][0]["passed"])
+        self.assertEqual([selected[0]["name"]], result["runs"][0]["not_executed"])
+
+    def test_run_success_reconciles_fresh_xml_and_archives_old_reports(self):
+        target = self.root / "target"
+        report = target / "surefire-reports"
+        report.mkdir(parents=True)
+        (report / "TEST-old.xml").write_text("""<testsuite><testcase classname="com.jeepclub.backend.identity.ObsoleteTest" name="old"/></testsuite>""")
+        out = self.root / "out"
+        out.mkdir()
+        selected = [record("com.jeepclub.backend.identity.UserTest", "iam.identity")]
+
+        def maven(cmd, cwd, stdout, stderr):
+            fresh = Path(cwd) / "target/surefire-reports"
+            fresh.mkdir(parents=True)
+            (fresh / "TEST-user.xml").write_text("""<testsuite><testcase classname="com.jeepclub.backend.identity.UserTest" name="works"/></testsuite>""")
+            return mock.Mock(returncode=0)
+
+        with mock.patch.object(progressive.subprocess, "run", side_effect=maven):
+            status = progressive.run(self.root, {"selected": selected, "commands": [["mvnw", "test"]]}, out)
+        self.assertEqual(0, status)
+        result = __import__("json").loads((out / "result.json").read_text(encoding="utf-8"))
+        run = result["runs"][0]
+        self.assertTrue(run["passed"])
+        self.assertEqual([], run["not_executed"])
+        self.assertEqual([], run["unexpected_classes"])
+        archive = out / "gate-1/previous-surefire-reports/TEST-old.xml"
+        self.assertTrue(archive.exists())
+        self.assertFalse((out / "gate-1/reports/TEST-old.xml").exists())
+        self.assertTrue((out / "gate-1/reports/TEST-user.xml").exists())
+
+    def test_run_database_skip_is_failure_even_when_xml_case_is_present(self):
+        target = self.root / "target/failsafe-reports"
+        target.mkdir(parents=True)
+        (target / "TEST-db.xml").write_text("""<testsuite><testcase classname="com.jeepclub.backend.identity.DbMySqlIT" name="skipped"><skipped/></testcase></testsuite>""")
+        out = self.root / "out"
+        out.mkdir()
+        selected = [record("com.jeepclub.backend.identity.DbMySqlIT", "iam.identity", "mysql")]
+        cmd = ["mvnw", "-Pmysql-migrations", "verify"]
+        def maven(cmd, cwd, stdout, stderr):
+            fresh = Path(cwd) / "target/failsafe-reports"
+            fresh.mkdir(parents=True)
+            (fresh / "TEST-db.xml").write_text("""<testsuite><testcase classname="com.jeepclub.backend.identity.DbMySqlIT" name="skipped"><skipped/></testcase></testsuite>""")
+            return mock.Mock(returncode=0)
+
+        with mock.patch.object(progressive.subprocess, "run", side_effect=maven):
+            status = progressive.run(self.root, {"selected": selected, "commands": [cmd]}, out)
+        self.assertEqual(1, status)
+        result = __import__("json").loads((out / "result.json").read_text(encoding="utf-8"))
+        self.assertFalse(result["runs"][0]["passed"])
+        self.assertEqual({"skipped": 1}, result["runs"][0]["counts"])
 
 
 if __name__ == "__main__":

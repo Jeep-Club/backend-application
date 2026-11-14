@@ -48,3 +48,26 @@ Pendências neste checkpoint: ampliar regressões anti-exclusão, provas de migr
 documentação operacional, gates finais no SHA publicado e aceite Linux.
 Os testes Maven desta etapa precedem o commit e comprovam o estado local identificado
 nos manifests, não constituem evidência do SHA final.
+
+## Checkpoint 2 — BACK-684 / anti-exclusão
+
+Fundação registrada em `c9197c57`. O commit deste checkpoint é identificado por
+`git log --grep=BACK-684`. Alterações restritas ao discovery, regressões e este registro.
+
+- Inventário atual: 292 classes candidatas, 7 auxiliares; pacotes IAM legados
+  normalizados, testes raiz atribuídos a `platform`.
+- Métodos herdados resolvidos nas fontes; método desconhecido falha antes do Maven.
+- Imports novos alteram fechamento F3 automaticamente; referência a contexto sem
+  testes descobertos falha como dependência não classificada.
+- Cenários A–E automatizados em diretórios temporários; 19 testes, 0 falhas/erros/skips,
+  aproximadamente 0,82 s. Sucesso simulado exige XML novo; Maven zero sem XML falha.
+- F2 Tools real: 34 casos, 0 falhas/erros/skips, 37,373 s;
+  `target/progressive/20261114T222450404874Z/result.json` (Java 17).
+- M2 real: 2 casos, 0 falhas/erros/skips, 107,649 s;
+  `target/progressive/20261114T222048181354Z/result.json` (JBR 21 disponível naquela
+  chamada; compilação alvo 17; referência final de CI continua Java 17).
+
+Limites: análise de fonte não substitui discovery JUnit; XML é o oráculo de execução.
+F3 é conservador e exige revisão semântica explícita para eventos/reflexão/consumidores
+externos. Módulos sem testes não podem ser silenciosamente considerados cobertos.
+M3 e probes SQL isolados, documentação e gates finais ainda pendentes.

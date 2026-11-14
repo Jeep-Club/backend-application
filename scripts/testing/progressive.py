@@ -110,7 +110,7 @@ def relations(root, modules):
             owner = module(pkg[1])
             for match in re.finditer(r'\bimport\s+(?:static\s+)?(com\.jeepclub\.backend\.[\w.*]+)', text):
                 provider = module(match[1])
-                if owner != provider and owner in modules and provider in modules:
+                if owner != provider:
                     edges.append(dict(consumer=owner, provider=provider, source=str(path.relative_to(root))))
     return edges
 
@@ -152,6 +152,8 @@ def select(records, band, modules=(), focus=(), dependencies=(), edges=()):
                 break
             chosen = expanded
         chosen |= known & {'platform', 'shared', 'architecture', 'lifecycle'}
+        if chosen - known:
+            raise Invalid(f'Unclassified dependency modules without discovered tests: {sorted(chosen - known)}')
     selected = [dict(r, selector=r['name']) for r in records
                 if r['module'] in chosen and ((r['kind'] != 'unit') if band == 'F4' else r['kind'] == 'unit')]
     if not selected:
@@ -185,6 +187,9 @@ def static_migrations(root, base):
         if name not in ('v1.sql', 'v2.sql', 'v3.sql') or digest((root / historical / name).read_bytes()) != checksum:
             raise Invalid(f'Historical fixture checksum invalid: {name}')
     new = [s for s in scripts if s['path'].replace('\\', '/') not in old]
+    existing = [s for s in scripts if s['path'].replace('\\', '/') in old]
+    if existing and any(s['version'] <= max(e['version'] for e in existing) for s in new):
+        raise Invalid('New migration must append a version after immutable history')
     if not scripts:
         raise Invalid('No migrations discovered')
     return dict(base=base, scripts=scripts, new=new, sql_executed=False,
@@ -294,7 +299,10 @@ def run(root, plan, out):
                   or (skipped and any(r['kind'] != 'unit' for r in relevant)))
         runs.append(dict(command=cmd, exit_code=code, passed=ok, seconds=round(time.monotonic()-started, 3),
                          log=str(log), **stats))
-        (out / 'result.json').write_text(json.dumps(dict(plan=plan, runs=runs), indent=2), encoding='utf-8')
+        reported = {c['classname'].split('$')[0] for run in runs for c in run['cases']}
+        (out / 'result.json').write_text(json.dumps(dict(plan=plan, runs=runs,
+            remaining_commands=plan['commands'][index + 1:],
+            not_run=sorted({r['name'] for r in plan['selected']} - reported)), indent=2), encoding='utf-8')
         print(json.dumps({k: v for k, v in runs[-1].items() if k not in ('cases', 'command')}, ensure_ascii=False))
         if not ok:
             return code or 1
