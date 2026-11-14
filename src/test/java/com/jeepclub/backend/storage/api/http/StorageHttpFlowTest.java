@@ -31,6 +31,7 @@ class StorageHttpFlowTest {
     @DynamicPropertySource static void properties(DynamicPropertyRegistry r) {r.add("storage.local.root-directory",() -> ROOT.toString());}
     @Autowired MockMvc mvc; @Autowired UserRegistration users; @Autowired UserQuery query;
     @org.springframework.test.context.bean.override.mockito.MockitoSpyBean MediaGovernance governance;
+    @org.springframework.test.context.bean.override.mockito.MockitoSpyBean com.jeepclub.backend.storage.core.repository.BlobCatalog blobs;
     @Autowired com.jeepclub.backend.storage.core.repository.MediaAdministration administration;
     @Autowired com.jeepclub.backend.storage.core.application.MediaReferenceService references;
     @Autowired org.springframework.transaction.PlatformTransactionManager manager;
@@ -157,6 +158,14 @@ class StorageHttpFlowTest {
         mvc.perform(get(url).header("Authorization","Bearer "+other.accessToken())).andExpect(status().isNotFound());
         mvc.perform(get(url)).andExpect(status().isUnauthorized());
         url="/storage/media/"+media+"/references/"+ref+"/variants/AVATAR_SMALL";
+        try {
+            org.mockito.Mockito.doReturn(new byte[]{1,2,3}).when(blobs).read(org.mockito.ArgumentMatchers.any());
+            assertSanitized(url,owner.accessToken(),503);
+            org.mockito.Mockito.doThrow(new com.jeepclub.backend.shared.storage.exception.StorageOperationException(
+                com.jeepclub.backend.shared.storage.exception.StorageOperationException.Operation.READ,new java.io.IOException("secret path /private-images/fixture")))
+                .when(blobs).read(org.mockito.ArgumentMatchers.any());
+            assertSanitized(url,owner.accessToken(),503);
+        } finally { org.mockito.Mockito.doCallRealMethod().when(blobs).read(org.mockito.ArgumentMatchers.any()); }
         mvc.perform(get("/admin/storage/media").header("Authorization","Bearer "+owner.accessToken())).andExpect(status().isForbidden());
         mvc.perform(get("/admin/storage/media/"+media)).andExpect(status().isUnauthorized());
         var adminUser=org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user("catalog-operator")

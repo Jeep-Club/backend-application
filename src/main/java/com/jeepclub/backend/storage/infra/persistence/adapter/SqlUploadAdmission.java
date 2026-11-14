@@ -60,12 +60,15 @@ public class SqlUploadAdmission implements UploadAdmission {
         });
     }
     @Override public void finish(Permit permit) {
-        tx.executeWithoutResult(status -> {
+        tx.executeWithoutResult(status -> finishLocked(permit));
+    }
+    @Override @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public void finishInCatalogTransaction(Permit permit) { finishLocked(permit); }
+    private void finishLocked(Permit permit) {
             var global=lock(0);var user=lock(permit.actor());var row=em.find(UploadPermitEntity.class,permit.id(),LockModeType.PESSIMISTIC_WRITE);
             if(row==null || row.getActorUserId()!=permit.actor()) throw new IllegalArgumentException("Invalid upload permit");
             if(row.isCompleted()) return;
             if(!row.isCharged()){global.setUsedBytes(global.getUsedBytes()-row.getAccountedBytes());user.setUsedBytes(user.getUsedBytes()-row.getAccountedBytes());row.setAccountedBytes(0);}
             user.setInFlight(user.getInFlight()-1);row.setCompleted(true);em.flush();
-        });
     }
 }

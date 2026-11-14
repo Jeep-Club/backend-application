@@ -23,6 +23,7 @@ public class MediaUploadService {
     public MediaUploadService(MediaCatalogRepository catalog,BlobCatalog blobs,MediaImageProcessor images,MediaGovernance governance,
         List<StorageConsumerPolicy> policies,PlatformTransactionManager manager,io.micrometer.core.instrument.MeterRegistry metrics,UploadAdmission admission) {
         this.admission=admission;this.metrics=metrics;this.catalog=catalog;this.blobs=blobs;this.images=images;this.governance=governance;this.policies=List.copyOf(policies);transaction=new TransactionTemplate(manager);
+        transaction.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
     public Uploaded upload(long actor,MediaContext context,String consumerId,byte[] bytes) {
         return upload(actor,context,consumerId,() -> bytes);
@@ -54,9 +55,13 @@ public class MediaUploadService {
                 blobs.bind(variant.variantId(),blob);
             }
             governance.initialize(asset.mediaId(),processed.receivedSha256(),java.util.Set.of(MediaContext.DEPENDENT_PHOTO,MediaContext.MEDICAL_IMAGE,MediaContext.IDENTIFICATION_PHOTO).contains(context),audit);
+            admission.finishInCatalogTransaction(permit);
             return new Uploaded(asset.mediaId(),null);
         });
-        } finally {admission.finish(permit);}
+        } catch (RuntimeException | Error failure) {
+            try { admission.finish(permit); } catch (RuntimeException cleanup) { failure.addSuppressed(cleanup); }
+            throw failure;
+        }
         } finally {inFlight.release();}
         } finally { metrics.timer("storage.upload.duration").record(System.nanoTime()-started,java.util.concurrent.TimeUnit.NANOSECONDS); }
     }

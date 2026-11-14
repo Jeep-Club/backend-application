@@ -76,6 +76,79 @@ class StorageUploadFlowTest {
     @Autowired BlobCatalog blobs; @Autowired PhysicalBlobStore physical; @Autowired MediaCatalogRepository catalog;
     @Autowired MediaGovernance governance; @Autowired JdbcTemplate jdbc; @Autowired PlatformTransactionManager manager;
     @Autowired MediaAdministration admin; @Autowired MediaReferenceService references; @Autowired LegacyBackfill legacy; @Autowired BlobInspection inspection;
+    @Test void finishFailureRollsBackCatalogAndRetryKeepsBlobCustody() throws Exception {
+        long actor=987601L;
+        UploadAdmission failing=new UploadAdmission() {
+            public Permit reserve(long id) { return admission.reserve(id); }
+            public void charge(Permit permit,long size) { admission.charge(permit,size); }
+            public void finishInCatalogTransaction(Permit permit) { admission.finishInCatalogTransaction(permit); throw new IllegalStateException("finish fixture"); }
+            public void finish(Permit permit) { admission.finish(permit); }
+        };
+        var service=new MediaUploadService(catalog,blobs,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,
+            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),failing);
+        byte[] bytes=image(17);
+        assertThatThrownBy(() -> service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),bytes)).isInstanceOf(IllegalStateException.class).hasMessage("finish fixture");
+        assertThat(jdbc.queryForObject("select count(*) from storage_media_assets where uploaded_by_user_id=?",Long.class,actor)).isZero();
+        assertThat(jdbc.queryForObject("select count(*) from storage_media_variants v join storage_media_assets a on a.id=v.media_id where a.uploaded_by_user_id=?",Long.class,actor)).isZero();
+        assertThat(jdbc.queryForObject("select count(*) from storage_upload_permits where actor_user_id=? and charged=true and completed=true",Long.class,actor)).isEqualTo(1);
+        long retained=jdbc.queryForObject("select count(*) from storage_blobs where ready=true",Long.class);
+        assertThat(retained).isGreaterThan(0);
+        var master=new MediaImageProcessingAdapter(new SimpleMeterRegistry()).process(bytes,MediaContext.IDENTITY_PROFILE).images().get(0);
+        assertThat(physical.readVerified(BlobCatalogAdapter.digest(master.bytes()),master.bytes().length)).containsExactly(master.bytes());
+        var result=upload.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),bytes);
+        assertThat(result.mediaId()).isPositive();
+        assertThat(jdbc.queryForObject("select count(*) from storage_media_assets where uploaded_by_user_id=?",Long.class,actor)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select count(*) from storage_blobs where ready=true",Long.class)).isEqualTo(retained);
+        assertThat(jdbc.queryForObject("select in_flight from storage_upload_budgets where scope_id=?",Integer.class,actor)).isZero();
+    }
+    @Test void successCommitsPermitWithCatalogWithoutPostCommitFinish() throws Exception {
+        long actor=987602L;
+        var finishCalls=new java.util.concurrent.atomic.AtomicInteger();
+        UploadAdmission observed=new UploadAdmission() {
+            public Permit reserve(long id) { return admission.reserve(id); }
+            public void charge(Permit permit,long size) { admission.charge(permit,size); }
+            public void finishInCatalogTransaction(Permit permit) { admission.finishInCatalogTransaction(permit); }
+            public void finish(Permit permit) { finishCalls.incrementAndGet(); throw new IllegalStateException("post commit fixture"); }
+        };
+        var service=new MediaUploadService(catalog,blobs,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,
+            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),observed);
+        var result=service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),image(18));
+        assertThat(catalog.findAsset(result.mediaId())).isPresent();
+        assertThat(catalog.findVariant(result.mediaId(),"MASTER")).isPresent();
+        assertThat(jdbc.queryForObject("select count(*) from storage_upload_permits where actor_user_id=? and charged=true and completed=true",Long.class,actor)).isEqualTo(1);
+        assertThat(finishCalls.get()).isZero();
+    }
+    @Test void concurrentUploadsCompleteTheirOwnPermitsWhileSharingBytes() throws Exception {
+        byte[] bytes=image(19);
+        var start=new CountDownLatch(1);var pool=Executors.newFixedThreadPool(2);
+        try {
+            var first=pool.submit(() -> { start.await(); return upload.upload(987603,MediaContext.IDENTITY_PROFILE,"987603",bytes); });
+            var second=pool.submit(() -> { start.await(); return upload.upload(987604,MediaContext.IDENTITY_PROFILE,"987604",bytes); });
+            start.countDown();var a=first.get(30,TimeUnit.SECONDS);var b=second.get(30,TimeUnit.SECONDS);
+            assertThat(a.mediaId()).isNotEqualTo(b.mediaId());
+            var av=catalog.findVariant(a.mediaId(),"MASTER").orElseThrow();var bv=catalog.findVariant(b.mediaId(),"MASTER").orElseThrow();
+            assertThat(blobs.findByVariant(av.variantId())).isEqualTo(blobs.findByVariant(bv.variantId()));
+            assertThat(jdbc.queryForObject("select count(*) from storage_upload_permits where actor_user_id in (?,?) and charged=true and completed=true",Long.class,987603L,987604L)).isEqualTo(2);
+        } finally {pool.shutdownNow();}
+    }
+    @Test void failedCleanupPreservesOriginalErrorAndOpenPermitForRecovery() {
+        long actor=987605L;var permitRef=new java.util.concurrent.atomic.AtomicReference<UploadAdmission.Permit>();
+        UploadAdmission failing=new UploadAdmission() {
+            public Permit reserve(long id) { var permit=admission.reserve(id);permitRef.set(permit);return permit; }
+            public void charge(Permit permit,long size) { admission.charge(permit,size); }
+            public void finishInCatalogTransaction(Permit permit) { admission.finishInCatalogTransaction(permit); }
+            public void finish(Permit permit) { throw new IllegalStateException("cleanup fixture"); }
+        };
+        var service=new MediaUploadService(catalog,blobs,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,
+            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),failing);
+        try {
+            assertThatThrownBy(() -> service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),() -> {throw new IllegalArgumentException("read fixture");}))
+                .isInstanceOf(IllegalArgumentException.class).hasMessage("read fixture")
+                .satisfies(error -> assertThat(error.getSuppressed()).hasSize(1));
+            assertThat(jdbc.queryForObject("select count(*) from storage_media_assets where uploaded_by_user_id=?",Long.class,actor)).isZero();
+            assertThat(jdbc.queryForObject("select count(*) from storage_upload_permits where actor_user_id=? and charged=false and completed=false",Long.class,actor)).isEqualTo(1);
+        } finally { if(permitRef.get()!=null) admission.finish(permitRef.get()); }
+    }
     @Test void reconciliationReportsMissingPhysicalBlob() {
         var blob=blobs.store("missing-fixture-reconciliation".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         var missing=org.mockito.Mockito.mock(PhysicalBlobStore.class);

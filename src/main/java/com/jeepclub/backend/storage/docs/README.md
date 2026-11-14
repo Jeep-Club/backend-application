@@ -1,5 +1,18 @@
 # Storage — catálogo e fronteiras
 
+## Conclusão transacional do upload — BACK-628
+
+O catálogo e a conclusão do permit confirmado participam da mesma transação
+independente. Uma falha antes do commit reverte asset, variantes e vínculos de
+blob; a finalização é então tentada em transação separada, preservando a falha
+original caso a limpeza também falhe. Blobs já gravados continuam sob custódia,
+e reservas cobradas mantêm sua contabilização. Um retry após rollback conhecido
+pode reutilizar os bytes, mas cria nova reserva. Se o resultado do commit for
+desconhecido por perda de conexão, o protocolo atual não oferece chave de
+idempotência para identificar com certeza o asset já criado; retry cego pode
+duplicar o registro lógico e requer reconciliação. Falha na liberação também
+pode deixar o permit em aberto para investigação.
+
 O [inventário parcial de consumidores da BACK-628](back-628-consumers.md) registra
 as evidências de layout e as decisões técnicas ainda necessárias para presets.
 
