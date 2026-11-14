@@ -35,12 +35,12 @@ consumidores pertence às Stories posteriores.
 
 ## Divergência a resolver no pipeline
 
-`MediaResolutionService.resolve` aceita `MASTER` quando a policy do consumidor
-autoriza; `StorageHttpFlowTest.authenticatedOwnerReadsMasterWhileOtherUsersAndModerationCannotBypassIt`
-espera HTTP 200 para o proprietário na rota comum. Isso não demonstra o requisito
-da BACK-628 de impedir resolução comum de MASTER por troca de código. A correção
-precisa definir e testar o acesso privado de reedição e a compatibilidade do
-fluxo legado antes de retirar essa via; a presença da policy não comprova o aceite.
+`MediaResolutionService.resolve` recusa a representação de papel MASTER antes
+de ler qualquer provider. Essa regra cobre a rota comum e a prévia administrativa;
+variantes derivadas continuam sujeitas à policy contextual, à moderação e à
+validade da referência. Não existe ainda contrato de acesso privado para reedição:
+uma operação futura deve definir sua própria autorização explícita e preservar
+essas verificações. O endpoint legado de imagens permanece independente.
 
 O semáforo de `SynchronousImageProcessor` limita somente processamento na JVM.
 O limite em `MediaUploadService` abrange leitura do payload, reserva SQL,

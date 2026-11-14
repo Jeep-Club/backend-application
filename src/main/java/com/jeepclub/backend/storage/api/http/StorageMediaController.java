@@ -56,6 +56,7 @@ public class StorageMediaController {
         throw new AccessDeniedException("Media unavailable");
     }
     @GetMapping("/{mediaId}/references/{referenceId}/variants/{code}")
+    @io.swagger.v3.oas.annotations.Operation(summary="Consultar variante derivada",description="A fonte MASTER é privada e não é disponibilizada por esta operação.")
     public ResponseEntity<byte[]> read(@AuthenticationPrincipal UserPrincipal user,@PathVariable long mediaId,@PathVariable long referenceId,@PathVariable String code) {
         if(user==null) throw new AccessDeniedException("Media unavailable");
         var content=resolution.resolve(user.getUserId(),mediaId,referenceId,code);

@@ -46,6 +46,7 @@ public class StorageAdminController {
     @GetMapping("/{mediaId}/audit") @PreAuthorize("hasAuthority('STORAGE_MEDIA_AUDIT_READ')") @RequiredPermission("STORAGE_MEDIA_AUDIT_READ")
     public List<MediaAdministration.Event> audit(@PathVariable long mediaId,@RequestParam(defaultValue="0") long afterId,@RequestParam(defaultValue="20") int limit) { return admin.events(mediaId,afterId,limit); }
     @GetMapping("/{mediaId}/references/{referenceId}/preview/{code}") @PreAuthorize("hasAuthority('STORAGE_MEDIA_PREVIEW')") @RequiredPermission("STORAGE_MEDIA_PREVIEW")
+    @io.swagger.v3.oas.annotations.Operation(summary="Prévia administrativa de variante derivada",description="A fonte MASTER não é disponibilizada nesta prévia.")
     public org.springframework.http.ResponseEntity<byte[]> preview(@PathVariable long mediaId,@PathVariable long referenceId,@PathVariable String code,
         @RequestParam MediaGovernance.PreviewPurpose purpose,@AuthenticationPrincipal UserPrincipal actor) {
         com.jeepclub.backend.storage.core.application.MediaResolutionService.Content content;

@@ -52,25 +52,9 @@ class StorageHttpFlowTest {
             com.jeepclub.backend.storage.core.domain.enums.MediaContext.IDENTITY_PROFILE,Long.toString(actor),"PHOTO",null,
             com.jeepclub.backend.storage.core.domain.enums.MediaOrigin.LEGACY_IMPORT,audit.occurredAt(),null,null,null,null,null),audit);
         String url="/storage/media/"+media+"/references/"+ref.referenceId()+"/variants/MASTER";
-        mvc.perform(get(url).header("Authorization","Bearer "+owner.accessToken())).andExpect(status().isOk()).andExpect(content().bytes(bytes));
         org.mockito.Mockito.clearInvocations(legacySource);
-        assertSanitized(url,other.accessToken(),404);
-        org.mockito.Mockito.verify(legacySource,org.mockito.Mockito.never()).read(org.mockito.ArgumentMatchers.anyString());
-        Path absent=file.resolveSibling("temporarily-unavailable.png");Files.move(file,absent);
         assertSanitized(url,owner.accessToken(),404);
-        org.mockito.Mockito.clearInvocations(legacySource);
         assertSanitized(url,other.accessToken(),404);
-        org.mockito.Mockito.verify(legacySource,org.mockito.Mockito.never()).read(org.mockito.ArgumentMatchers.anyString());
-        Files.move(absent,file);Files.write(file,new byte[]{1,2,3});
-        assertSanitized(url,owner.accessToken(),503);
-        Files.write(file,bytes);
-        org.mockito.Mockito.doThrow(new com.jeepclub.backend.shared.storage.exception.StorageOperationException(
-            com.jeepclub.backend.shared.storage.exception.StorageOperationException.Operation.READ,new java.io.IOException("secret path /private-images/fixture")))
-            .when(legacySource).read(key);
-        try {assertSanitized(url,owner.accessToken(),503);}
-        finally {org.mockito.Mockito.doCallRealMethod().when(legacySource).read(key);}
-        governance.moderate(new ModerationDecision(media,null,ModerationDecision.State.BLOCKED,ModerationDecision.Reason.PRIVACY,"private",actor,Instant.now()));
-        org.mockito.Mockito.clearInvocations(legacySource);assertSanitized(url,owner.accessToken(),404);
         org.mockito.Mockito.verify(legacySource,org.mockito.Mockito.never()).read(org.mockito.ArgumentMatchers.anyString());
     }
     private void assertSanitized(String url,String token,int expected) throws Exception {
@@ -169,9 +153,10 @@ class StorageHttpFlowTest {
         mvc.perform(multipart("/storage/media/profile").file(new MockMultipartFile("file","photo.png","image/png",bytes.toByteArray()))
             .file(invalid).header("Authorization","Bearer "+owner.accessToken())).andExpect(status().isBadRequest());
         String url="/storage/media/"+media+"/references/"+ref+"/variants/MASTER";
-        mvc.perform(get(url).header("Authorization","Bearer "+owner.accessToken())).andExpect(status().isOk()).andExpect(header().string("Cache-Control","private, no-store"));
+        mvc.perform(get(url).header("Authorization","Bearer "+owner.accessToken())).andExpect(status().isNotFound()).andExpect(header().string("Cache-Control","private, no-store"));
         mvc.perform(get(url).header("Authorization","Bearer "+other.accessToken())).andExpect(status().isNotFound());
         mvc.perform(get(url)).andExpect(status().isUnauthorized());
+        url="/storage/media/"+media+"/references/"+ref+"/variants/AVATAR_SMALL";
         mvc.perform(get("/admin/storage/media").header("Authorization","Bearer "+owner.accessToken())).andExpect(status().isForbidden());
         mvc.perform(get("/admin/storage/media/"+media)).andExpect(status().isUnauthorized());
         var adminUser=org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user("catalog-operator")
@@ -196,6 +181,8 @@ class StorageHttpFlowTest {
             .andExpect(status().isForbidden());
         mvc.perform(get(preview).with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication(auth)))
             .andExpect(status().isOk()).andExpect(header().string("Cache-Control","private, no-store"));
+        mvc.perform(get("/admin/storage/media/"+media+"/references/"+ref+"/preview/MASTER?purpose=MODERATION_REVIEW")
+            .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication(auth))).andExpect(status().isNotFound());
         mvc.perform(get("/admin/storage/media/"+media+"/references/"+ref+"/preview/AVATAR_SMALL")
             .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication(auth))).andExpect(status().isBadRequest());
         long auditCount=administration.events(media,0,100).stream().filter(e -> e.operation().equals("ADMIN_PREVIEW")).count();

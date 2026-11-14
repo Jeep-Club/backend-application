@@ -216,9 +216,9 @@ class StorageUploadFlowTest {
         long first=positionedAttach(206,a.mediaId(),0),second=positionedAttach(207,b.mediaId(),2);
         assertThat(blobs.findByVariant(catalog.findVariant(a.mediaId(),"MASTER").orElseThrow().variantId()))
             .isEqualTo(blobs.findByVariant(catalog.findVariant(b.mediaId(),"MASTER").orElseThrow().variantId()));
-        assertThat(resolution.resolve(206,a.mediaId(),first,"MASTER").bytes()).isNotEmpty();
-        assertThat(resolution.resolve(207,b.mediaId(),second,"MASTER").bytes()).isNotEmpty();
-        assertThatThrownBy(()->resolution.resolve(207,a.mediaId(),first,"MASTER")).isInstanceOf(AccessDeniedException.class);
+        assertThat(resolution.resolve(206,a.mediaId(),first,"AVATAR_SMALL").bytes()).isNotEmpty();
+        assertThat(resolution.resolve(207,b.mediaId(),second,"AVATAR_SMALL").bytes()).isNotEmpty();
+        assertThatThrownBy(()->resolution.resolve(207,a.mediaId(),first,"AVATAR_SMALL")).isInstanceOf(AccessDeniedException.class);
         assertThatThrownBy(()->positionedAttach(207,a.mediaId(),2)).isInstanceOf(AccessDeniedException.class);
     }
     void detach(long actor,long media,long ref) {
@@ -239,12 +239,12 @@ class StorageUploadFlowTest {
         assertThat(a.mediaId()).isNotEqualTo(b.mediaId());
         var va=catalog.findVariant(a.mediaId(),"MASTER").orElseThrow();var vb=catalog.findVariant(b.mediaId(),"MASTER").orElseThrow();
         assertThat(blobs.findByVariant(va.variantId())).isEqualTo(blobs.findByVariant(vb.variantId()));
-        assertThat(resolution.resolve(11,a.mediaId(),a.referenceId(),"MASTER").bytes()).isNotEmpty();
-        assertThatThrownBy(() -> resolution.resolve(22,a.mediaId(),a.referenceId(),"MASTER")).isInstanceOf(AccessDeniedException.class);
-        assertThatThrownBy(() -> resolution.resolve(11,a.mediaId(),b.referenceId(),"MASTER")).isInstanceOf(AccessDeniedException.class);
+        assertThat(resolution.resolve(11,a.mediaId(),a.referenceId(),"AVATAR_SMALL").bytes()).isNotEmpty();
+        assertThatThrownBy(() -> resolution.resolve(22,a.mediaId(),a.referenceId(),"AVATAR_SMALL")).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> resolution.resolve(11,a.mediaId(),b.referenceId(),"AVATAR_SMALL")).isInstanceOf(AccessDeniedException.class);
         governance.moderate(new ModerationDecision(a.mediaId(),null,ModerationDecision.State.BLOCKED,ModerationDecision.Reason.PRIVACY,"private note",11,Instant.now()));
-        assertThatThrownBy(() -> resolution.resolve(11,a.mediaId(),a.referenceId(),"MASTER")).isInstanceOf(AccessDeniedException.class);
-        assertThat(resolution.resolve(22,b.mediaId(),b.referenceId(),"MASTER").bytes()).isNotEmpty();
+        assertThatThrownBy(() -> resolution.resolve(11,a.mediaId(),a.referenceId(),"AVATAR_SMALL")).isInstanceOf(AccessDeniedException.class);
+        assertThat(resolution.resolve(22,b.mediaId(),b.referenceId(),"AVATAR_SMALL").bytes()).isNotEmpty();
     }
     @Test void logicalDiscardOfOneAssetDoesNotRemoveSharedBlobOrAffectOtherAsset() throws Exception {
         byte[] bytes=image(620);var a=attachedUpload(620,MediaContext.IDENTITY_PROFILE,"620",bytes);
@@ -255,15 +255,15 @@ class StorageUploadFlowTest {
         assertThat(blobs.findByVariant(vb.variantId())).contains(shared);
         detach(620,a.mediaId(),a.referenceId());
         admin.discard(a.mediaId(),new MediaAuditContext(MediaActorKind.USER,620L,Instant.now(),null));
-        assertThatThrownBy(() -> resolution.resolve(620,a.mediaId(),a.referenceId(),"MASTER")).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> resolution.resolve(620,a.mediaId(),a.referenceId(),"AVATAR_SMALL")).isInstanceOf(AccessDeniedException.class);
         assertThat(blobs.read(shared)).isNotEmpty();
-        assertThat(resolution.resolve(621,b.mediaId(),b.referenceId(),"MASTER").bytes()).isNotEmpty();
+        assertThat(resolution.resolve(621,b.mediaId(),b.referenceId(),"AVATAR_SMALL").bytes()).isNotEmpty();
     }
     @Test void unattachedUploadHasNoActiveReferenceAndRetentionStartsAtUpload() throws Exception {
         var a=upload.upload(101,MediaContext.IDENTITY_PROFILE,"101",image(101));
         assertThat(a.referenceId()).isNull();
         assertThat(catalog.findReferences(a.mediaId(),0,100)).isEmpty();
-        assertThatThrownBy(() -> resolution.resolve(101,a.mediaId(),Long.MAX_VALUE,"MASTER"))
+        assertThatThrownBy(() -> resolution.resolve(101,a.mediaId(),Long.MAX_VALUE,"AVATAR_SMALL"))
             .isInstanceOf(AccessDeniedException.class);
         var master=catalog.findVariant(a.mediaId(),"MASTER").orElseThrow();
         var stored=blobs.findByVariant(master.variantId()).orElseThrow();
@@ -348,7 +348,7 @@ class StorageUploadFlowTest {
         governance.legalHold(a.mediaId(),true,"Retention fixture obligation",audit);
         assertThat(admin.review(a.mediaId(),audit).decision()).isEqualTo("LEGAL_HOLD");
         admin.discard(a.mediaId(),audit);
-        assertThatThrownBy(() -> resolution.resolve(55,a.mediaId(),a.referenceId(),"MASTER")).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> resolution.resolve(55,a.mediaId(),a.referenceId(),"AVATAR_SMALL")).isInstanceOf(AccessDeniedException.class);
         assertThatThrownBy(() -> attach(55,a.mediaId(),MediaContext.IDENTITY_PROFILE,"55","PHOTO")).isInstanceOf(IllegalArgumentException.class);
     }
     @Test void backfillIsIdempotentUnknownHeldAndRollbackPreservesBytes() {
@@ -388,18 +388,11 @@ class StorageUploadFlowTest {
         var now=Instant.now();
         var ref=catalog.recordReference(new MediaReference(null,result.mediaId(),MediaContext.IDENTITY_PROFILE,"111","PHOTO",null,MediaOrigin.LEGACY_IMPORT,now,null,null,null,null,null),
             new MediaAuditContext(MediaActorKind.SYSTEM,null,now,null));
-        assertThat(resolution.resolve(111,result.mediaId(),ref.referenceId(),"MASTER").bytes()).containsExactly(legacySource.read(key));
-        assertThatThrownBy(()->resolution.resolve(112,result.mediaId(),ref.referenceId(),"MASTER")).isInstanceOf(AccessDeniedException.class);
-        assertThat(legacy.apply(key,new MediaAuditContext(MediaActorKind.SYSTEM,null,Instant.now(),null)).mediaId()).isEqualTo(result.mediaId());
         int reads=legacySource.reads.get();
-        var noPolicy=new MediaResolutionService(catalog,blobs,governance,List.of(),legacySource);
-        assertThatThrownBy(()->noPolicy.resolve(111,result.mediaId(),ref.referenceId(),"MASTER")).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> resolution.resolve(111,result.mediaId(),ref.referenceId(),"MASTER")).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> resolution.resolve(112,result.mediaId(),ref.referenceId(),"MASTER")).isInstanceOf(AccessDeniedException.class);
         assertThat(legacySource.reads.get()).isEqualTo(reads);
-        legacySource.changes.put(key,image(112));
-        assertThatThrownBy(()->resolution.resolve(111,result.mediaId(),ref.referenceId(),"MASTER")).isInstanceOf(MediaIntegrityException.class);
-        legacySource.missing.add(key);
-        assertThatThrownBy(()->resolution.resolve(111,result.mediaId(),ref.referenceId(),"MASTER"))
-            .isInstanceOf(com.jeepclub.backend.shared.storage.exception.StorageObjectNotFoundException.class);
+        assertThat(legacy.apply(key,new MediaAuditContext(MediaActorKind.SYSTEM,null,Instant.now(),null)).mediaId()).isEqualTo(result.mediaId());
     }
     @Test void unknownOrCorruptLegacyContentCannotBecomePresent() {
         var result=legacy.apply("images/not-an-image.jpg",systemAudit());
@@ -423,6 +416,7 @@ class StorageUploadFlowTest {
         var resolver=new MediaResolutionService(catalog,blobs,governance,List.of(new Configuration().policy()),source);
         var controller=new com.jeepclub.backend.storage.api.http.StorageMediaController(upload,resolver,references);
         var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller)
+            .setControllerAdvice(new com.jeepclub.backend.storage.api.http.StorageMediaErrors())
             .setCustomArgumentResolvers(new org.springframework.web.method.support.HandlerMethodArgumentResolver() {
                 public boolean supportsParameter(org.springframework.core.MethodParameter p) {return p.getParameterType()==com.jeepclub.backend.platform.security.principal.UserPrincipal.class;}
                 public Object resolveArgument(org.springframework.core.MethodParameter p,org.springframework.web.method.support.ModelAndViewContainer m,
@@ -431,8 +425,7 @@ class StorageUploadFlowTest {
                 }
             }).build();
         mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/storage/media/"+id+"/references/"+ref.referenceId()+"/variants/MASTER"))
-            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
-            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content().bytes(bytes));
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isNotFound());
         assertThat(Files.readAllBytes(file)).containsExactly(bytes);assertThat(Files.getLastModifiedTime(file)).isEqualTo(modified);
         assertThat(importer.apply(key,systemAudit()).mediaId()).isEqualTo(id);
     }
@@ -491,21 +484,21 @@ class StorageUploadFlowTest {
         var a=attachedUpload(66,MediaContext.IDENTITY_PROFILE,"66",image(6));
         long second=attach(66,a.mediaId(),MediaContext.IDENTITY_PROFILE,"66","GALLERY");
         governance.moderate(new ModerationDecision(a.mediaId(),a.referenceId(),ModerationDecision.State.HIDDEN,ModerationDecision.Reason.PRIVACY,"internal",66,Instant.now()));
-        assertThatThrownBy(() -> resolution.resolve(66,a.mediaId(),a.referenceId(),"MASTER")).isInstanceOf(AccessDeniedException.class);
-        assertThat(resolution.resolve(66,a.mediaId(),second,"MASTER").bytes()).isNotEmpty();
+        assertThatThrownBy(() -> resolution.resolve(66,a.mediaId(),a.referenceId(),"AVATAR_SMALL")).isInstanceOf(AccessDeniedException.class);
+        assertThat(resolution.resolve(66,a.mediaId(),second,"AVATAR_SMALL").bytes()).isNotEmpty();
         governance.moderate(new ModerationDecision(a.mediaId(),a.referenceId(),ModerationDecision.State.VISIBLE,ModerationDecision.Reason.RESTORED,null,66,Instant.now()));
-        assertThat(resolution.resolve(66,a.mediaId(),a.referenceId(),"MASTER").bytes()).isNotEmpty();
+        assertThat(resolution.resolve(66,a.mediaId(),a.referenceId(),"AVATAR_SMALL").bytes()).isNotEmpty();
     }
     @Test void contextualBlockSurvivesReassociationUntilAuthorizedRestoration() throws Exception {
         var a=attachedUpload(91,MediaContext.IDENTITY_PROFILE,"91",image(91));
         governance.moderate(new ModerationDecision(a.mediaId(),a.referenceId(),ModerationDecision.State.BLOCKED,ModerationDecision.Reason.PRIVACY,"scope",91,Instant.now()));
         detach(91,a.mediaId(),a.referenceId());
         long second=attach(91,a.mediaId(),MediaContext.IDENTITY_PROFILE,"91","PHOTO");
-        assertThatThrownBy(() -> resolution.resolve(91,a.mediaId(),second,"MASTER")).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> resolution.resolve(91,a.mediaId(),second,"AVATAR_SMALL")).isInstanceOf(AccessDeniedException.class);
         long separate=attach(91,a.mediaId(),MediaContext.IDENTITY_PROFILE,"91","GALLERY");
-        assertThat(resolution.resolve(91,a.mediaId(),separate,"MASTER").bytes()).isNotEmpty();
+        assertThat(resolution.resolve(91,a.mediaId(),separate,"AVATAR_SMALL").bytes()).isNotEmpty();
         governance.moderate(new ModerationDecision(a.mediaId(),a.referenceId(),ModerationDecision.State.VISIBLE,ModerationDecision.Reason.RESTORED,null,91,Instant.now()));
-        assertThat(resolution.resolve(91,a.mediaId(),second,"MASTER").bytes()).isNotEmpty();
+        assertThat(resolution.resolve(91,a.mediaId(),second,"AVATAR_SMALL").bytes()).isNotEmpty();
     }
     @Test void moderationCannotResurrectDiscardedMedia() throws Exception {
         var a=attachedUpload(92,MediaContext.IDENTITY_PROFILE,"92",image(92));detach(92,a.mediaId(),a.referenceId());
@@ -513,7 +506,7 @@ class StorageUploadFlowTest {
         for(var state:List.of(ModerationDecision.State.VISIBLE,ModerationDecision.State.HIDDEN,ModerationDecision.State.BLOCKED)) {
             assertThatThrownBy(() -> governance.moderate(new ModerationDecision(a.mediaId(),null,state,state==ModerationDecision.State.VISIBLE?ModerationDecision.Reason.RESTORED:ModerationDecision.Reason.PRIVACY,null,92,Instant.now()))).isInstanceOf(IllegalArgumentException.class);
         }
-        assertThatThrownBy(() -> resolution.resolve(92,a.mediaId(),a.referenceId(),"MASTER")).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> resolution.resolve(92,a.mediaId(),a.referenceId(),"AVATAR_SMALL")).isInstanceOf(AccessDeniedException.class);
         assertThatThrownBy(() -> attach(92,a.mediaId(),MediaContext.IDENTITY_PROFILE,"92","PHOTO")).isInstanceOf(IllegalArgumentException.class);
     }
     @Test void backfillReappliesSameAssetAfterRollbackAndRejectsChangedSource() throws Exception {
