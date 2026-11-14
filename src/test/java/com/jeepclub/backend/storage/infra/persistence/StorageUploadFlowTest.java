@@ -76,7 +76,25 @@ class StorageUploadFlowTest {
     @Autowired BlobCatalog blobs; @Autowired PhysicalBlobStore physical; @Autowired MediaCatalogRepository catalog;
     @Autowired MediaGovernance governance; @Autowired JdbcTemplate jdbc; @Autowired PlatformTransactionManager manager;
     @Autowired MediaAdministration admin; @Autowired MediaReferenceService references; @Autowired LegacyBackfill legacy; @Autowired BlobInspection inspection;
-    @Test void failureBeforeAnyBlobStoreRetainsChargedQuotaWithoutPhysicalCustody() throws Exception {
+    @Test void readFailureBeforeChargeAndStoreReleasesReservation() {
+        long actor=987614L;
+        var warm=admission.reserve(987615L);admission.finish(warm);
+        long globalBefore=jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=0",Long.class);
+        var noStore=org.mockito.Mockito.mock(BlobCatalog.class);
+        var service=new MediaUploadService(catalog,noStore,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,
+            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),admission);
+        assertThatThrownBy(() -> service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),() -> {throw new IllegalArgumentException("read fixture");}))
+            .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),() -> {throw new IllegalArgumentException("read retry fixture");}))
+            .isInstanceOf(IllegalArgumentException.class);
+        org.mockito.Mockito.verifyNoInteractions(noStore);
+        assertThat(jdbc.queryForObject("select count(*) from storage_upload_permits where actor_user_id=? and charged=false and completed=true and accounted_bytes=0",Long.class,actor)).isEqualTo(2);
+        assertThat(jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=0",Long.class)).isEqualTo(globalBefore);
+        assertThat(jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=?",Long.class,actor)).isZero();
+        assertThat(jdbc.queryForObject("select charged_uploads from storage_upload_budgets where scope_id=?",Long.class,actor)).isZero();
+        assertThat(jdbc.queryForObject("select in_flight from storage_upload_budgets where scope_id=?",Integer.class,actor)).isZero();
+    }
+    @Test void storePortFailureWithNonWritingMockRetainsChargedQuota() throws Exception {
         long actor=987611L;
         var noWrite=org.mockito.Mockito.mock(BlobCatalog.class);
         org.mockito.Mockito.when(noWrite.store(org.mockito.ArgumentMatchers.any())).thenThrow(new IllegalStateException("before write fixture"));

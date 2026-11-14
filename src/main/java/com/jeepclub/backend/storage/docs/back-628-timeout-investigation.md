@@ -36,9 +36,11 @@ F-02 concluída. Nenhum worker ou fila é introduzido por esta investigação.
 
 ## Quota e falhas de gravação
 
-`charge` antecede o primeiro `BlobCatalog.store`. Antes de chamar esse port, uma
-falha comprovadamente sem escrita pode deixar permit concluído e quota cobrada,
-sem registro de blob. Quando o adapter já reservou `ready=false`, uma falha do
+`charge` antecede o primeiro `BlobCatalog.store`. Uma falha de leitura ou de
+processamento antes de `charge` termina com permit não cobrado e libera a
+reserva. O teste que lança ao entrar em `store` usa mock que não grava: ele
+caracteriza quota cobrada, mas não prova que uma exceção do port real implique
+ausência de escrita. Quando o adapter já reservou `ready=false`, uma falha do
 provider pode deixar registro de custódia sem prova de bytes; após um `store`
 confirmado, o blob pode permanecer íntegro e sem asset após falha posterior.
 O fluxo atual não registra no permit qual dessas situações ocorreu. Portanto,
@@ -46,3 +48,14 @@ estornar automaticamente baseado apenas na exceção pode subcontabilizar dados
 ou uma gravação de resultado desconhecido; a política existente é conservadora
 e pode cobrar sem bytes físicos. Os testes adicionados caracterizam esses casos,
 sem afirmar que o custo foi aprovado como regra de produto nem alterar quotas.
+
+O código usa `accountedBytes` como valor reservado ou cobrado por permit e
+`chargedUploads` como contador incrementado no `charge`; `finish` devolve a
+reserva somente para permit não cobrado. Na inicialização, `usedBytes` global
+é calculado pela soma dos blobs e o de usuário pela soma de variantes de seus
+assets. Já `charge` soma representações processadas por tentativa, inclusive
+quando bytes são compartilhados. Portanto o contador global após cobranças não
+equivale necessariamente a bytes físicos únicos. A semântica de cobrança para
+falhas após entrar no port e a reconciliação desses contadores permanecem uma
+decisão em aberto; não se deve interpretar a exceção do port como prova de
+ausência de custódia.
