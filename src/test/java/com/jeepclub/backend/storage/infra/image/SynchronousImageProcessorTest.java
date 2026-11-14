@@ -12,6 +12,19 @@ class SynchronousImageProcessorTest {
         var img = new BufferedImage(120, 80, BufferedImage.TYPE_INT_RGB);
         var out = new ByteArrayOutputStream(); ImageIO.write(img, "png", out); return out.toByteArray();
     }
+    @Test void acceptsExactlyTenMibAndRejectsOneByteMore() throws Exception {
+        byte[] png=image();int payloadSize=SynchronousImageProcessor.MAX_INPUT-png.length-12;
+        byte[] padding=new byte[payloadSize];byte[] type={'n','p','T','c'};
+        var crc=new java.util.zip.CRC32();crc.update(type);crc.update(padding);
+        var output=new ByteArrayOutputStream(SynchronousImageProcessor.MAX_INPUT);
+        var data=new java.io.DataOutputStream(output);
+        data.write(png,0,png.length-12);data.writeInt(payloadSize);data.write(type);data.write(padding);data.writeInt((int)crc.getValue());data.write(png,png.length-12,12);
+        byte[] exact=output.toByteArray();assertThat(exact).hasSize(SynchronousImageProcessor.MAX_INPUT);
+        var processor=new SynchronousImageProcessor();
+        assertThat(processor.process(exact,SynchronousImageProcessor.Category.PROFILE,List.of()).master().bytes()).isNotEmpty();
+        assertThatThrownBy(() -> processor.process(java.util.Arrays.copyOf(exact,exact.length+1),SynchronousImageProcessor.Category.PROFILE,List.of()))
+            .isInstanceOf(IllegalArgumentException.class);
+    }
     @Test void derivesIndependentCropsAndHashesPersistedBytes() throws Exception {
         var processor = new SynchronousImageProcessor();
         var result = processor.process(image(), SynchronousImageProcessor.Category.PROFILE, List.of(
