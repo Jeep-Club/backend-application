@@ -23,7 +23,7 @@ Na fundação integrada, o catálogo não implementa upload, associação autori
 
 As evidências da fundação referem-se a `d33af0a08ccd301d6dd4d686ab484292dc5d8027`. O teste `rollbackOfReplacementPreservesExistingReferenceAndItsAuditHistory` foi adicionado no commit `a139a1bc` da BACK-627, posterior à fundação. A presença dos testes não afirma execução ou CI verde no commit desta alteração. `MediaCatalogMySqlIT` cobre Flyway/validate em MySQL e `MediaCatalogPostgresIT` usa DDL Hibernate em PostgreSQL; não há cadeia Flyway PostgreSQL equivalente. A verificação de schema vazio e histórico pertence também a `MySqlMigrationIT`. O workflow `.github/workflows/backend-ci.yml` contém `verify`, `mysql-migrations` e `publications-postgresql`; resultados e skips devem ser registrados para o SHA efetivamente validado.
 
-| Critério | Código e evidência no SHA integrado | Estado e limite |
+| Critério | Código e evidência (SHA indicado acima ou na linha) | Estado e limite |
 | --- | --- | --- |
 | BACK-549 / BACK-633: catálogo, V13, integridade e auditoria | `storage/core/domain/model`, `MediaCatalogRepository`, `infra/persistence`, V13; `MediaDomainTest`, `MediaCatalogPersistenceTest`, `MediaCatalogMySqlIT`, `MediaCatalogPostgresIT` | Integrado pelo PR #131; evidência de execução do HEAD final ainda necessária. |
 | BACK-634: proveniência independente, UNKNOWN e múltiplos vínculos | `MediaAsset`, `MediaReference`; `unknownProvenanceDoesNotInventUploaderOwnerOrSubject`, `uploaderOwnerAndSubjectAreIndependent`, `roundTripsUnknownAndKnownProvenanceWithoutCrossModuleForeignKeys`, `referencesSupportMultipleCurrentConsumersAndPreserveHistory` | Parte estrutural atendida; não prova autorização em consumidores. |

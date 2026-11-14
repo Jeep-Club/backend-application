@@ -49,6 +49,19 @@ class MediaResolutionServiceTest {
         verifyNoInteractions(blobs,legacy);
         verify(policy,never()).mayRead(anyLong(),any(),anyBoolean());
     }
+    @Test void missingPolicyNeverReadsEitherProvider() throws Exception {
+        fixture("images",digest());
+        var resolver = new MediaResolutionService(catalog,blobs,governance,List.of(),legacy);
+        assertThatThrownBy(() -> resolver.resolve(11,1,2,"MASTER")).isInstanceOf(AccessDeniedException.class);
+        verifyNoInteractions(blobs,legacy);
+    }
+    @Test void referenceBelongingToAnotherAssetNeverReadsEitherProvider() throws Exception {
+        fixture("images",digest());
+        var other = new MediaReference(2L,9L,MediaContext.IDENTITY_PROFILE,"11","PHOTO",null,MediaOrigin.UPLOAD,now,11L,null,null,null,0L);
+        when(catalog.findReference(2L)).thenReturn(Optional.of(other));
+        assertThatThrownBy(() -> service.resolve(11,1,2,"MASTER")).isInstanceOf(AccessDeniedException.class);
+        verifyNoInteractions(blobs,legacy);
+    }
     @Test void moderationPreventsLegacyRead() throws Exception {
         fixture("images",digest());when(governance.allows(1L,2L)).thenReturn(false);
         assertThatThrownBy(()->service.resolve(11,1,2,"MASTER")).isInstanceOf(AccessDeniedException.class);
