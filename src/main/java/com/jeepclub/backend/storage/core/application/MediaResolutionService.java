@@ -16,7 +16,7 @@ public class MediaResolutionService {
     public MediaResolutionService(MediaCatalogRepository catalog,BlobCatalog blobs,MediaGovernance governance,List<StorageConsumerPolicy> policies,LegacyMediaSource legacy) {
         this.legacy=legacy;
         this.catalog=catalog;this.blobs=blobs;this.governance=governance;
-        access=new ContextualMediaAccess((actor,reference,master) -> policies.stream().filter(p -> p.context()==reference.context()).anyMatch(p -> p.mayRead(actor,reference,master)));
+        access=new ContextualMediaAccess((actor,reference,master) -> policies.stream().filter(p -> StoragePolicyViews.matches(p,reference.context())).anyMatch(p -> p.mayRead(actor,StoragePolicyViews.reference(reference),master)));
     }
     @Transactional(readOnly=true) public Content resolve(long actor,long mediaId,long referenceId,String code) {
         var asset=catalog.findAsset(mediaId).orElseThrow(MediaResolutionService::unavailable);

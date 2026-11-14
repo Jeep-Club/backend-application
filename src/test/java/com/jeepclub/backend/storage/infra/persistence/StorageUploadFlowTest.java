@@ -49,12 +49,12 @@ class StorageUploadFlowTest {
         @Bean LegacyFixture legacySource() { return new LegacyFixture(); }
         @Bean SimpleMeterRegistry metrics() { return new SimpleMeterRegistry(); }
         @Bean StorageConsumerPolicy policy() { return new StorageConsumerPolicy() {
-            public MediaContext context() { return MediaContext.IDENTITY_PROFILE; }
+            public Context context() { return Context.IDENTITY_PROFILE; }
             public boolean mayUpload(long actor,String id) { return Long.toString(actor).equals(id); }
-            public UploadIdentity uploadIdentity(long actor,String id) { return new UploadIdentity(actor,MediaSubjectType.USER,actor); }
-            public boolean mayAssociate(long actor,MediaAsset asset,String id,String role) {return mayUpload(actor,id) && Long.valueOf(actor).equals(asset.ownerUserId());}
-            public boolean mayDissociate(long actor,MediaReference ref) {return mayUpload(actor,ref.consumerId());}
-            public boolean mayRead(long actor,MediaReference ref,boolean master) { return mayUpload(actor,ref.consumerId()); }
+            public UploadIdentity uploadIdentity(long actor,String id) { return new UploadIdentity(actor,SubjectType.USER,actor); }
+            public boolean mayAssociate(long actor,Asset asset,String id,String role) {return mayUpload(actor,id) && Long.valueOf(actor).equals(asset.ownerUserId());}
+            public boolean mayDissociate(long actor,Reference ref) {return mayUpload(actor,ref.consumerId());}
+            public boolean mayRead(long actor,Reference ref,boolean master) { return mayUpload(actor,ref.consumerId()); }
         }; }
     }
     static class LegacyFixture implements LegacyMediaSource {
@@ -263,6 +263,11 @@ class StorageUploadFlowTest {
         var a=upload.upload(101,MediaContext.IDENTITY_PROFILE,"101",image(101));
         assertThat(a.referenceId()).isNull();
         assertThat(catalog.findReferences(a.mediaId(),0,100)).isEmpty();
+        assertThatThrownBy(() -> resolution.resolve(101,a.mediaId(),Long.MAX_VALUE,"MASTER"))
+            .isInstanceOf(AccessDeniedException.class);
+        var master=catalog.findVariant(a.mediaId(),"MASTER").orElseThrow();
+        var stored=blobs.findByVariant(master.variantId()).orElseThrow();
+        assertThat(blobs.read(stored)).isNotEmpty();
         var asset=catalog.findAsset(a.mediaId()).orElseThrow();
         var review=admin.review(a.mediaId(),new MediaAuditContext(MediaActorKind.USER,101L,Instant.now(),null));
         assertThat(review.decision()).isEqualTo("WAITING");
@@ -624,9 +629,14 @@ class StorageUploadFlowTest {
         } finally {for(var permit:granted) admission.finish(permit);pool.shutdownNow();}
         assertThat(jdbc.queryForObject("select in_flight from storage_upload_budgets where scope_id=99",Integer.class)).isZero();
     }
-    @Test void historicalReferenceRemainsReadableWhenItsConsumerAuthorizesIt() throws Exception {
+    @Test void historicalReferenceIsDeniedEvenWhenConsumerAuthorizesIt() throws Exception {
         var a=attachedUpload(44,MediaContext.IDENTITY_PROFILE,"44",image(4));
+        long active=attach(44,a.mediaId(),MediaContext.IDENTITY_PROFILE,"44","OTHER");
         var now=Instant.now();catalog.endReference(catalog.findReference(a.referenceId()).orElseThrow().end(now,44L,"REPLACED"),new MediaAuditContext(MediaActorKind.USER,44L,now,null));
-        assertThat(resolution.resolve(44,a.mediaId(),a.referenceId(),"AVATAR_SMALL").bytes()).isNotEmpty();
+        assertThatThrownBy(() -> resolution.resolve(44,a.mediaId(),a.referenceId(),"AVATAR_SMALL")).isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+        assertThat(resolution.resolve(44,a.mediaId(),active,"AVATAR_SMALL").bytes()).isNotEmpty();
+        var historical=catalog.findReference(a.referenceId()).orElseThrow();
+        assertThat(historical.isCurrent()).isFalse();
+        assertThat(historical.unlinkReasonCode()).isEqualTo("REPLACED");
     }
 }

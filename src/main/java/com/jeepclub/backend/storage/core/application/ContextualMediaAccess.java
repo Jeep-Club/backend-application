@@ -21,7 +21,7 @@ public final class ContextualMediaAccess {
                            Moderation global, Moderation contextual, boolean protectedContext) {
         if (userId == null || userId <= 0 || asset == null || reference == null || variant == null
                 || asset.mediaId() == null || !asset.mediaId().equals(reference.mediaId()) || !asset.mediaId().equals(variant.mediaId())
-                || reference.referenceId() == null || variant.variantId() == null || asset.physicalState() != MediaPhysicalState.PRESENT
+                || reference.referenceId() == null || !reference.isCurrent() || variant.variantId() == null || asset.physicalState() != MediaPhysicalState.PRESENT
                 || global != Moderation.ALLOWED || contextual != Moderation.ALLOWED)
             return new Decision(false, Cache.PRIVATE_NO_STORE);
         boolean master = variant.isPrivateSource();
