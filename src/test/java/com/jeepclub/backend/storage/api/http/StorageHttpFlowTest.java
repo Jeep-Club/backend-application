@@ -131,6 +131,9 @@ class StorageHttpFlowTest {
         var owner=users.registerAndAuthenticate(new UserRegistrationData("Storage fixture",null,"storage-fixture@example.com","52998224725",null,null,null,Instant.now()),"Password@123");
         var other=users.registerAndAuthenticate(new UserRegistrationData("Other fixture",null,"other-storage-fixture@example.com","16899535009",null,null,null,Instant.now()),"Password@123");
         var image=new BufferedImage(80,60,BufferedImage.TYPE_INT_RGB);var bytes=new ByteArrayOutputStream();ImageIO.write(image,"png",bytes);
+        mvc.perform(multipart("/storage/media/profile").file(new MockMultipartFile("file","photo.png","image/jpeg",bytes.toByteArray()))
+            .header("Authorization","Bearer "+owner.accessToken())).andExpect(status().isBadRequest())
+            .andExpect(content().contentTypeCompatibleWith("application/problem+json"));
         byte[] webp=dev.matrixlab.webp4j.WebPCodec.encodeLosslessImage(image);
         mvc.perform(multipart("/storage/media/profile").file(new MockMultipartFile("file","photo.webp","image/webp",webp))
             .header("Authorization","Bearer "+owner.accessToken())).andExpect(status().isCreated());

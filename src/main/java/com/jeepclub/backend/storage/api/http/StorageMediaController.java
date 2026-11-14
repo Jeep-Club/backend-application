@@ -17,14 +17,33 @@ public class StorageMediaController {
     private final MediaUploadService upload;private final MediaResolutionService resolution;private final MediaReferenceService references;
     public StorageMediaController(MediaUploadService upload,MediaResolutionService resolution,MediaReferenceService references) { this.upload=upload;this.resolution=resolution;this.references=references; }
     @PostMapping(value="/profile",consumes=MediaType.MULTIPART_FORM_DATA_VALUE)
+    @io.swagger.v3.oas.annotations.Operation(summary="Upload de imagem de perfil", description="A parte file deve declarar image/jpeg, image/png ou image/webp coerente com o conteúdo. Limite de entrada: 10 MiB.")
     public ResponseEntity<MediaUploadService.Uploaded> upload(@AuthenticationPrincipal UserPrincipal user,@RequestPart("file") MultipartFile file,
         @RequestPart(value="options",required=false) com.jeepclub.backend.storage.core.repository.MediaImageProcessor.Options options) throws IOException {
         if(user==null) throw new AccessDeniedException("Media unavailable");
         if(file.getSize()<=0 || file.getSize()>10*1024*1024) throw new IllegalArgumentException("Invalid upload size");
         return ResponseEntity.status(201).cacheControl(CacheControl.noStore()).body(upload.upload(user.getUserId(),MediaContext.IDENTITY_PROFILE,user.getUserId().toString(),() -> {
-            try(var input=file.getInputStream()) {return input.readNBytes(10*1024*1024+1);}
+            try(var input=file.getInputStream()) {
+                byte[] bytes=input.readNBytes(10*1024*1024+1);
+                validateDeclaredType(file.getContentType(),bytes);
+                return bytes;
+            }
             catch(IOException failure) {throw new java.io.UncheckedIOException(failure);}
         },options == null ? com.jeepclub.backend.storage.core.repository.MediaImageProcessor.Options.defaults() : options));
+    }
+    private static void validateDeclaredType(String declared,byte[] bytes) {
+        String actual;
+        if(bytes.length>=8 && java.util.Arrays.equals(java.util.Arrays.copyOf(bytes,8),new byte[]{(byte)137,80,78,71,13,10,26,10})) actual="image/png";
+        else if(bytes.length>=2 && (bytes[0]&255)==255 && (bytes[1]&255)==216) actual="image/jpeg";
+        else if(bytes.length>=12 && bytes[0]=='R' && bytes[1]=='I' && bytes[2]=='F' && bytes[3]=='F' && bytes[8]=='W' && bytes[9]=='E' && bytes[10]=='B' && bytes[11]=='P') actual="image/webp";
+        else throw new IllegalArgumentException("Unsupported image");
+        try {
+            var type=MediaType.parseMediaType(declared);
+            if(!type.getType().equalsIgnoreCase("image") || !type.getSubtype().equalsIgnoreCase(actual.substring(6)))
+                throw new IllegalArgumentException("Image type mismatch");
+        } catch (org.springframework.http.InvalidMediaTypeException | NullPointerException failure) {
+            throw new IllegalArgumentException("Invalid image type",failure);
+        }
     }
     public record Association(MediaContext context,String consumerId,String role) {}
     @PostMapping("/{mediaId}/references") public long associate(@AuthenticationPrincipal UserPrincipal user,@PathVariable long mediaId,@RequestBody Association association) {

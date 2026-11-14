@@ -1,5 +1,8 @@
 # Storage — catálogo e fronteiras
 
+O [inventário parcial de consumidores da BACK-628](back-628-consumers.md) registra
+as evidências de layout e as decisões técnicas ainda necessárias para presets.
+
 Storage é o bounded context proprietário da identidade lógica de mídias, suas representações, referências e auditoria. A organização de camadas e contratos segue a [arquitetura global](../../../../../../../../docs/architecture/README.md). A capacidade física é provida por `shared.storage` e `platform.storage`; veja o [guia do provider](../../platform/storage/docs/README.md). Provider, namespace e key são localização técnica, não autorização nem identidade de negócio.
 
 ## Referências e estado
