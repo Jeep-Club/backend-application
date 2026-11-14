@@ -18,6 +18,8 @@ public class MediaUploadService {
     private final UploadAdmission admission;private final MediaCatalogRepository catalog; private final BlobCatalog blobs;
     private final MediaImageProcessor images; private final MediaGovernance governance;
     private final List<StorageConsumerPolicy> policies; private final TransactionTemplate transaction;private final io.micrometer.core.instrument.MeterRegistry metrics;
+    // Bound admitted uploads from payload buffering through physical writes and completion.
+    private final java.util.concurrent.Semaphore inFlight = new java.util.concurrent.Semaphore(2, true);
     public MediaUploadService(MediaCatalogRepository catalog,BlobCatalog blobs,MediaImageProcessor images,MediaGovernance governance,
         List<StorageConsumerPolicy> policies,PlatformTransactionManager manager,io.micrometer.core.instrument.MeterRegistry metrics,UploadAdmission admission) {
         this.admission=admission;this.metrics=metrics;this.catalog=catalog;this.blobs=blobs;this.images=images;this.governance=governance;this.policies=List.copyOf(policies);transaction=new TransactionTemplate(manager);
@@ -34,6 +36,8 @@ public class MediaUploadService {
         var policy=policies.stream().filter(p -> StoragePolicyViews.matches(p,context) && p.mayUpload(actor,consumerId)).findFirst()
             .orElseThrow(() -> new AccessDeniedException("Media unavailable"));
         var identity=policy.uploadIdentity(actor,consumerId);
+        if (!inFlight.tryAcquire()) throw new IllegalStateException("Upload capacity exceeded");
+        try {
         var permit=admission.reserve(actor);
         try {
         var processed=images.process(content.get(),context,options);
@@ -53,6 +57,7 @@ public class MediaUploadService {
             return new Uploaded(asset.mediaId(),null);
         });
         } finally {admission.finish(permit);}
+        } finally {inFlight.release();}
         } finally { metrics.timer("storage.upload.duration").record(System.nanoTime()-started,java.util.concurrent.TimeUnit.NANOSECONDS); }
     }
 }

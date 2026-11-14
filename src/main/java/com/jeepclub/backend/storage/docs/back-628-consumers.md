@@ -42,9 +42,11 @@ da BACK-628 de impedir resolução comum de MASTER por troca de código. A corre
 precisa definir e testar o acesso privado de reedição e a compatibilidade do
 fluxo legado antes de retirar essa via; a presença da policy não comprova o aceite.
 
-O semáforo de `SynchronousImageProcessor` limita somente processamento na JVM;
-leitura multipart, reserva SQL, gravação física e transação de catálogo estão fora
-dele. Não há cancelamento ponta a ponta demonstrado para codec ou I/O já em
+O semáforo de `SynchronousImageProcessor` limita somente processamento na JVM.
+O limite em `MediaUploadService` abrange leitura do payload, reserva SQL,
+gravação física, transação e conclusão, com duas operações simultâneas por
+processo; a recepção multipart anterior ao controller e outras instâncias não
+estão sob esse limite. Não há cancelamento ponta a ponta demonstrado para codec ou I/O já em
 execução. Um deadline verificado apenas após essas chamadas não interromperia o
 trabalho. A reserva de `BlobCatalogAdapter` é transacionada antes do I/O e
 preservada para reconciliação; testes de falhas e concorrência em banco real são
