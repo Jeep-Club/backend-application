@@ -76,6 +76,51 @@ class StorageUploadFlowTest {
     @Autowired BlobCatalog blobs; @Autowired PhysicalBlobStore physical; @Autowired MediaCatalogRepository catalog;
     @Autowired MediaGovernance governance; @Autowired JdbcTemplate jdbc; @Autowired PlatformTransactionManager manager;
     @Autowired MediaAdministration admin; @Autowired MediaReferenceService references; @Autowired LegacyBackfill legacy; @Autowired BlobInspection inspection;
+    @Test void failureBeforeAnyBlobStoreRetainsChargedQuotaWithoutPhysicalCustody() throws Exception {
+        long actor=987611L;
+        var noWrite=org.mockito.Mockito.mock(BlobCatalog.class);
+        org.mockito.Mockito.when(noWrite.store(org.mockito.ArgumentMatchers.any())).thenThrow(new IllegalStateException("before write fixture"));
+        var service=new MediaUploadService(catalog,noWrite,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,
+            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),admission);
+        long before=jdbc.queryForObject("select count(*) from storage_blobs",Long.class);
+        assertThatThrownBy(() -> service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),image(411)))
+            .isInstanceOf(IllegalStateException.class).hasMessage("before write fixture");
+        assertThat(jdbc.queryForObject("select count(*) from storage_media_assets where uploaded_by_user_id=?",Long.class,actor)).isZero();
+        assertThat(jdbc.queryForObject("select count(*) from storage_blobs",Long.class)).isEqualTo(before);
+        assertThat(jdbc.queryForObject("select count(*) from storage_upload_permits where actor_user_id=? and charged=true and completed=true and accounted_bytes>0",Long.class,actor)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=?",Long.class,actor)).isPositive();
+        assertThat(jdbc.queryForObject("select in_flight from storage_upload_budgets where scope_id=?",Integer.class,actor)).isZero();
+    }
+    @Test void failureAfterVerifiedBlobStoreRetainsCustodyAndChargedQuota() throws Exception {
+        long actor=987612L;var saved=new java.util.concurrent.atomic.AtomicReference<BlobCatalog.Blob>();
+        BlobCatalog uncertain=new BlobCatalog() {
+            public Blob store(byte[] bytes) {saved.set(blobs.store(bytes));throw new IllegalStateException("after write fixture");}
+            public void bind(Long id,Blob blob) {blobs.bind(id,blob);}
+            public Optional<Blob> findByVariant(Long id) {return blobs.findByVariant(id);}
+            public byte[] read(Blob blob) {return blobs.read(blob);}
+        };
+        var service=new MediaUploadService(catalog,uncertain,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,
+            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),admission);
+        assertThatThrownBy(() -> service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),image(412)))
+            .isInstanceOf(IllegalStateException.class).hasMessage("after write fixture");
+        assertThat(saved.get()).isNotNull();assertThat(blobs.read(saved.get())).isNotEmpty();
+        assertThat(jdbc.queryForObject("select count(*) from storage_media_assets where uploaded_by_user_id=?",Long.class,actor)).isZero();
+        assertThat(jdbc.queryForObject("select count(*) from storage_upload_permits where actor_user_id=? and charged=true and completed=true and accounted_bytes>0",Long.class,actor)).isEqualTo(1);
+    }
+    @Test void failedPhysicalStoreLeavesUnreadyCustodyRecordAndChargedQuota() throws Exception {
+        long actor=987613L;
+        var provider=org.mockito.Mockito.mock(PhysicalBlobStore.class);
+        org.mockito.Mockito.doThrow(new IllegalStateException("provider fixture")).when(provider).putVerified(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.any());
+        var adapter=new BlobCatalogAdapter(quotaEntityManager,provider,manager);
+        var service=new MediaUploadService(catalog,adapter,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,
+            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),admission);
+        long before=jdbc.queryForObject("select count(*) from storage_blobs where ready=false",Long.class);
+        assertThatThrownBy(() -> service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),image(413)))
+            .isInstanceOf(IllegalStateException.class).hasMessage("provider fixture");
+        assertThat(jdbc.queryForObject("select count(*) from storage_blobs where ready=false",Long.class)).isEqualTo(before+1);
+        assertThat(jdbc.queryForObject("select count(*) from storage_media_assets where uploaded_by_user_id=?",Long.class,actor)).isZero();
+        assertThat(jdbc.queryForObject("select count(*) from storage_upload_permits where actor_user_id=? and charged=true and completed=true and accounted_bytes>0",Long.class,actor)).isEqualTo(1);
+    }
     @Test void finishFailureRollsBackCatalogAndRetryKeepsBlobCustody() throws Exception {
         long actor=987601L;
         UploadAdmission failing=new UploadAdmission() {

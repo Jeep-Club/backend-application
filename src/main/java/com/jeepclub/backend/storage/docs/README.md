@@ -1,5 +1,8 @@
 # Storage — catálogo e fronteiras
 
+A [investigação de timeout da BACK-628](back-628-timeout-investigation.md)
+registra os limites atuais de cancelamento e as evidências sobre quota e custódia.
+
 ## Conclusão transacional do upload — BACK-628
 
 O catálogo e a conclusão do permit confirmado participam da mesma transação
