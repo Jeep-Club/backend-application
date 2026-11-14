@@ -108,10 +108,11 @@ def relations(root, modules):
             if not pkg or not pkg[1].startswith(PREFIX):
                 continue
             owner = module(pkg[1])
-            for match in re.finditer(r'\bimport\s+(?:static\s+)?(com\.jeepclub\.backend\.[\w.*]+)', text):
-                provider = module(match[1])
+            for match in re.finditer(r'\bcom\.jeepclub\.backend\.[\w.*]+', text):
+                provider = module(match[0])
                 if owner != provider:
-                    edges.append(dict(consumer=owner, provider=provider, source=str(path.relative_to(root))))
+                    edges.append(dict(consumer=owner, provider=provider, source=str(path.relative_to(root)),
+                                      line=text.count('\n', 0, match.start()) + 1, reference=match[0]))
     return edges
 
 
@@ -122,6 +123,8 @@ def select(records, band, modules=(), focus=(), dependencies=(), edges=()):
             raise Invalid(f'Unknown module: {value}; known: {sorted(known)}')
     names = {r['name']: r for r in records}
     if band == 'F1':
+        if modules or dependencies:
+            raise Invalid('F1 requires explicit tests only; module/dependency would be ignored')
         if not focus:
             raise Invalid('F1 requires --test Class[#method]')
         resolved = []
@@ -139,6 +142,8 @@ def select(records, band, modules=(), focus=(), dependencies=(), edges=()):
     if band == 'F5':
         if modules or dependencies:
             raise Invalid('F5 cannot be narrowed')
+        if {r['kind'] for r in records} != {'unit', 'mysql', 'postgres'}:
+            raise Invalid('F5 requires nonempty Surefire, MySQL and PostgreSQL inventories')
         return [dict(r, selector=r['name']) for r in records]
     if not modules:
         raise Invalid(f'{band} requires --module')
@@ -241,6 +246,26 @@ def commands(selected, full=False, migration=None):
     return result
 
 
+def materialize_commands(cmds, out):
+    """Use Surefire's native include file when a Windows cmd selector is too long.
+
+    Explicit Failsafe includes in this POM append to includesFile, so never use
+    that property to narrow an IT selection (it would broaden the requested scope).
+    """
+    result = []
+    for index, cmd in enumerate(cmds):
+        cmd = list(cmd)
+        for pos, arg in enumerate(cmd):
+            if arg.startswith('-Dtest=') and len(arg) > 6000:
+                path = out / f'gate-{index + 1}-includes.txt'
+                path.write_text('\n'.join(arg[len('-Dtest='):].split(',')) + '\n', encoding='utf-8')
+                cmd[pos] = '-Dsurefire.includesFile=' + str(path)
+        if os.name == 'nt' and len(subprocess.list2cmdline(cmd)) > 7800:
+            raise Invalid('Selection exceeds Windows cmd limit; split explicit focal IT selection or use the full profile')
+        result.append(cmd)
+    return result
+
+
 def reconcile(selected, report_dir):
     cases = []
     for path in sorted(report_dir.glob('TEST-*.xml')):
@@ -283,7 +308,11 @@ def run(root, plan, out):
             'postgres' if '-Ppublications-postgresql' in cmd else 'unit')]
         try:
             with log.open('w', encoding='utf-8') as stream:
-                proc = subprocess.run(cmd, cwd=root, stdout=stream, stderr=subprocess.STDOUT)
+                docker = any(r['kind'] != 'unit' for r in relevant)
+                proc = subprocess.run(['docker', 'info', '--format', '{{.ServerVersion}}'],
+                                      cwd=root, stdout=stream, stderr=subprocess.STDOUT) if docker else None
+                if proc is None or proc.returncode == 0:
+                    proc = subprocess.run(cmd, cwd=root, stdout=stream, stderr=subprocess.STDOUT)
             code = proc.returncode
         except OSError as exc:
             log.write_text(str(exc), encoding='utf-8')
@@ -336,6 +365,8 @@ def main(argv=None):
             raise Invalid('F3 requires --impact-review: review semantic/runtime dependencies and declare --dependency as needed')
         if args.migration:
             selected = [dict(r, selector=r['name']) for r in records if r['kind'] == 'mysql']
+            if not selected:
+                raise Invalid('Empty mandatory MySQL inventory')
             if args.migration == 'M1':
                 selected = []
             if args.migration in ('M2', 'M3'):
@@ -344,8 +375,10 @@ def main(argv=None):
                     risks = json.loads(args.risk_file.read_text(encoding='utf-8')) if args.risk_file else {}
                     for new in static['new']:
                         risk = risks.get(new['sha256'], {})
-                        if not risk.get('reason') or not risk.get('tests'):
+                        if not isinstance(risk.get('reason'), str) or not risk['reason'].strip() or not isinstance(risk.get('tests'), list) or not risk['tests']:
                             raise Invalid(f'Uncovered new migration {new["path"]}: require sha256-bound risk review and upgrade/constraint tests in --risk-file')
+                        if all(t in [MYSQL + '#' + m for m in SMOKE] for t in risk['tests']):
+                            raise Invalid(f'New migration {new["path"]}: schema smoke alone cannot prove historical compatibility')
                         selectors.extend(risk['tests'])
                 selected = select(records, 'F1', focus=selectors)
                 if any(r['kind'] != 'mysql' for r in selected):
@@ -368,10 +401,11 @@ def main(argv=None):
                                  'Partial execution is not full validation or JaCoCo coverage.'])
         out = root / 'target/progressive' / (dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ'))
         out.mkdir(parents=True)
+        plan['commands'] = materialize_commands(cmds, out)
         (out / 'selection.json').write_text(json.dumps(plan, indent=2), encoding='utf-8')
         print(f'{args.band or args.migration}: {len(selected)} selectors; {"PARTIAL" if plan["partial"] else "FULL gates"}; manifest: {out / "selection.json"}')
         if args.inspect:
-            for cmd in cmds:
+            for cmd in plan['commands']:
                 print(subprocess.list2cmdline(cmd))
             return 0
         if (args.band == 'F5' or args.migration == 'M4') and plan['dirty']:

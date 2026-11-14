@@ -71,3 +71,28 @@ Limites: análise de fonte não substitui discovery JUnit; XML é o oráculo de 
 F3 é conservador e exige revisão semântica explícita para eventos/reflexão/consumidores
 externos. Módulos sem testes não podem ser silenciosamente considerados cobertos.
 M3 e probes SQL isolados, documentação e gates finais ainda pendentes.
+
+## Checkpoint 3 — BACK-685 / execução progressiva de migrations
+
+Discovery registrado em `88817aa4`. O commit de implementação deste checkpoint
+é identificado por `git log --grep=BACK-685`; a validação real é consolidada ao final.
+
+M1 protege história/fixtures por comparação Git, hashes e versão append-only.
+M2 reutiliza os dois cenários existentes de banco vazio/Boot. M3 reutiliza toda a
+classe histórica, incluindo parametrizados, sem lista fechada de upgrades. Migration
+nova bloqueia M3 até declaração de risco por hash com regressão MySQL; apenas smoke
+é recusado. M4 conserva profile integral e archive V+1. O runner não recebe conexão
+externa, não executa repair/clean/baseline e não modifica SQL/fixtures.
+
+`probe_migrations.py` cria archives isolados do HEAD, acrescenta V+1 válida/inválida
+somente nessas cópias e exige resultados reais no Flyway/MySQL. Sua execução depende
+do commit desta implementação; resultados posteriores não devem ser atribuídos a um
+HEAD anterior. Docker tem preflight explícito e erros/skips de IT não viram sucesso.
+
+22 regressões Python aprovadas, 0 falhas/erros/skips, 0,772 s. Log local
+`target/runner-tests-final.log`. A seleção longa Surefire agora usa includesFile
+nativo para evitar o limite do cmd.exe; mudança coberta por teste de preservação
+integral de seletores. Nenhuma mudança em `pom.xml` nem nos SQL existentes.
+
+M3 real em andamento: `target/progressive/20261114T222625747811Z/` (Java 17).
+Próximo: probes isolados, seleção F3 longa real, F4 real, gates finais e CI Linux.

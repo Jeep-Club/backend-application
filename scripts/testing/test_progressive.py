@@ -26,6 +26,21 @@ def record(name, module, kind="unit"):
 
 
 class ProgressiveTests(unittest.TestCase):
+    def test_large_selection_uses_native_surefire_file_without_losing_entries(self):
+        names = ['com.jeepclub.backend.newmodule.VeryLongName' + str(i) + 'Test' for i in range(200)]
+        cmds = progressive.commands([record(n, 'newmodule') for n in names])
+        actual = progressive.materialize_commands(cmds, self.root)
+        prop = next(a for a in actual[0] if a.startswith('-Dsurefire.includesFile='))
+        includes = Path(prop.split('=', 1)[1]).read_text(encoding='utf-8').splitlines()
+        self.assertEqual(sorted(names), includes)
+        self.assertLess(len(subprocess.list2cmdline(actual[0])), 7800)
+
+    def test_unknown_dependency_with_no_tests_fails_closed(self):
+        rows = [record('com.jeepclub.backend.tools.OwnerTest', 'tools')]
+        with self.assertRaisesRegex(progressive.Invalid, 'Unclassified dependency'):
+            progressive.select(rows, 'F3', modules=['tools'], edges=[
+                dict(consumer='untested', provider='tools', source='new.java')])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
@@ -312,6 +327,8 @@ class ProgressiveTests(unittest.TestCase):
         selected = [record("com.jeepclub.backend.identity.DbMySqlIT", "iam.identity", "mysql")]
         cmd = ["mvnw", "-Pmysql-migrations", "verify"]
         def maven(cmd, cwd, stdout, stderr):
+            if cmd[0] == 'docker':
+                return mock.Mock(returncode=0)
             fresh = Path(cwd) / "target/failsafe-reports"
             fresh.mkdir(parents=True)
             (fresh / "TEST-db.xml").write_text("""<testsuite><testcase classname="com.jeepclub.backend.identity.DbMySqlIT" name="skipped"><skipped/></testcase></testsuite>""")
@@ -323,6 +340,17 @@ class ProgressiveTests(unittest.TestCase):
         result = __import__("json").loads((out / "result.json").read_text(encoding="utf-8"))
         self.assertFalse(result["runs"][0]["passed"])
         self.assertEqual({"skipped": 1}, result["runs"][0]["counts"])
+
+    def test_missing_docker_is_failure_without_invoking_maven(self):
+        out = self.root / 'out'
+        out.mkdir()
+        selected = [record('com.jeepclub.backend.tools.DbMySqlIT', 'tools', 'mysql')]
+        with mock.patch.object(progressive.subprocess, 'run', return_value=mock.Mock(returncode=1)) as process:
+            status = progressive.run(self.root, {'selected': selected, 'commands': [
+                ['mvnw', '-Pmysql-migrations', 'verify']]}, out)
+        self.assertEqual(1, status)
+        self.assertEqual(1, process.call_count)
+        self.assertEqual('docker', process.call_args.args[0][0])
 
 
 if __name__ == "__main__":
