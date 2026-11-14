@@ -27,8 +27,8 @@ class MediaResolutionServiceTest {
         when(catalog.findReference(2L)).thenReturn(Optional.of(ref));
         when(catalog.findVariant(1L,"MASTER")).thenReturn(Optional.of(new MediaVariant(3L,1L,"MASTER",MediaVariantRole.MASTER,"LOCAL",namespace,namespace+"/fixture.png","image/png",3,1,1,"SHA-256",checksum,null,null,null,now)));
         when(governance.allows(1L,2L)).thenReturn(true);
-        when(policy.context()).thenReturn(MediaContext.IDENTITY_PROFILE);
-        when(policy.mayRead(11,ref,true)).thenReturn(true);
+        when(policy.context()).thenReturn(StorageConsumerPolicy.Context.IDENTITY_PROFILE);
+        when(policy.mayRead(11,StoragePolicyViews.reference(ref),true)).thenReturn(true);
     }
     String digest() throws Exception {return HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));}
 
@@ -41,6 +41,13 @@ class MediaResolutionServiceTest {
         fixture("images",digest());
         assertThatThrownBy(()->service.resolve(22,1,2,"MASTER")).isInstanceOf(AccessDeniedException.class);
         verifyNoInteractions(blobs,legacy);
+    }
+    @Test void endedReferenceIsDeniedBeforeReadingAnyProvider() throws Exception {
+        fixture("images",digest());
+        when(catalog.findReference(2L)).thenReturn(Optional.of(ref.end(now.plusSeconds(1),11L,"DETACHED")));
+        assertThatThrownBy(() -> service.resolve(11,1,2,"MASTER")).isInstanceOf(AccessDeniedException.class);
+        verifyNoInteractions(blobs,legacy);
+        verify(policy,never()).mayRead(anyLong(),any(),anyBoolean());
     }
     @Test void moderationPreventsLegacyRead() throws Exception {
         fixture("images",digest());when(governance.allows(1L,2L)).thenReturn(false);

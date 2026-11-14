@@ -31,7 +31,7 @@ public class MediaUploadService {
     public Uploaded upload(long actor,MediaContext context,String consumerId,java.util.function.Supplier<byte[]> content,MediaImageProcessor.Options options) {
         long started=System.nanoTime();try {
         if(actor<=0) throw new AccessDeniedException("Media unavailable");
-        var policy=policies.stream().filter(p -> p.context()==context && p.mayUpload(actor,consumerId)).findFirst()
+        var policy=policies.stream().filter(p -> StoragePolicyViews.matches(p,context) && p.mayUpload(actor,consumerId)).findFirst()
             .orElseThrow(() -> new AccessDeniedException("Media unavailable"));
         var identity=policy.uploadIdentity(actor,consumerId);
         var permit=admission.reserve(actor);
@@ -41,7 +41,7 @@ public class MediaUploadService {
         var stored=processed.images().stream().map(i -> blobs.store(i.bytes())).toList();
         return transaction.execute(status -> {
             Instant now=Instant.now(); var audit=new MediaAuditContext(MediaActorKind.USER,actor,now,null);
-            var asset=catalog.registerAsset(new MediaAsset(null,MediaOrigin.UPLOAD,context,consumerId,actor,identity.ownerUserId(),identity.subjectType(),identity.subjectId(),
+            var asset=catalog.registerAsset(new MediaAsset(null,MediaOrigin.UPLOAD,context,consumerId,actor,identity.ownerUserId(),MediaSubjectType.valueOf(identity.subjectType().name()),identity.subjectId(),
                 "PHOTO",MediaClassification.CLASSIFIED,MediaPhysicalState.PRESENT,now,now,null),audit);
             for(int i=0;i<processed.images().size();i++) {
                 var image=processed.images().get(i);var blob=stored.get(i);

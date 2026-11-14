@@ -21,13 +21,13 @@ public class MediaReferenceService {
     public long associate(long actor,long mediaId,MediaContext context,String resource,String role,Integer position) {
         validatePosition(position);
         var asset=catalog.findAsset(mediaId).orElseThrow(() -> new AccessDeniedException("Media unavailable"));
-        if(actor<=0 || policies.stream().filter(p -> p.context()==context).noneMatch(p -> p.mayAssociate(actor,asset,resource,role))) throw new AccessDeniedException("Media unavailable");
+        if(actor<=0 || policies.stream().filter(p -> StoragePolicyViews.matches(p,context)).noneMatch(p -> p.mayAssociate(actor,StoragePolicyViews.asset(asset),resource,role))) throw new AccessDeniedException("Media unavailable");
         Instant now=Instant.now();
         return catalog.recordReference(new MediaReference(null,mediaId,context,resource,role,position,MediaOrigin.UPLOAD,now,actor,null,null,null,null),audit(actor,now)).referenceId();
     }
     public void dissociate(long actor,long mediaId,long referenceId) {
         var reference=catalog.findReference(referenceId).orElseThrow(() -> new AccessDeniedException("Media unavailable"));
-        if(actor<=0 || !reference.mediaId().equals(mediaId) || policies.stream().filter(p -> p.context()==reference.context()).noneMatch(p -> p.mayDissociate(actor,reference))) throw new AccessDeniedException("Media unavailable");
+        if(actor<=0 || !reference.mediaId().equals(mediaId) || policies.stream().filter(p -> StoragePolicyViews.matches(p,reference.context())).noneMatch(p -> p.mayDissociate(actor,StoragePolicyViews.reference(reference)))) throw new AccessDeniedException("Media unavailable");
         if(!reference.isCurrent()) return;
         Instant now=Instant.now();catalog.endReference(reference.end(now,actor,"DETACHED"),audit(actor,now));
     }
@@ -40,7 +40,7 @@ public class MediaReferenceService {
         validatePosition(position);
         var previous=catalog.findReference(oldReferenceId).orElseThrow(() -> new AccessDeniedException("Media unavailable"));
         if(previous.context()!=context || !previous.consumerId().equals(resource) || !previous.role().equals(role)
-            || policies.stream().filter(p -> p.context()==context).noneMatch(p -> p.mayDissociate(actor,previous)))
+            || policies.stream().filter(p -> StoragePolicyViews.matches(p,context)).noneMatch(p -> p.mayDissociate(actor,StoragePolicyViews.reference(previous))))
             throw new AccessDeniedException("Media unavailable");
         catalog.lockAssets(List.of(previous.mediaId(),newMediaId));
         if(!previous.isCurrent()) throw new jakarta.persistence.OptimisticLockException("Media association changed");

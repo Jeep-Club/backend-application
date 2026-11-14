@@ -17,6 +17,6 @@ class ContextualMediaAccessTest {
         assertThat(yes.decide(1L, asset, reference, master, ContextualMediaAccess.Moderation.ALLOWED, ContextualMediaAccess.Moderation.ALLOWED, true).cache()).isEqualTo(ContextualMediaAccess.Cache.PRIVATE_NO_STORE);
         assertThat(yes.decide(2L, asset, reference, master, ContextualMediaAccess.Moderation.ALLOWED, ContextualMediaAccess.Moderation.ALLOWED, true).allowed()).isFalse();
         assertThat(yes.decide(1L, asset, reference, master, ContextualMediaAccess.Moderation.UNKNOWN, ContextualMediaAccess.Moderation.ALLOWED, true).allowed()).isFalse();
-        assertThat(yes.decide(1L, asset, reference.end(now.plusSeconds(1), 1L, "END"), master, ContextualMediaAccess.Moderation.ALLOWED, ContextualMediaAccess.Moderation.ALLOWED, true).allowed()).isTrue();
+        assertThat(yes.decide(1L, asset, reference.end(now.plusSeconds(1), 1L, "END"), master, ContextualMediaAccess.Moderation.ALLOWED, ContextualMediaAccess.Moderation.ALLOWED, true).allowed()).isFalse();
     }
 }

@@ -239,5 +239,11 @@ class StorageHttpFlowTest {
         mvc.perform(get(url).header("Authorization","Bearer "+owner.accessToken()).header("If-None-Match","*"))
             .andExpect(status().isNotFound()).andExpect(jsonPath("$.reasonCode").value("CONTENT_UNAVAILABLE"));
         mvc.perform(head(url).header("Authorization","Bearer "+owner.accessToken())).andExpect(status().isNotFound());
+        governance.moderate(new ModerationDecision(media,null,ModerationDecision.State.VISIBLE,ModerationDecision.Reason.RESTORED,"restore fixture",actor,Instant.now()));
+        mvc.perform(get(url).header("Authorization","Bearer "+owner.accessToken())).andExpect(status().isOk());
+        new org.springframework.transaction.support.TransactionTemplate(manager).executeWithoutResult(s -> references.dissociate(actor,media,ref));
+        String denied=mvc.perform(get(url).header("Authorization","Bearer "+owner.accessToken()))
+            .andExpect(status().isNotFound()).andReturn().getResponse().getContentAsString();
+        org.assertj.core.api.Assertions.assertThat(denied).doesNotContain("storageKey","sha256","private-images");
     }
 }
