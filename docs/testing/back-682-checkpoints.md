@@ -152,3 +152,17 @@ a leitura diagnóstica, preservados os bytes e reconciliados os JSON/XML existen
 por `--audit-existing`, sem repetir os cenários de banco. Evidência local:
 `target/progressive-probes/20261114T223118614307Z/summary.json`.
 Estas provas são intermediárias; o ensaio V+1 final deve ser confirmado no CI do HEAD.
+
+M3 histórico concluiu: 47 casos aprovados, 0 falhas/erros/skips, 1127,410 s,
+`target/progressive/20261114T222625747811Z/result.json` (Java 17, fontes intermediárias
+identificadas no manifesto). Não foi repetido após mudanças de leitura de relatórios.
+
+CI `43649470988`, HEAD `a23c96af`: Maven verify original passou com 2609 casos,
+0 falhas/erros/skips (3 min 53 s); PostgreSQL passou com 147 casos e reconciliação
+das 7 classes elegíveis (1 min 59 s de Maven). A nova auditoria Surefire falhou:
+três classes nested usam DisplayName no classname. A suite mantém FQCN, como já
+tratado em `final-hardening/measure.py`; reutilizado esse precedente e preservados
+classname/suite/arquivo originais. Sem silenciar testes ou relaxar ausência de classes.
+Acrescentado `--selection` ao auditor para reconciliar a mesma execução parcial
+preservada sem rerun desnecessário. 28 regressões passaram em Windows (1,016 s) e
+Linux Python 3.12 Alpine (0,278 s); logs `target/runner-tests-{final,linux}.log`.

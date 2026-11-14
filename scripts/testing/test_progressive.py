@@ -28,6 +28,17 @@ def record(name, module, kind="unit"):
 
 
 class ProgressiveTests(unittest.TestCase):
+    def test_nested_display_name_uses_suite_owner_without_hiding_foreign_class(self):
+        report = self.root / 'reports'
+        report.mkdir()
+        row = record('com.jeepclub.backend.tools.NestedTest', 'tools')
+        (report / 'TEST-nested.xml').write_text('<testsuite name="' + row['name'] + '"><testcase classname="Creation group" name="works"/><testcase classname="com.jeepclub.backend.tools.OtherTest" name="foreign"/></testsuite>')
+        stats = progressive.reconcile([row], report)
+        self.assertEqual([], stats['not_executed'])
+        self.assertEqual('Creation group', stats['cases'][0]['reported_classname'])
+        self.assertEqual(row['name'], stats['cases'][0]['classname'])
+        self.assertEqual(['com.jeepclub.backend.tools.OtherTest'], stats['unexpected_classes'])
+
     def test_sql_probe_audit_preserves_result_with_non_utf8_windows_log(self):
         probe_spec = importlib.util.spec_from_file_location('probe_migrations', SCRIPT.with_name('probe_migrations.py'))
         probe = importlib.util.module_from_spec(probe_spec)

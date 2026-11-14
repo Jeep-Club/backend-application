@@ -152,6 +152,11 @@ original, casos JUnit por estado (`passed`, `failure`, `error`, `skipped`), sele
 sem casos, classes inesperadas, não executados e comandos restantes. O log completo
 fica em `gate-N/execution.log` e os XMLs daquela rodada em `gate-N/reports`.
 Relatórios antigos são movidos para `previous-*`, não somados nem tratados como atuais.
+Testes nested cujo `classname` contém DisplayName usam o nome técnico da suite para
+reconciliação, preservando também o classname original e o arquivo de origem, conforme
+o precedente de `final-hardening/measure.py`. Para auditar XMLs preservados de uma
+seleção parcial sem repetir Maven, use `audit_reports.py --kind unit --reports <pasta>
+--selection <selection.json> --out <auditoria.json>`; o resultado continua parcial.
 
 Erro de input retorna 2; erro do Maven conserva seu código; inconsistência XML
 retorna falha mesmo com Maven zero. Falta de executável retorna 127. Falta de Docker

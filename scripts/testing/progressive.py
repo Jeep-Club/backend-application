@@ -278,7 +278,13 @@ def reconcile(selected, report_dir):
         suite = ET.parse(path).getroot()
         for case in suite.iter('testcase'):
             state = next((s for s in ('failure', 'error', 'skipped') if case.find(s) is not None), 'passed')
-            cases.append(dict(classname=case.get('classname', ''), name=case.get('name', ''), status=state))
+            reported = case.get('classname', '')
+            # Existing precedent: docs/testing/final-hardening/measure.py. Jupiter
+            # nested DisplayNames may replace classname; suite retains source owner.
+            owner = suite.get('name', '')
+            canonical = owner if not reported.startswith(PREFIX) and owner.startswith(PREFIX) else reported
+            cases.append(dict(classname=canonical, reported_classname=reported, suite=owner,
+                              report=path.name, name=case.get('name', ''), status=state))
     def matches(record, case):
         cls, _, method = record['selector'].partition('#')
         return (case['classname'] == cls or case['classname'].startswith(cls + '$')) and (
