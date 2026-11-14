@@ -35,7 +35,9 @@ seletor obsoleto é erro, não fallback para toda a classe.
 | Nomenclatura/documentação somente | inspeção/diff proporcional | Não executar suites sem hipótese |
 | Encerramento de PR | F5 ou CI equivalente no SHA final | Nenhuma faixa parcial substitui os gates |
 
-F3 e F4 são complementares. A justificativa deve tratar os contratos afetados,
+F3 e F4 são complementares. O manifesto usa `validation_scope=project_full` para F5,
+`migration_full` para M4 e `partial` nas demais faixas. M4 também informa
+`partial=true` em relação ao projeto. A justificativa deve tratar os contratos afetados,
 não quantidade de classes. F1–F4 e M1–M3 sempre são **validações parciais**.
 
 ## Descoberta e limites

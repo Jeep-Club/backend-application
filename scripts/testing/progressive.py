@@ -392,6 +392,10 @@ def run(root, plan, out):
     return 0
 
 
+def validation_scope(band, migration):
+    return 'project_full' if band == 'F5' else 'migration_full' if migration == 'M4' else 'partial'
+
+
 def main(argv=None):
     started = time.monotonic()
     parser = argparse.ArgumentParser(description=__doc__)
@@ -448,7 +452,7 @@ def main(argv=None):
         cmds = [] if args.migration == 'M1' else commands(selected, args.band == 'F5', args.migration)
         plan = dict(sha=git(root, 'rev-parse', 'HEAD'), branch=git(root, 'branch', '--show-current'),
                     dirty=bool(git(root, 'status', '--porcelain')), band=args.band, migration=args.migration,
-                    partial=args.band != 'F5' and args.migration != 'M4', environment=dict(
+                    partial=args.band != 'F5', validation_scope=validation_scope(args.band, args.migration), environment=dict(
                         os=platform.platform(), python=platform.python_version(), java_home=os.environ.get('JAVA_HOME'),
                         java=subprocess.run([str(Path(os.environ['JAVA_HOME']) / 'bin/java') if os.environ.get('JAVA_HOME') else 'java', '-version'],
                                             capture_output=True, text=True).stderr.strip()),
@@ -466,7 +470,7 @@ def main(argv=None):
         plan['commands'] = materialize_commands(cmds, out)
         plan['selection_seconds'] = round(time.monotonic() - started, 3)
         (out / 'selection.json').write_text(json.dumps(plan, indent=2), encoding='utf-8')
-        print(f'{args.band or args.migration}: {len(selected)} selectors; {"PARTIAL" if plan["partial"] else "FULL gates"}; manifest: {out / "selection.json"}')
+        print(f'{args.band or args.migration}: {len(selected)} selectors; {plan["validation_scope"]}; manifest: {out / "selection.json"}')
         if args.inspect:
             for cmd in plan['commands']:
                 print(subprocess.list2cmdline(cmd))

@@ -28,6 +28,14 @@ def record(name, module, kind="unit"):
 
 
 class ProgressiveTests(unittest.TestCase):
+    def test_migration_full_is_not_project_full(self):
+        self.assertEqual('migration_full', progressive.validation_scope(None, 'M4'))
+        self.assertEqual('project_full', progressive.validation_scope('F5', None))
+        for band in ('F1', 'F2', 'F3', 'F4'):
+            self.assertEqual('partial', progressive.validation_scope(band, None))
+        for level in ('M1', 'M2', 'M3'):
+            self.assertEqual('partial', progressive.validation_scope(None, level))
+
     def test_whole_class_does_not_hide_a_requested_nonexecuted_method(self):
         row = dict(record('com.jeepclub.backend.tools.UpgradeTest', 'tools'), methods=['helper'], inherited=False)
         selected = progressive.select([row], 'F1', focus=[row['name'], row['name'] + '#helper'])
