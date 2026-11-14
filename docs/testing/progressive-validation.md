@@ -139,6 +139,9 @@ históricos existentes é parte do laboratório, não uma operação do runner.
 válida e inválida em archives isolados do **HEAD commitado**. Executa M2 real em
 cada cópia e verifica bloqueio de M3 sem revisão; guarda evidência em
 `target/progressive-probes/`. Não execute após cada microedição.
+O SHA do archive fica em `source.json`. Para reavaliar somente evidências preservadas,
+sem repetir MySQL, use `--audit-existing <diretório-da-rodada>`. Logs brutos podem usar
+code page Windows; a visão diagnóstica tolera bytes não UTF-8 sem adulterar o arquivo.
 
 ## Evidência e falhas
 
@@ -153,7 +156,8 @@ Relatórios antigos são movidos para `previous-*`, não somados nem tratados co
 Erro de input retorna 2; erro do Maven conserva seu código; inconsistência XML
 retorna falha mesmo com Maven zero. Falta de executável retorna 127. Falta de Docker
 falha nos testes Testcontainers, sem fallback H2. Skips de IT tornam o gate incompleto
-e falho; skips unitários ficam explícitos e requerem avaliação. Em falha, leia o
+e falho; seletor unitário inteiramente skipped também falha. Skips unitários parciais
+ficam explícitos e requerem avaliação. Em falha, leia o
 primeiro erro relevante no log antes de repetir; os gates seguintes não executam.
 Não há promessa de cobertura JaCoCo pela seleção, nem soma de rodadas como suite única.
 

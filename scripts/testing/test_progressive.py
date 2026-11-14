@@ -28,6 +28,38 @@ def record(name, module, kind="unit"):
 
 
 class ProgressiveTests(unittest.TestCase):
+    def test_sql_probe_audit_preserves_result_with_non_utf8_windows_log(self):
+        probe_spec = importlib.util.spec_from_file_location('probe_migrations', SCRIPT.with_name('probe_migrations.py'))
+        probe = importlib.util.module_from_spec(probe_spec)
+        probe_spec.loader.exec_module(probe)
+        run = self.root / 'invalid/run'
+        (run / 'gate-1').mkdir(parents=True)
+        (run / 'gate-1/execution.log').write_bytes(b'\xbb V99__isolated_runner_probe.sql FlywayMigrateException')
+        (run / 'result.json').write_text(json.dumps({'plan': {'migrations': {'new': [{'path': 'db/V99__isolated_runner_probe.sql'}]}},
+                                                    'runs': [{'exit_code': 1, 'passed': False, 'counts': {'error': 1}}]}))
+        (self.root / 'invalid-risk-block.log').write_text('Uncovered new migration')
+        result = probe.audit_probe(self.root, 'invalid', '0' * 40)
+        self.assertEqual(1, result['exit_code'])
+
+    def test_method_filter_broadening_is_detected(self):
+        report = self.root / 'reports'
+        report.mkdir()
+        row = record('com.jeepclub.backend.tools.FocusTest', 'tools')
+        row['selector'] += '#chosen'
+        (report / 'TEST-focus.xml').write_text('<testsuite><testcase classname="' + row['name'] + '" name="chosen"/><testcase classname="' + row['name'] + '" name="unrequested"/></testsuite>')
+        stats = progressive.reconcile([row], report)
+        self.assertEqual([], stats['not_executed'])
+        self.assertEqual([row['name'] + '#unrequested'], stats['unexpected_cases'])
+
+    def test_wholly_skipped_unit_selector_is_not_successful_execution(self):
+        report = self.root / 'reports'
+        report.mkdir()
+        row = record('com.jeepclub.backend.tools.DisabledTest', 'tools')
+        (report / 'TEST-disabled.xml').write_text('<testsuite><testcase classname="' + row['name'] + '" name="disabled"><skipped/></testcase></testsuite>')
+        stats = progressive.reconcile([row], report)
+        self.assertEqual([row['name']], stats['all_skipped_selectors'])
+        self.assertEqual([], stats['not_executed'])
+
     def test_m3_new_migration_requires_review_and_rejects_smoke_only(self):
         row = dict(record(progressive.MYSQL, 'platform', 'mysql'), methods=progressive.SMOKE, inherited=False)
         upgrade = dict(record('com.jeepclub.backend.platform.NewUpgradeMySqlIT', 'platform', 'mysql'), methods=['upgrade'], inherited=False)
@@ -39,6 +71,7 @@ class ProgressiveTests(unittest.TestCase):
              mock.patch.object(progressive, 'inventory', return_value=([row, upgrade], [])), \
              mock.patch.object(progressive, 'relations', return_value=[]), \
              mock.patch.object(progressive, 'static_migrations', return_value={'new': [new]}), \
+             mock.patch.object(progressive.platform, 'platform', return_value='test-platform'), \
              mock.patch.object(progressive.subprocess, 'run', return_value=mock.Mock(stderr='Java 17')) as proc:
             risk_file.write_text('{}')
             self.assertEqual(2, progressive.main(args))

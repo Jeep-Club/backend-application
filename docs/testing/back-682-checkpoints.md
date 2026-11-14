@@ -131,3 +131,24 @@ Limites residuais a auditar: suficiência semântica das declarações de impact
 engines/padrões/source roots novos; Windows cmd para seleção focal IT excepcionalmente
 longa (falha explícita); custo conservador de M3 e do fechamento F3. Nenhuma economia
 percentual ou de tokens foi presumida. Não há autorização de merge/deploy.
+
+## Correções de validação multiplataforma
+
+O primeiro CI do PR #145 (`43648922539`, HEAD `62263cdb`) falhou antes do Maven:
+o mock de subprocesso no teste de risco afetava a consulta de plataforma no Linux.
+Corrigido o isolamento do teste e executada a suite própria em Linux real dentro
+de `python:3.12-alpine`, além do Windows. Não se alterou gate para ocultar falha.
+
+A revisão independente do tooling identificou que uma classe unitária inteiramente
+skipped poderia parecer executada. Agora qualquer seletor inteiramente skipped
+falha, mantendo separado o motivo; skips unitários parciais continuam explícitos.
+Também se detecta execução de método fora do seletor focal, além de classe inesperada.
+
+Probes MySQL isolados do archive `fb215aa87d875d0584162f6a15ab6ed65422dd4c`:
+V+1 válida, 2 casos aprovados, 212,851 s; SQL inválido, saída 1, 1 failure + 1 error,
+162,021 s (falha esperada). M3 sem declaração de risco bloqueou em ambas as cópias.
+O coletor final encontrou byte de code page Windows no log SQL; corrigida somente
+a leitura diagnóstica, preservados os bytes e reconciliados os JSON/XML existentes
+por `--audit-existing`, sem repetir os cenários de banco. Evidência local:
+`target/progressive-probes/20261114T223118614307Z/summary.json`.
+Estas provas são intermediárias; o ensaio V+1 final deve ser confirmado no CI do HEAD.

@@ -210,11 +210,15 @@ def validate_maven(root):
     for plugin in pom.findall('.//m:plugin', ns):
         artifact = plugin.findtext('m:artifactId', namespaces=ns)
         if artifact == 'maven-surefire-plugin':
-            for tag in ('includes', 'excludes', 'groups', 'excludedGroups', 'suiteXmlFiles'):
+            for tag in ('includes', 'excludes', 'includesFile', 'excludesFile', 'groups',
+                        'excludedGroups', 'suiteXmlFiles', 'includeJUnit5Engines', 'excludeJUnit5Engines'):
                 if plugin.find('.//m:' + tag, ns) is not None:
                     raise Invalid(f'Surefire selection configuration changed: {tag}; review discovery contract')
-        if artifact == 'maven-failsafe-plugin' and plugin.find('.//m:excludes', ns) is not None:
-            raise Invalid('Failsafe exclusions require explicit discovery review')
+        if artifact == 'maven-failsafe-plugin':
+            for tag in ('excludes', 'includesFile', 'excludesFile', 'groups', 'excludedGroups',
+                        'suiteXmlFiles', 'includeJUnit5Engines', 'excludeJUnit5Engines'):
+                if plugin.find('.//m:' + tag, ns) is not None:
+                    raise Invalid(f'Failsafe filtering ({tag}) requires explicit discovery review')
     for profile, expected in [('mysql-migrations', ['**/*MySqlIT.java', '**/MySqlMigrationIT.java']),
                               ('publications-postgresql', ['**/*PostgresIT.java'])]:
         node = next((p for p in pom.findall('m:profiles/m:profile', ns)
@@ -275,18 +279,24 @@ def reconcile(selected, report_dir):
         for case in suite.iter('testcase'):
             state = next((s for s in ('failure', 'error', 'skipped') if case.find(s) is not None), 'passed')
             cases.append(dict(classname=case.get('classname', ''), name=case.get('name', ''), status=state))
-    missing = []
+    def matches(record, case):
+        cls, _, method = record['selector'].partition('#')
+        return (case['classname'] == cls or case['classname'].startswith(cls + '$')) and (
+            not method or case['name'] == method or case['name'].startswith(method + '(')
+            or case['name'].startswith(method + '['))
+    missing, all_skipped = [], []
     for r in selected:
-        cls, _, method = r['selector'].partition('#')
-        matching = [c for c in cases if (c['classname'] == cls or c['classname'].startswith(cls + '$'))
-                    and (not method or c['name'] == method or c['name'].startswith(method + '(')
-                         or c['name'].startswith(method + '['))]
+        matching = [c for c in cases if matches(r, c)]
         if not matching:
             missing.append(r['selector'])
+        elif all(c['status'] == 'skipped' for c in matching):
+            all_skipped.append(r['selector'])
     unexpected = sorted({c['classname'] for c in cases if not any(
         c['classname'] == r['name'] or c['classname'].startswith(r['name'] + '$') for r in selected)})
+    unexpected_cases = [c['classname'] + '#' + c['name'] for c in cases
+                        if not any(matches(r, c) for r in selected)]
     return dict(cases=cases, counts=dict(Counter(c['status'] for c in cases)), not_executed=missing,
-                unexpected_classes=unexpected)
+                all_skipped_selectors=all_skipped, unexpected_classes=unexpected, unexpected_cases=unexpected_cases)
 
 
 def run(root, plan, out):
@@ -326,7 +336,7 @@ def run(root, plan, out):
         if report.exists():
             shutil.copytree(report, folder / 'reports')
         skipped = stats['counts'].get('skipped', 0)
-        ok = not (code or stats['not_executed'] or stats['unexpected_classes'] or stats['counts'].get('failure') or stats['counts'].get('error')
+        ok = not (code or stats['not_executed'] or stats['all_skipped_selectors'] or stats['unexpected_cases'] or stats['counts'].get('failure') or stats['counts'].get('error')
                   or (skipped and any(r['kind'] != 'unit' for r in relevant)))
         runs.append(dict(command=cmd, exit_code=code, passed=ok, seconds=round(time.monotonic()-started, 3),
                          log=str(log), **stats))
