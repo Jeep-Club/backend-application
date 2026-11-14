@@ -305,6 +305,20 @@ def reconcile(selected, report_dir):
                 all_skipped_selectors=all_skipped, unexpected_classes=unexpected, unexpected_cases=unexpected_cases)
 
 
+def compact(stats):
+    """Bound console output; complete identities remain in the JSON evidence."""
+    result = {'counts': stats['counts']}
+    samples = {}
+    for key in ('not_executed', 'all_skipped_selectors', 'unexpected_classes', 'unexpected_cases'):
+        values = stats.get(key, [])
+        result[key] = len(values)
+        if values:
+            samples[key] = values[:3]
+    if samples:
+        result['diagnostic_sample'] = samples
+    return result
+
+
 def run(root, plan, out):
     runs = []
     if not plan['commands']:
@@ -350,7 +364,8 @@ def run(root, plan, out):
         (out / 'result.json').write_text(json.dumps(dict(plan=plan, runs=runs,
             remaining_commands=plan['commands'][index + 1:],
             not_run=sorted({r['name'] for r in plan['selected']} - reported)), indent=2), encoding='utf-8')
-        print(json.dumps({k: v for k, v in runs[-1].items() if k not in ('cases', 'command')}, ensure_ascii=False))
+        print(json.dumps(dict(exit_code=code, passed=ok, seconds=runs[-1]['seconds'],
+                              log=str(log), **compact(stats)), ensure_ascii=False))
         if not ok:
             return code or 1
     return 0

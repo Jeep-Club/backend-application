@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import sys
 
-from progressive import ROOT, inventory, reconcile, validate_maven
+from progressive import ROOT, compact, inventory, reconcile, validate_maven
 
 
 def main():
@@ -29,7 +29,7 @@ def main():
                                         source_sha=manifest.get('sha') if manifest else None,
                                         passed=passed, **stats), indent=2), encoding='utf-8')
     print(json.dumps(dict(kind=args.kind, partial=bool(manifest), eligible_classes=len(selected), passed=passed,
-                         **{k: v for k, v in stats.items() if k != 'cases'})))
+                         **compact(stats))))
     return 0 if passed else 1
 
 

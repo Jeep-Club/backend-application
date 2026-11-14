@@ -166,3 +166,28 @@ classname/suite/arquivo originais. Sem silenciar testes ou relaxar ausência de 
 Acrescentado `--selection` ao auditor para reconciliar a mesma execução parcial
 preservada sem rerun desnecessário. 28 regressões passaram em Windows (1,016 s) e
 Linux Python 3.12 Alpine (0,278 s); logs `target/runner-tests-{final,linux}.log`.
+
+## Consolidação local das faixas
+
+- F3 Tools: arquivo nativo Surefire com 261 classes; Maven executou 2587 casos
+  (2586 pass, 1 skip de symlink Windows), sem falhas/erros, 420,614 s. A versão
+  inicial do auditor acusou os DisplayNames descritos acima; `audit_reports.py
+  --selection` reconciliou os mesmos XMLs preservados, sem ausências/extras,
+  sem rerun Maven. Manifesto SHA `a23c96af`, auditor corrigido posterior;
+  `target/progressive/20261114T224625685423Z/reconciled.json` conserva essa distinção.
+- F4 Storage, SHA `11c124a0`: MySQL 14 casos em 70,933 s e PostgreSQL 14 em
+  38,644 s; zero falhas/erros/skips, nenhuma classe/caso ausente ou inesperado.
+  `target/progressive/20261114T225429337956Z/result.json`.
+- F5 em inspeção: 292 candidatos (263 Surefire, 22 MySQL, 7 PostgreSQL),
+  os quatro comandos originais preservados. Aceite full permanece condicionado
+  ao CI do HEAD final, inclusive V+1; rodadas anteriores não o substituem.
+- Método inexistente, módulo desconhecido e F4 sem IT retornaram 2, sem Maven.
+  M1 voltou a passar contra a base imutável. Bash syntax check aprovado.
+- Console limitado a contagens e até três exemplos diagnósticos por categoria;
+  manifestos guardam listas completas. 28 regressões passaram novamente em
+  Windows (0,814 s) e Linux Python 3.12 (0,166 s).
+
+Tempos são medições das rodadas descritas, não benchmark controlado entre máquinas
+ou JDKs. F3 foi conservador e próximo da suite integral; nenhuma economia percentual
+foi inferida. M2 e F1/F2 limitam o escopo durante desenvolvimento; M3 não pretende
+substituir a suite MySQL integral e os gates finais.
