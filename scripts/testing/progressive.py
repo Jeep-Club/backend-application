@@ -293,12 +293,17 @@ def executable_methods(text, with_scopes=False):
 
 def new_test_methods(root, base, selected):
     """Compare existing test sources with a verified base; inheritance is conservative."""
+    if not any(row.get('path') for row in selected):
+        return []
     paths = sorted((root / 'src/test/java').rglob('*.java'))
     by_stem = {}
     for path in paths:
         by_stem.setdefault(path.stem, []).append(path)
-    changed = set(git(root, 'diff', '--name-only', base, '--', 'src/test/java').splitlines())
-    changed.update(git(root, 'ls-files', '--others', '--exclude-standard', '--', 'src/test/java').splitlines())
+    def git_paths(*args):
+        data = subprocess.check_output(['git', '-C', str(root), '-c', 'core.quotepath=false', *args])
+        return {path.decode('utf-8') for path in data.split(b'\0') if path}
+    changed = git_paths('diff', '--name-only', '-z', base, '--', 'src/test/java')
+    changed.update(git_paths('ls-files', '--others', '--exclude-standard', '-z', '--', 'src/test/java'))
     if not changed:
         return []
     result = []

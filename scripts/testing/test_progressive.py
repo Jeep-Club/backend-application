@@ -29,6 +29,17 @@ def record(name, module, kind="unit"):
 
 
 class ProgressiveTests(unittest.TestCase):
+    def test_unicode_test_filename_is_not_omitted_by_git_quoting(self):
+        subprocess.run(['git', '-C', str(self.root), 'init', '-q'], check=True)
+        path = java(self.root, 'src/test/java/com/jeepclub/backend/tools/CaféTest.java', 'package com.jeepclub.backend.tools; class CaféTest { @Test void old() {} }')
+        subprocess.run(['git', '-C', str(self.root), 'add', '.'], check=True)
+        subprocess.run(['git', '-C', str(self.root), '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'base'], check=True)
+        base = progressive.git(self.root, 'rev-parse', 'HEAD')
+        path.write_text('package com.jeepclub.backend.tools; class CaféTest { @Test void old() {} @Test void added() {} }', encoding='utf-8')
+        records, _ = progressive.inventory(self.root)
+        methods = progressive.new_test_methods(self.root, base, progressive.select(records, 'F2', modules=['tools']))
+        self.assertEqual(['added'], [m['method'] for m in methods])
+
     def test_focus_cannot_hide_new_method_of_same_class(self):
         row = record('com.jeepclub.backend.tools.ExistingTest', 'tools')
         row['selector'] += '#old1'
