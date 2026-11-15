@@ -30,6 +30,7 @@ class StorageHttpFlowTest {
     static {try {ROOT=Files.createTempDirectory("storage-http-fixture-");}catch(Exception e){throw new ExceptionInInitializerError(e);}}
     @DynamicPropertySource static void properties(DynamicPropertyRegistry r) {r.add("storage.local.root-directory",() -> ROOT.toString());}
     @Autowired MockMvc mvc; @Autowired UserRegistration users; @Autowired UserQuery query;
+    @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
     @org.springframework.test.context.bean.override.mockito.MockitoSpyBean MediaGovernance governance;
     @org.springframework.test.context.bean.override.mockito.MockitoSpyBean com.jeepclub.backend.storage.core.repository.BlobCatalog blobs;
     @Autowired com.jeepclub.backend.storage.core.repository.MediaAdministration administration;
@@ -116,6 +117,55 @@ class StorageHttpFlowTest {
         var owner=users.registerAndAuthenticate(new UserRegistrationData("Storage fixture",null,"storage-fixture@example.com","52998224725",null,null,null,Instant.now()),"Password@123");
         var other=users.registerAndAuthenticate(new UserRegistrationData("Other fixture",null,"other-storage-fixture@example.com","16899535009",null,null,null,Instant.now()),"Password@123");
         var image=new BufferedImage(80,60,BufferedImage.TYPE_INT_RGB);var bytes=new ByteArrayOutputStream();ImageIO.write(image,"png",bytes);
+        long rejectedActor=query.findByCpf("52998224725").orElseThrow().id();
+        var jpeg=new ByteArrayOutputStream();ImageIO.write(image,"jpeg",jpeg);
+        byte[] png=bytes.toByteArray();byte[] jpegBytes=jpeg.toByteArray();
+        byte[] validWebp=dev.matrixlab.webp4j.WebPCodec.encodeLosslessImage(image);
+        byte[] corruptPng=png.clone();corruptPng[29]^=1;
+        byte[] corruptWebp=validWebp.clone();corruptWebp[4]^=1;
+        byte[] corruptJpeg=jpegBytes.clone();corruptJpeg[2]=0;
+        long assetCount=jdbc.queryForObject("select count(*) from storage_media_assets",Long.class);
+        long blobCount=jdbc.queryForObject("select count(*) from storage_blobs",Long.class);
+        var invalidFiles=java.util.List.of(
+            new MockMultipartFile("file","empty.png","image/png",new byte[0]),
+            new MockMultipartFile("file","missing.png",null,png),
+            new MockMultipartFile("file","fake.png","image/png",new byte[]{1,2,3}),
+            new MockMultipartFile("file","corrupt.png","image/png",corruptPng),
+            new MockMultipartFile("file","corrupt.jpg","image/jpeg",corruptJpeg),
+            new MockMultipartFile("file","corrupt.webp","image/webp",corruptWebp),
+            new MockMultipartFile("file","truncated.png","image/png",java.util.Arrays.copyOf(png,png.length-1)),
+            new MockMultipartFile("file","truncated.jpg","image/jpeg",java.util.Arrays.copyOf(jpegBytes,jpegBytes.length-1)),
+            new MockMultipartFile("file","truncated.webp","image/webp",java.util.Arrays.copyOf(validWebp,validWebp.length-1)));
+        for(var invalidFile:invalidFiles) {
+            String error=mvc.perform(multipart("/storage/media/profile").file(invalidFile).header("Authorization","Bearer "+owner.accessToken()))
+                .andExpect(status().isBadRequest()).andExpect(content().contentTypeCompatibleWith("application/problem+json"))
+                .andReturn().getResponse().getContentAsString();
+            org.assertj.core.api.Assertions.assertThat(error).doesNotContain("storageKey","sha256","Exception","fixture","private-images");
+        }
+        mvc.perform(multipart("/storage/media/profile").header("Authorization","Bearer "+owner.accessToken()))
+            .andExpect(status().isBadRequest()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+        var unreadable=new MockMultipartFile("file","unreadable.png","image/png",png) {
+            @Override public java.io.InputStream getInputStream() throws java.io.IOException {throw new java.io.IOException("secret path /private-images/fixture");}
+        };
+        String readError=mvc.perform(multipart("/storage/media/profile").file(unreadable).header("Authorization","Bearer "+owner.accessToken()))
+            .andExpect(status().isServiceUnavailable()).andExpect(content().contentTypeCompatibleWith("application/problem+json"))
+            .andReturn().getResponse().getContentAsString();
+        org.assertj.core.api.Assertions.assertThat(readError).doesNotContain("secret path","private-images","fixture","Exception");
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject("select count(*) from storage_media_assets",Long.class)).isEqualTo(assetCount);
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject("select count(*) from storage_blobs",Long.class)).isEqualTo(blobCount);
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject("select count(*) from storage_upload_permits where actor_user_id=? and completed=false",Long.class,rejectedActor)).isZero();
+        byte[] exact=StorageMultipartSocketTest.paddedPng();
+        mvc.perform(multipart("/storage/media/profile").file(new MockMultipartFile("file","exact.png","image/png",exact))
+            .header("Authorization","Bearer "+owner.accessToken())).andExpect(status().isCreated());
+        long acceptedAssets=jdbc.queryForObject("select count(*) from storage_media_assets",Long.class);
+        long acceptedBlobs=jdbc.queryForObject("select count(*) from storage_blobs",Long.class);
+        long acceptedPermits=jdbc.queryForObject("select count(*) from storage_upload_permits",Long.class);
+        mvc.perform(multipart("/storage/media/profile").file(new MockMultipartFile("file","oversize.png","image/png",java.util.Arrays.copyOf(exact,exact.length+1)))
+            .header("Authorization","Bearer "+owner.accessToken())).andExpect(status().isBadRequest())
+            .andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject("select count(*) from storage_media_assets",Long.class)).isEqualTo(acceptedAssets);
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject("select count(*) from storage_blobs",Long.class)).isEqualTo(acceptedBlobs);
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject("select count(*) from storage_upload_permits",Long.class)).isEqualTo(acceptedPermits);
         mvc.perform(multipart("/storage/media/profile").file(new MockMultipartFile("file","photo.png","image/jpeg",bytes.toByteArray()))
             .header("Authorization","Bearer "+owner.accessToken())).andExpect(status().isBadRequest())
             .andExpect(content().contentTypeCompatibleWith("application/problem+json"));

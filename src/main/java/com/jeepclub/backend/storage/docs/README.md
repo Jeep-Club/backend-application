@@ -1,5 +1,8 @@
 # Storage — catálogo e fronteiras
 
+Os [limites HTTP da BACK-637](back-637-http-boundaries.md) registram as
+evidências por socket e a limitação observada para requisições excessivas.
+
 A [investigação de timeout da BACK-628](back-628-timeout-investigation.md)
 registra os limites atuais de cancelamento e as evidências sobre quota e custódia.
 
