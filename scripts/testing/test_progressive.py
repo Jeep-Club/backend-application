@@ -12,6 +12,7 @@ from unittest import mock
 
 
 SCRIPT = Path(__file__).with_name("progressive.py")
+sys.path.insert(0, str(SCRIPT.parent))
 SPEC = importlib.util.spec_from_file_location("progressive", SCRIPT)
 progressive = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(progressive)
@@ -127,7 +128,7 @@ class ProgressiveTests(unittest.TestCase):
                 return 'head'
             return 'develop'
         with mock.patch.object(progressive, 'git', side_effect=fake_git):
-            with self.assertRaisesRegex(progressive.Invalid, 'ancestor'):
+            with self.assertRaisesRegex(progressive.Invalid, 'resolves to HEAD'):
                 progressive.trusted_base(self.root, 'HEAD', full=True)
 
     def test_ci_migration_evidence_requires_matching_sha_and_fresh_reports(self):
@@ -147,7 +148,7 @@ class ProgressiveTests(unittest.TestCase):
         env = {'GITHUB_RUN_ID': '123', 'GITHUB_JOB': 'mysql', 'GITHUB_SHA': 'head'}
         common = ['audit', '--stamp', str(stamp)]
         with mock.patch.object(audit, 'ROOT', self.root), mock.patch.object(audit, 'git', side_effect=fake_git), \
-             mock.patch.object(audit, 'trusted_base', return_value='base'), \
+             mock.patch.object(audit, 'comparison', return_value={'sha': 'base', 'source': 'test event'}), \
              mock.patch.object(audit, 'inventory', return_value=([row], [])), \
              mock.patch.object(audit, 'static_migrations', return_value=info), mock.patch.dict(os.environ, env):
             with mock.patch.object(sys, 'argv', common + ['--start']), mock.patch.object(audit.time, 'time_ns', return_value=1000000000):
@@ -160,8 +161,10 @@ class ProgressiveTests(unittest.TestCase):
                 other = dict(record('com.jeepclub.backend.tools.OtherMySqlIT', 'tools', 'mysql'), methods=['other'], inherited=False)
                 with mock.patch.object(audit, 'inventory', return_value=([row, other], [])), self.assertRaisesRegex(ValueError, 'complete successful profile'):
                     audit.main()
-                with mock.patch.dict(os.environ, {'GITHUB_SHA': 'other'}), self.assertRaises(ValueError):
-                    audit.main()
+                for changed_identity in ({'GITHUB_SHA': 'other'}, {'GITHUB_RUN_ID': '124'}, {'GITHUB_JOB': 'other'}):
+                    with self.subTest(identity=changed_identity), mock.patch.dict(os.environ, changed_identity), \
+                         self.assertRaises(ValueError):
+                        audit.main()
                 os.utime(xml, ns=(1, 1))
                 with self.assertRaisesRegex(ValueError, 'older'):
                     audit.main()
@@ -346,28 +349,49 @@ class ProgressiveTests(unittest.TestCase):
         self.assertEqual([], stats['not_executed'])
 
     def test_m3_new_migration_requires_review_and_rejects_smoke_only(self):
+        subprocess.run(['git', '-C', str(self.root), 'init', '-q'], check=True)
+        subprocess.run(['git', '-C', str(self.root), 'config', 'user.name', 'Test'], check=True)
+        subprocess.run(['git', '-C', str(self.root), 'config', 'user.email', 'test@example.invalid'], check=True)
+        (self.root / 'base.txt').write_text('trusted baseline\n')
+        subprocess.run(['git', '-C', str(self.root), 'add', '.'], check=True)
+        subprocess.run(['git', '-C', str(self.root), 'commit', '-qm', 'baseline'], check=True)
+        base = subprocess.check_output(['git', '-C', str(self.root), 'rev-parse', 'HEAD'], text=True).strip()
+        subprocess.run(['git', '-C', str(self.root), 'update-ref', 'refs/remotes/origin/develop', base], check=True)
         row = mysql_fixture(self.root)
         rel = 'src/test/java/com/jeepclub/backend/platform/NewUpgradeMySqlIT.java'
         java(self.root, rel, 'package com.jeepclub.backend.platform; class NewUpgradeMySqlIT { @Test void upgrade() {} }')
         upgrade = dict(record('com.jeepclub.backend.platform.NewUpgradeMySqlIT', 'platform', 'mysql'), methods=['upgrade'], inherited=False, path=rel)
+        java(self.root, 'src/main/resources/db/migration/V99__new.sql', 'select 1;\n')
+        subprocess.run(['git', '-C', str(self.root), 'add', '-A'], check=True)
+        subprocess.run(['git', '-C', str(self.root), 'commit', '-qm', 'new migration candidate'], check=True)
         risk_file = self.root / 'risk.json'
         new = {'path': 'V99__new.sql', 'sha256': 'digest'}
-        args = ['--migration', 'M3', '--risk-file', str(risk_file), '--inspect']
+        args = ['--migration', 'M3', '--risk-file', str(risk_file), '--base', base, '--inspect']
+        head = subprocess.check_output(['git', '-C', str(self.root), 'rev-parse', 'HEAD'], text=True).strip()
+        def fake_git(root, *parts):
+            if parts[0] == 'status':
+                return ''
+            if parts[0] == 'branch':
+                return 'feature/test'
+            if parts[0] == 'rev-parse':
+                ref = parts[-1].removesuffix('^{commit}')
+                return base if ref == base else head
+            return ''
         with mock.patch.object(progressive, 'ROOT', self.root), mock.patch.object(progressive, 'validate_maven'), \
-             mock.patch.object(progressive, 'git', return_value='sha'), \
+             mock.patch.object(progressive, 'git', side_effect=fake_git), \
              mock.patch.object(progressive, 'inventory', return_value=([row, upgrade], [])), \
              mock.patch.object(progressive, 'new_test_methods', return_value=[]), \
              mock.patch.object(progressive, 'relations', return_value=[]), \
              mock.patch.object(progressive, 'static_migrations', return_value={'new': [new]}), \
              mock.patch.object(progressive.platform, 'platform', return_value='test-platform'), \
-             mock.patch.object(progressive.subprocess, 'run', return_value=mock.Mock(stderr='Java 17')) as proc:
+             mock.patch.object(progressive.subprocess, 'run', return_value=mock.Mock(returncode=0, stderr='Java 17')) as proc:
             risk_file.write_text('{}')
             self.assertEqual(2, progressive.main(args))
             risk_file.write_text(json.dumps({'digest': {'reason': 'only smoke', 'tests': [progressive.MYSQL + '#' + progressive.SMOKE[0]]}}))
             self.assertEqual(2, progressive.main(args))
             risk_file.write_text(json.dumps({'digest': {'reason': 'previous-version upgrade and data/constraints preservation', 'tests': [upgrade['name'] + '#upgrade']}}))
             self.assertEqual(0, progressive.main(args))
-            self.assertEqual(1, proc.call_count)  # Java version only; inspect never invokes Maven.
+            self.assertEqual(4, proc.call_count)  # Failed risk checks plus Java/Git checks; inspect never invokes Maven.
 
     def test_audit_gate_accepts_complete_xml_and_rejects_missing_candidate(self):
         audit_spec = importlib.util.spec_from_file_location('audit_reports', SCRIPT.with_name('audit_reports.py'))

@@ -73,6 +73,9 @@ F5 e M4 também exigem a revisão e evidência dos métodos MySQL declarados no 
 HEAD, aproveitando os XMLs do gate integral. Método novo de teste precisa de caso
 executado nos XMLs; skipped, discovery ausente ou identificação incerta bloqueia a
 comprovação. O CI busca a base Git completa e valida a proveniência do gate MySQL.
+Os auditores usam a base assinada pelo evento: PR valida o merge ref e os SHAs
+base/head, push usa `before` (incluindo todos os commits), e dispatch requer o input
+`migration_base` ancestral. Não substitua esses dados por `origin/develop` no CI.
 
 **Obrigatório em toda funcionalidade futura:** ao adicionar/modificar testes,
 módulos, dependências ou migrations, demonstre sua descoberta na faixa apropriada

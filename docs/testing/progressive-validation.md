@@ -116,10 +116,12 @@ M2 mantém somente dois seletores específicos; remoção/renomeação falha na 
 M4 preserva o ensaio V+1 em `git archive HEAD`; F5 inclui, nesta ordem, `verify`,
 MySQL, PostgreSQL e V+1. Exige HEAD limpo e versionado para não testar código antigo.
 
-M1 compara scripts/fixtures com o merge-base de HEAD e `origin/develop`. Use
-`--base <ref-confiável>` para uma comparação reproduzível diferente. A base e seu SHA
-ficam no manifesto. Uma base que já contenha uma alteração indevida não prova
-integridade anterior; escolha e audite a referência, nunca altere hashes para passar.
+M1 compara scripts/fixtures com uma base Git ancestral, distinta de HEAD. Localmente,
+`--base <SHA>` escolhe explicitamente essa referência; refs móveis, merge-bases
+silenciosos, HEAD como sua própria base e históricos incompletos são recusados nas
+validações integrais. A base e seu SHA ficam no manifesto. Uma base que já contenha
+uma alteração indevida não prova integridade anterior; escolha e audite a referência,
+nunca altere hashes para passar.
 Quebra de linha CRLF/LF é normalizada como nos testes históricos existentes.
 Não há cache: toda migration nova é detectada novamente pelo nome e hash.
 
@@ -135,7 +137,15 @@ Uma migration nova deixa M1/M2 explicitamente parciais e bloqueia M3 até fornec
 }
 ```
 
-F5 e M4 aplicam a mesma exigência. O arquivo padrão é
+F5 e M4 aplicam a mesma exigência. No CI, PR usa `pull_request.base.sha` e prova
+que `GITHUB_SHA` é o merge sintético exato dos SHAs base/head do payload; push em
+`develop`/`master` usa `push.before` até `push.after`, incluindo todos os commits
+intermediários; dispatch exige o input obrigatório `migration_base`, um SHA ancestral
+explícito. SHA inválido/zero, base igual ao HEAD, commit ausente, relação não ancestral,
+force-push, ref divergente ou checkout diferente falha fechado. O selo anterior ao gate
+MySQL inclui evento, ref e base resolvida e precisa coincidir na auditoria posterior.
+O CI usa checkout completo; histórico indisponível falha diagnosticamente. Nenhum
+evento usa `origin/develop` como fallback. O arquivo padrão é
 `docs/testing/migration-risk.json` (versione-o junto à migration) ou use
 `--risk-file`. Declare métodos MySQL explícitos: classe inteira ou somente smoke
 não comprova a regressão. O runner confronta esses métodos com os XMLs recém-gerados
@@ -143,8 +153,9 @@ do profile integral no mesmo HEAD limpo, sem repetir M3. O CI registra identidad
 do checkout/run antes do comando MySQL original e audita seus XMLs depois do V+1;
 relatórios antigos, incompletos, de outro SHA ou run são recusados. A aprovação da
 revisão semântica e da suficiência dos cenários de dados/constraints permanece humana.
-Para F5/M4 e auditorias completas, a base escolhida deve ser ancestral do merge-base
-com `origin/develop` obtido por fetch; base ausente ou avançada indevidamente falha.
+Para auditorias locais completas, a base explícita deve ser ancestral de HEAD e
+compatível com a história comum de `origin/develop`; no CI, os vínculos do evento
+validam a referência sem depender de uma branch remota já atualizada.
 
 Os seletores precisam existir e ser MySQL. A declaração deve apontar regressões de
 upgrade/dados/constraints proporcionais ao risco; smoke vazio sozinho não é suficiente.
@@ -165,9 +176,11 @@ code page Windows; a visão diagnóstica tolera bytes não UTF-8 sem adulterar o
 
 ## Evidência e falhas
 
-O runner e o auditor comparam métodos Jupiter anotados em fontes existentes com o
-merge-base de `--base` (padrão `origin/develop`). O checkout precisa conter essa
-referência e ancestralidade; ausência falha explicitamente. Cada método novo no
+O runner e o auditor comparam métodos Jupiter anotados em fontes existentes com a
+base validada. Localmente, o runner usa `origin/develop` quando é ancestral distinto
+de HEAD, ou aceita `--base` explícita. No CI, auditores usam a base do evento, evitando
+perder métodos introduzidos pelo push que atualizou `origin/develop`. História ausente
+falha explicitamente. Cada método novo no
 escopo é confrontado com os XMLs, distinguindo executado, skipped, não descoberto,
 falho, não selecionado e não comprovado. Se um foco omitir outro método novo da
 mesma classe, o resultado falha com `not_selected`; inclua-o ou execute a classe.

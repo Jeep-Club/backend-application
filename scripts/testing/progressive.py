@@ -31,10 +31,21 @@ def git(root, *args):
 
 
 def trusted_base(root, reference, full=False):
-    base = git(root, 'merge-base', 'HEAD', reference)
+    head = git(root, 'rev-parse', '--verify', 'HEAD^{commit}')
+    base = git(root, 'rev-parse', '--verify', f'{reference}^{{commit}}')
+    if base == head:
+        raise Invalid(f'Comparison reference {reference} resolves to HEAD; provide a distinct trusted baseline')
+    ancestry = subprocess.run(['git', '-C', str(root), 'merge-base', '--is-ancestor', base, head],
+                              capture_output=True, text=True)
+    if ancestry.returncode != 0:
+        detail = 'not an ancestor of HEAD' if ancestry.returncode == 1 else ancestry.stderr.strip()
+        raise Invalid(f'Comparison reference {reference} is not a verifiable ancestor of HEAD: {detail}')
     if full:
-        develop = git(root, 'merge-base', 'HEAD', 'origin/develop')
-        if git(root, 'merge-base', base, develop) != base:
+        develop = git(root, 'rev-parse', '--verify', 'origin/develop^{commit}')
+        common = git(root, 'merge-base', 'HEAD', develop)
+        relation = subprocess.run(['git', '-C', str(root), 'merge-base', '--is-ancestor', base, common],
+                                  capture_output=True, text=True)
+        if relation.returncode != 0:
             raise Invalid('Full validation base must be an ancestor of the fetched origin/develop merge-base')
     return base
 
@@ -638,7 +649,7 @@ def main(argv=None):
     parser.add_argument('--dependency', action='append', default=[])
     parser.add_argument('--impact-review', help='Required F3 semantic review rationale; imports cannot prove semantic completeness')
     parser.add_argument('--risk-file', type=Path, help='JSON: new migration sha256 -> {reason, tests: [Class#method]}')
-    parser.add_argument('--base', default='origin/develop', help='Trusted immutable-history comparison ref')
+    parser.add_argument('--base', default='origin/develop', help='Trusted comparison ref; must resolve to a distinct ancestor commit')
     parser.add_argument('--inspect', action='store_true')
     args = parser.parse_args(argv)
     root = ROOT
