@@ -516,6 +516,15 @@ def compact(stats):
 
 def run(root, plan, out):
     runs = []
+    if plan.get('band') == 'F5' or plan.get('migration') == 'M4':
+        # Keep prior build outputs as evidence, but compile the committed sources
+        # afresh before treating a full gate as evidence for this HEAD.
+        old_build = out / 'previous-build'
+        for name in ('classes', 'test-classes', 'generated-sources', 'generated-test-sources', 'maven-status'):
+            previous = root / 'target' / name
+            if previous.exists():
+                old_build.mkdir(exist_ok=True)
+                shutil.move(str(previous), str(old_build / name))
     if not plan['commands']:
         (out / 'result.json').write_text(json.dumps(dict(plan=plan, runs=[], static_passed=True), indent=2), encoding='utf-8')
     for index, cmd in enumerate(plan['commands']):

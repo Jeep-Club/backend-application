@@ -29,6 +29,25 @@ def record(name, module, kind="unit"):
 
 
 class ProgressiveTests(unittest.TestCase):
+    def test_full_gate_preserves_old_compiled_classes_before_execution(self):
+        target = self.root / 'target/test-classes'
+        target.mkdir(parents=True)
+        (target / 'old.class').write_bytes(b'old')
+        out = self.root / 'out'
+        out.mkdir()
+        row = record('com.jeepclub.backend.tools.ExistingTest', 'tools')
+        plan = {'sha': 'head', 'band': 'F5', 'selected': [row], 'commands': [['mvnw', 'verify']]}
+        def maven(cmd, cwd, stdout, stderr):
+            self.assertFalse((Path(cwd) / 'target/test-classes/old.class').exists())
+            report = Path(cwd) / 'target/surefire-reports'
+            report.mkdir(parents=True)
+            (report / 'TEST-existing.xml').write_text('<testsuite><testcase classname="' + row['name'] + '" name="works"/></testsuite>')
+            return mock.Mock(returncode=0)
+        with mock.patch.object(progressive, 'git', side_effect=lambda root, *args: 'head' if args[0] == 'rev-parse' else ''), \
+             mock.patch.object(progressive.subprocess, 'run', side_effect=maven):
+            self.assertEqual(0, progressive.run(self.root, plan, out))
+        self.assertEqual(b'old', (out / 'previous-build/test-classes/old.class').read_bytes())
+
     def test_unicode_test_filename_is_not_omitted_by_git_quoting(self):
         subprocess.run(['git', '-C', str(self.root), 'init', '-q'], check=True)
         path = java(self.root, 'src/test/java/com/jeepclub/backend/tools/CaféTest.java', 'package com.jeepclub.backend.tools; class CaféTest { @Test void old() {} }')

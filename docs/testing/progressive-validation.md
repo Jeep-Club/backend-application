@@ -186,6 +186,9 @@ original, casos JUnit por estado (`passed`, `failure`, `error`, `skipped`), sele
 sem casos, classes inesperadas, não executados e comandos restantes. O log completo
 fica em `gate-N/execution.log` e os XMLs daquela rodada em `gate-N/reports`.
 Relatórios antigos são movidos para `previous-*`, não somados nem tratados como atuais.
+Antes de F5/M4, classes compiladas e fontes geradas anteriores são preservadas em
+`previous-build` para forçar compilação do HEAD; o estado limpo e o SHA são
+revalidados após cada gate. O CI parte de checkout novo e usa os comandos originais.
 Testes nested cujo `classname` contém DisplayName usam o nome técnico da suite para
 reconciliação, preservando também o classname original e o arquivo de origem, conforme
 o precedente de `final-hardening/measure.py`. Para auditar XMLs preservados de uma
