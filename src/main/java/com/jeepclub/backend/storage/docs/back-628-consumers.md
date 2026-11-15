@@ -37,6 +37,12 @@ medições e integração. Faltam validação visual da exportação e testes de
 decisões D06–D08 e D13 continuam sendo as fontes de produto; a integração dos
 consumidores pertence às Stories posteriores.
 
+Sem crop explícito o limite de 144×144 preserva a proporção: a fixture
+800×400 produz avatar de 144×72. Com crop quadrado explícito na mesma fonte,
+produz 144×144. Isso preserva a regra de não recortar automaticamente; a
+integração futura deve enviar crop quadrado se precisar dessa densidade nos
+dois eixos. Cobertura: `rectangularSourceIsNotImplicitlyCroppedForAvatar`.
+
 ## Medição da alteração de avatar
 
 `MediaImageProcessingAdapterTest.avatarPresetMatchesHighDensityAndDoesNotUpscale`

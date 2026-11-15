@@ -11,6 +11,19 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.*;
 
 class MediaImageProcessingAdapterTest {
+    @Test void rectangularSourceIsNotImplicitlyCroppedForAvatar() throws Exception {
+        var adapter=new MediaImageProcessingAdapter(new SimpleMeterRegistry());
+        var out=new ByteArrayOutputStream();ImageIO.write(new BufferedImage(800,400,BufferedImage.TYPE_INT_RGB),"png",out);
+        var result=adapter.process(out.toByteArray(),MediaContext.IDENTITY_PROFILE);
+        var avatar=result.images().stream().filter(i -> i.code().equals("AVATAR_SMALL")).findFirst().orElseThrow();
+        assertThat(avatar.width()).isEqualTo(144);
+        assertThat(avatar.height()).isEqualTo(72);
+        var cropped=adapter.process(out.toByteArray(),MediaContext.IDENTITY_PROFILE,
+            new MediaImageProcessor.Options(Map.of("AVATAR_SMALL",new MediaImageProcessor.Crop(0,0,.5,1))));
+        var square=cropped.images().stream().filter(i -> i.code().equals("AVATAR_SMALL")).findFirst().orElseThrow();
+        assertThat(square.width()).isEqualTo(144);
+        assertThat(square.height()).isEqualTo(144);
+    }
     private static double gradientPsnr(byte[] encoded,String mime) throws Exception {
         BufferedImage decoded=mime.equals("image/webp") ? dev.matrixlab.webp4j.WebPCodec.decodeImage(encoded) : ImageIO.read(new java.io.ByteArrayInputStream(encoded));
         double error=0;int w=decoded.getWidth(),h=decoded.getHeight();
