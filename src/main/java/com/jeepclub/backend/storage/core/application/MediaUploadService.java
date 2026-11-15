@@ -51,7 +51,7 @@ public class MediaUploadService {
             for(int i=0;i<processed.images().size();i++) {
                 var image=processed.images().get(i);var blob=stored.get(i);
                 var variant=catalog.registerVariant(new MediaVariant(null,asset.mediaId(),image.code(),image.code().equals("MASTER") ? MediaVariantRole.MASTER : MediaVariantRole.DERIVED,
-                    "LOCAL","storage-blobs",blob.storageKey(),image.mimeType(),blob.sizeBytes(),image.width(),image.height(),"SHA-256",blob.sha256(),image.code(),"V1",null,now),audit);
+                    "LOCAL","storage-blobs",blob.storageKey(),image.mimeType(),blob.sizeBytes(),image.width(),image.height(),"SHA-256",blob.sha256(),image.code(),image.code().equals("AVATAR_SMALL") ? "V2" : "V1",null,now),audit);
                 blobs.bind(variant.variantId(),blob);
             }
             governance.initialize(asset.mediaId(),processed.receivedSha256(),java.util.Set.of(MediaContext.DEPENDENT_PHOTO,MediaContext.MEDICAL_IMAGE,MediaContext.IDENTIFICATION_PHOTO).contains(context),audit);

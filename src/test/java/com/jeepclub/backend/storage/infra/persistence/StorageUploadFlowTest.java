@@ -402,6 +402,8 @@ class StorageUploadFlowTest {
         assertThatThrownBy(() -> resolution.resolve(101,a.mediaId(),Long.MAX_VALUE,"AVATAR_SMALL"))
             .isInstanceOf(AccessDeniedException.class);
         var master=catalog.findVariant(a.mediaId(),"MASTER").orElseThrow();
+        assertThat(master.processingVersion()).isEqualTo("V1");
+        assertThat(catalog.findVariant(a.mediaId(),"AVATAR_SMALL").orElseThrow().processingVersion()).isEqualTo("V2");
         var stored=blobs.findByVariant(master.variantId()).orElseThrow();
         assertThat(blobs.read(stored)).isNotEmpty();
         var asset=catalog.findAsset(a.mediaId()).orElseThrow();

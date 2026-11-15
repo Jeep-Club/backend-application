@@ -21,7 +21,7 @@ public class MediaImageProcessingAdapter implements MediaImageProcessor {
         try {
             if (context == null || options == null) throw new IllegalArgumentException("Invalid image options");
             boolean profile=context==MediaContext.IDENTITY_PROFILE || context==MediaContext.DEPENDENT_PHOTO;
-            var presets=new ArrayList<>(profile ? List.of(new SynchronousImageProcessor.Preset("AVATAR_SMALL",64,64,null),
+            var presets=new ArrayList<>(profile ? List.of(new SynchronousImageProcessor.Preset("AVATAR_SMALL",144,144,null),
                 new SynchronousImageProcessor.Preset("PROFILE_PREVIEW",320,320,null))
                 : List.of(new SynchronousImageProcessor.Preset("THUMBNAIL",240,180,null),
                 new SynchronousImageProcessor.Preset("GALLERY",1600,1200,null)));
