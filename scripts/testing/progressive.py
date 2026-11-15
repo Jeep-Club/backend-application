@@ -30,19 +30,44 @@ def git(root, *args):
     return subprocess.check_output(['git', '-C', str(root), *args], text=True).strip()
 
 
-def trusted_base(root, reference, full=False):
-    head = git(root, 'rev-parse', '--verify', 'HEAD^{commit}')
-    base = git(root, 'rev-parse', '--verify', f'{reference}^{{commit}}')
-    if base == head:
-        raise Invalid(f'Comparison reference {reference} resolves to HEAD; provide a distinct trusted baseline')
-    ancestry = subprocess.run(['git', '-C', str(root), 'merge-base', '--is-ancestor', base, head],
-                              capture_output=True, text=True)
-    if ancestry.returncode != 0:
-        detail = 'not an ancestor of HEAD' if ancestry.returncode == 1 else ancestry.stderr.strip()
-        raise Invalid(f'Comparison reference {reference} is not a verifiable ancestor of HEAD: {detail}')
+def trusted_base(root, reference=None, full=False):
+    try:
+        head = git(root, 'rev-parse', '--verify', 'HEAD^{commit}')
+    except subprocess.CalledProcessError as exc:
+        raise Invalid(f'Cannot resolve checked-out HEAD as a Git commit: {exc}') from exc
+    default_reference = reference is None
+    reference = reference or 'origin/develop'
+    if default_reference and not full:
+        # Local partial runs compare from the shared point, including a branch
+        # with no commits of its own (where that point can be HEAD).
+        common = subprocess.run(['git', '-C', str(root), 'merge-base', 'HEAD', reference],
+                                capture_output=True, text=True)
+        if common.returncode != 0 or not common.stdout.strip():
+            detail = common.stderr.strip() or f'git exited {common.returncode}'
+            raise Invalid(f'Cannot establish a common Git base for HEAD and {reference}: {detail}')
+        base = common.stdout.strip()
+    else:
+        # Explicit baselines and full validation retain the strict ancestor
+        # contract. Never replace an invalid explicit ref silently.
+        resolved = subprocess.run(['git', '-C', str(root), 'rev-parse', '--verify', f'{reference}^{{commit}}'],
+                                  capture_output=True, text=True)
+        if resolved.returncode != 0 or not resolved.stdout.strip():
+            detail = resolved.stderr.strip() or f'git exited {resolved.returncode}'
+            raise Invalid(f'Comparison reference {reference} is missing or does not resolve to a commit: {detail}')
+        base = resolved.stdout.strip()
+        if base == head:
+            raise Invalid(f'Comparison reference {reference} resolves to HEAD; provide a distinct trusted baseline')
+        ancestry = subprocess.run(['git', '-C', str(root), 'merge-base', '--is-ancestor', base, head],
+                                  capture_output=True, text=True)
+        if ancestry.returncode != 0:
+            detail = 'not an ancestor of HEAD' if ancestry.returncode == 1 else ancestry.stderr.strip()
+            raise Invalid(f'Comparison reference {reference} is not a verifiable ancestor of HEAD: {detail}')
     if full:
-        develop = git(root, 'rev-parse', '--verify', 'origin/develop^{commit}')
-        common = git(root, 'merge-base', 'HEAD', develop)
+        try:
+            develop = git(root, 'rev-parse', '--verify', 'origin/develop^{commit}')
+            common = git(root, 'merge-base', 'HEAD', develop)
+        except subprocess.CalledProcessError as exc:
+            raise Invalid(f'Full validation requires a verifiable origin/develop history: {exc}') from exc
         relation = subprocess.run(['git', '-C', str(root), 'merge-base', '--is-ancestor', base, common],
                                   capture_output=True, text=True)
         if relation.returncode != 0:
@@ -649,7 +674,7 @@ def main(argv=None):
     parser.add_argument('--dependency', action='append', default=[])
     parser.add_argument('--impact-review', help='Required F3 semantic review rationale; imports cannot prove semantic completeness')
     parser.add_argument('--risk-file', type=Path, help='JSON: new migration sha256 -> {reason, tests: [Class#method]}')
-    parser.add_argument('--base', default='origin/develop', help='Trusted comparison ref; must resolve to a distinct ancestor commit')
+    parser.add_argument('--base', help='Explicit comparison ref; must resolve to a distinct ancestor commit (use its SHA for reproducibility). By default partial levels compare from merge-base(HEAD, origin/develop).')
     parser.add_argument('--inspect', action='store_true')
     args = parser.parse_args(argv)
     root = ROOT

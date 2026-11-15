@@ -2,11 +2,13 @@
 import hashlib
 import json
 import importlib.util
+import io
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
 from unittest import mock
 
@@ -37,7 +39,142 @@ def mysql_fixture(root):
     return dict(record(progressive.MYSQL, 'platform', 'mysql'), methods=progressive.SMOKE + ['upgrade', 'helper'], inherited=False, path=rel)
 
 
+def git_call(root, *args):
+    return subprocess.check_output(['git', '-C', str(root), *args], text=True).strip()
+
+
+def init_test_repo(root, source=None):
+    git_call(root, 'init', '-q')
+    git_call(root, 'config', 'user.name', 'Runner Test')
+    git_call(root, 'config', 'user.email', 'runner@example.invalid')
+    java(root, 'src/test/java/com/jeepclub/backend/tools/ExistingTest.java', source or
+         'package com.jeepclub.backend.tools; class ExistingTest { @Test void old() {} }')
+    java(root, 'src/test/java/com/jeepclub/backend/platform/database/ProgressiveMySqlIT.java',
+         'package com.jeepclub.backend.platform.database; class ProgressiveMySqlIT { @Test void mysql() {} }')
+    java(root, 'src/test/java/com/jeepclub/backend/platform/database/ProgressivePostgresIT.java',
+         'package com.jeepclub.backend.platform.database; class ProgressivePostgresIT { @Test void postgres() {} }')
+    java(root, 'pom.xml', '<project/>')
+    git_call(root, 'add', '.')
+    git_call(root, 'commit', '-qm', 'baseline')
+    base = git_call(root, 'rev-parse', 'HEAD')
+    git_call(root, 'update-ref', 'refs/remotes/origin/develop', base)
+    return base
+
+
+def inspect_main(testcase, root, *args):
+    with mock.patch.object(progressive, 'ROOT', root), \
+         mock.patch.object(progressive, 'validate_maven'), \
+         mock.patch.object(progressive, 'run', side_effect=AssertionError('inspect must not execute Maven')), \
+         redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        return progressive.main([*args, '--inspect'])
+
+
 class ProgressiveTests(unittest.TestCase):
+    def test_partial_inspection_accepts_branch_at_develop_and_never_runs_maven(self):
+        head = init_test_repo(self.root)
+        self.assertEqual(head, git_call(self.root, 'rev-parse', 'HEAD'))
+        self.assertEqual(head, progressive.trusted_base(self.root))
+        self.assertEqual(0, inspect_main(self, self.root, '--band', 'F1', '--test', 'ExistingTest'))
+        self.assertEqual(0, inspect_main(self, self.root, '--band', 'F2', '--module', 'tools'))
+        self.assertEqual(0, inspect_main(self, self.root, '--band', 'F3', '--module', 'tools', '--impact-review', 'reviewed test fixture dependencies'))
+        self.assertEqual(0, inspect_main(self, self.root, '--band', 'F4', '--module', 'platform'))
+
+    def test_partial_inspection_uses_merge_base_when_develop_advances_in_parallel(self):
+        base = init_test_repo(self.root)
+        git_call(self.root, 'switch', '-c', 'feature')
+        path = self.root / 'src/test/java/com/jeepclub/backend/tools/ExistingTest.java'
+        path.write_text('package com.jeepclub.backend.tools; class ExistingTest { @Test void old() {} @Test void featureTest() {} }', encoding='utf-8')
+        git_call(self.root, 'add', '.')
+        git_call(self.root, 'commit', '-qm', 'feature test')
+        git_call(self.root, 'switch', '-c', 'develop', base)
+        java(self.root, 'develop-only.txt', 'develop advanced\n')
+        git_call(self.root, 'add', '.')
+        git_call(self.root, 'commit', '-qm', 'advance develop')
+        git_call(self.root, 'update-ref', 'refs/remotes/origin/develop', 'HEAD')
+        git_call(self.root, 'switch', 'feature')
+        self.assertEqual(base, progressive.trusted_base(self.root))
+        self.assertEqual(0, inspect_main(self, self.root, '--band', 'F1', '--test', 'ExistingTest'))
+        self.assertEqual(0, inspect_main(self, self.root, '--band', 'F2', '--module', 'tools'))
+        records, _ = progressive.inventory(self.root)
+        selected = progressive.select(records, 'F2', modules=['tools'])
+        self.assertIn('featureTest', [m['method'] for m in progressive.new_test_methods(self.root, base, selected)])
+
+    def test_partial_inspection_discovers_uncommitted_test_method_when_merge_base_is_head(self):
+        base = init_test_repo(self.root)
+        path = self.root / 'src/test/java/com/jeepclub/backend/tools/ExistingTest.java'
+        path.write_text('package com.jeepclub.backend.tools; class ExistingTest { @Test void old() {} @Test void localAdded() {} }', encoding='utf-8')
+        self.assertEqual(base, progressive.trusted_base(self.root))
+        records, _ = progressive.inventory(self.root)
+        selected = progressive.select(records, 'F1', focus=['com.jeepclub.backend.tools.ExistingTest'])
+        methods = progressive.new_test_methods(self.root, base, selected)
+        self.assertEqual(['localAdded'], [m['method'] for m in methods])
+        self.assertEqual(0, inspect_main(self, self.root, '--band', 'F1', '--test', 'ExistingTest'))
+
+    def test_partial_reference_errors_fail_closed_and_explicit_base_is_not_replaced(self):
+        init_test_repo(self.root)
+        git_call(self.root, 'update-ref', '-d', 'refs/remotes/origin/develop')
+        with self.assertRaisesRegex(progressive.Invalid, 'common Git base'):
+            progressive.trusted_base(self.root)
+        with self.assertRaisesRegex(progressive.Invalid, 'missing or does not resolve'):
+            progressive.trusted_base(self.root, 'refs/heads/missing-explicit-base')
+
+    def test_full_bands_keep_strict_baseline_policy(self):
+        base = init_test_repo(self.root)
+        with self.assertRaisesRegex(progressive.Invalid, 'resolves to HEAD'):
+            progressive.trusted_base(self.root, full=True)
+        git_call(self.root, 'switch', '-c', 'feature')
+        java(self.root, 'feature.txt', 'feature\n')
+        git_call(self.root, 'add', '.')
+        git_call(self.root, 'commit', '-qm', 'feature commit')
+        git_call(self.root, 'switch', '-c', 'develop', base)
+        java(self.root, 'develop.txt', 'parallel develop change\n')
+        git_call(self.root, 'add', '.')
+        git_call(self.root, 'commit', '-qm', 'parallel develop commit')
+        git_call(self.root, 'update-ref', 'refs/remotes/origin/develop', 'HEAD')
+        git_call(self.root, 'switch', 'feature')
+        self.assertEqual(base, progressive.trusted_base(self.root, base, full=True))
+        with self.assertRaisesRegex(progressive.Invalid, 'not a verifiable ancestor'):
+            progressive.trusted_base(self.root, 'origin/develop', full=True)
+        self.assertEqual('project_full', progressive.validation_scope('F5', None))
+        self.assertEqual('migration_full', progressive.validation_scope(None, 'M4'))
+        self.assertFalse(progressive.validation_scope('F5', None) == 'partial')
+        self.assertTrue(progressive.validation_scope(None, 'M4') != 'project_full')
+
+    def test_partial_migration_levels_use_shared_base_and_m3_keeps_risk_gate(self):
+        git_call(self.root, 'init', '-q')
+        git_call(self.root, 'config', 'user.name', 'Runner Test')
+        git_call(self.root, 'config', 'user.email', 'runner@example.invalid')
+        fixture_dir = self.root / 'src/test/resources/database/historical'
+        fixture_dir.mkdir(parents=True)
+        fixture_hashes = []
+        for name in ('v1.sql', 'v2.sql', 'v3.sql'):
+            content = f'-- immutable {name}\n'.encode()
+            (fixture_dir / name).write_bytes(content)
+            fixture_hashes.append(f'{hashlib.sha256(content).hexdigest()}  {name}')
+        (fixture_dir / 'SHA256SUMS').write_text('\n'.join(fixture_hashes) + '\n', encoding='utf-8')
+        migration_dir = self.root / 'src/main/resources/db/migration'
+        migration_dir.mkdir(parents=True)
+        (migration_dir / 'V1__initial.sql').write_text('select 1;\n', encoding='utf-8')
+        mysql_fixture(self.root)
+        java(self.root, 'pom.xml', '<project/>')
+        git_call(self.root, 'add', '.')
+        git_call(self.root, 'commit', '-qm', 'migration baseline')
+        base = git_call(self.root, 'rev-parse', 'HEAD')
+        git_call(self.root, 'update-ref', 'refs/remotes/origin/develop', base)
+        added_migration = migration_dir / 'V2__add_column.sql'
+        added_migration.write_text('alter table records add column note varchar(20);\n', encoding='utf-8')
+        self.assertEqual(base, progressive.trusted_base(self.root))
+        static = progressive.static_migrations(self.root, base)
+        self.assertEqual(['src/main/resources/db/migration/V2__add_column.sql'], [m['path'].replace('\\', '/') for m in static['new']])
+        self.assertEqual(0, inspect_main(self, self.root, '--migration', 'M1'))
+        self.assertEqual(0, inspect_main(self, self.root, '--migration', 'M2'))
+        self.assertEqual(2, inspect_main(self, self.root, '--migration', 'M3'))  # New migration still needs risk evidence.
+        risk_file = self.root / 'risk.json'
+        risk_file.write_text(json.dumps({static['new'][0]['sha256']: {
+            'reason': 'upgrade legacy rows and preserve constraints',
+            'tests': [progressive.MYSQL + '#upgrade']}}), encoding='utf-8')
+        self.assertEqual(0, inspect_main(self, self.root, '--migration', 'M3', '--risk-file', str(risk_file)))
+
     def test_full_gate_preserves_old_compiled_classes_before_execution(self):
         target = self.root / 'target/test-classes'
         target.mkdir(parents=True)
@@ -123,13 +260,9 @@ class ProgressiveTests(unittest.TestCase):
         self.assertEqual('unproven', progressive.reconcile_new_methods([ambiguous], cases)[0]['status'])
 
     def test_full_scope_rejects_base_newer_than_develop(self):
-        def fake_git(root, *args):
-            if args == ('merge-base', 'HEAD', 'HEAD'):
-                return 'head'
-            return 'develop'
-        with mock.patch.object(progressive, 'git', side_effect=fake_git):
-            with self.assertRaisesRegex(progressive.Invalid, 'resolves to HEAD'):
-                progressive.trusted_base(self.root, 'HEAD', full=True)
+        init_test_repo(self.root)
+        with self.assertRaisesRegex(progressive.Invalid, 'resolves to HEAD'):
+            progressive.trusted_base(self.root, full=True)
 
     def test_ci_migration_evidence_requires_matching_sha_and_fresh_reports(self):
         spec = importlib.util.spec_from_file_location('audit_migrations', SCRIPT.with_name('audit_migrations.py'))
@@ -383,15 +516,13 @@ class ProgressiveTests(unittest.TestCase):
              mock.patch.object(progressive, 'new_test_methods', return_value=[]), \
              mock.patch.object(progressive, 'relations', return_value=[]), \
              mock.patch.object(progressive, 'static_migrations', return_value={'new': [new]}), \
-             mock.patch.object(progressive.platform, 'platform', return_value='test-platform'), \
-             mock.patch.object(progressive.subprocess, 'run', return_value=mock.Mock(returncode=0, stderr='Java 17')) as proc:
+             mock.patch.object(progressive.platform, 'platform', return_value='test-platform'):
             risk_file.write_text('{}')
             self.assertEqual(2, progressive.main(args))
             risk_file.write_text(json.dumps({'digest': {'reason': 'only smoke', 'tests': [progressive.MYSQL + '#' + progressive.SMOKE[0]]}}))
             self.assertEqual(2, progressive.main(args))
             risk_file.write_text(json.dumps({'digest': {'reason': 'previous-version upgrade and data/constraints preservation', 'tests': [upgrade['name'] + '#upgrade']}}))
             self.assertEqual(0, progressive.main(args))
-            self.assertEqual(4, proc.call_count)  # Failed risk checks plus Java/Git checks; inspect never invokes Maven.
 
     def test_audit_gate_accepts_complete_xml_and_rejects_missing_candidate(self):
         audit_spec = importlib.util.spec_from_file_location('audit_reports', SCRIPT.with_name('audit_reports.py'))

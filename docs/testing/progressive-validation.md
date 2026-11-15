@@ -116,10 +116,16 @@ M2 mantém somente dois seletores específicos; remoção/renomeação falha na 
 M4 preserva o ensaio V+1 em `git archive HEAD`; F5 inclui, nesta ordem, `verify`,
 MySQL, PostgreSQL e V+1. Exige HEAD limpo e versionado para não testar código antigo.
 
-M1 compara scripts/fixtures com uma base Git ancestral, distinta de HEAD. Localmente,
-`--base <SHA>` escolhe explicitamente essa referência; refs móveis, merge-bases
-silenciosos, HEAD como sua própria base e históricos incompletos são recusados nas
-validações integrais. A base e seu SHA ficam no manifesto. Uma base que já contenha
+M1 compara scripts/fixtures com uma base Git verificável. Nas faixas parciais F1–F4
+e M1–M3, o padrão local é `merge-base(HEAD, origin/develop)`: isso permite branch
+recém-criada com HEAD igual à develop e develop avançada em paralelo, mantendo as
+alterações locais não commitadas visíveis para discovery. Ref ausente ou sem ancestral
+comum falha explicitamente. `--base <SHA>` escolhe uma referência explícita, que precisa
+resolver para commit distinto e ancestral de HEAD; prefira SHA para reprodutibilidade,
+e uma ref inválida nunca é substituída.
+F5/M4 conservam a exigência de baseline histórica distinta, ancestral e compatível
+com `origin/develop`, além de HEAD limpo e commitado. A base e seu SHA ficam no manifesto.
+Uma base que já contenha
 uma alteração indevida não prova integridade anterior; escolha e audite a referência,
 nunca altere hashes para passar.
 Quebra de linha CRLF/LF é normalizada como nos testes históricos existentes.
@@ -177,8 +183,9 @@ code page Windows; a visão diagnóstica tolera bytes não UTF-8 sem adulterar o
 ## Evidência e falhas
 
 O runner e o auditor comparam métodos Jupiter anotados em fontes existentes com a
-base validada. Localmente, o runner usa `origin/develop` quando é ancestral distinto
-de HEAD, ou aceita `--base` explícita. No CI, auditores usam a base do evento, evitando
+base validada. Localmente, faixas parciais usam o ancestral comum de HEAD e
+`origin/develop`; `--base` explícita exige SHA/commit ancestral distinto. F5/M4
+mantêm a política integral estrita. No CI, auditores usam a base do evento, evitando
 perder métodos introduzidos pelo push que atualizou `origin/develop`. História ausente
 falha explicitamente. Cada método novo no
 escopo é confrontado com os XMLs, distinguindo executado, skipped, não descoberto,
