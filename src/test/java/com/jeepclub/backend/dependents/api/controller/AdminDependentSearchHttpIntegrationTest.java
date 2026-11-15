@@ -229,7 +229,7 @@ class AdminDependentSearchHttpIntegrationTest {
         history.setBirthDate(LocalDate.of(2011, 3, 10));
         history.setRelationshipType(RelationshipType.CHILD);
         history.setStatus(DependentStatus.ACTIVE);
-        history.setDeletedByUserId(99L);
+        history.setDeletedByUserId(ownerA);
         history.setCreatedAt(Instant.parse("2026-06-30T12:00:00Z"));
         history.setDeletedAt(Instant.parse("2026-06-30T13:00:00Z"));
         em.persist(history);
