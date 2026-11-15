@@ -547,8 +547,8 @@ class ProgressiveTests(unittest.TestCase):
             spec.loader.exec_module(audit)
         argv = ['audit_reports.py', '--kind', 'unit', '--reports', str(reports),
                 '--out', str(output), '--selection', str(selection)]
-        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(sys, 'argv', argv), \\
-             mock.patch.object(audit, 'ROOT', self.root), mock.patch.object(audit, 'validate_maven'), \\
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(sys, 'argv', argv), \
+             mock.patch.object(audit, 'ROOT', self.root), mock.patch.object(audit, 'validate_maven'), \
              redirect_stdout(io.StringIO()):
             self.assertEqual(0, audit.main())
         audited = json.loads(output.read_text(encoding='utf-8'))
