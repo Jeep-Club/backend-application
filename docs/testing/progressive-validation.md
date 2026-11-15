@@ -154,6 +154,15 @@ code page Windows; a visão diagnóstica tolera bytes não UTF-8 sem adulterar o
 
 ## Evidência e falhas
 
+O runner e o auditor comparam métodos Jupiter anotados em fontes existentes com o
+merge-base de `--base` (padrão `origin/develop`). O checkout precisa conter essa
+referência e ancestralidade; ausência falha explicitamente. Cada método novo no
+escopo é confrontado com os XMLs, distinguindo executado, skipped, não descoberto,
+falho e não comprovado. `@TestFactory` exige comprovação manual e bloqueia o aceite;
+namespaces, herança ambígua e declarações não reconhecidas exigem revisão. Helpers e
+hooks sem anotação de teste não entram nessa comparação. A execução parametrizada
+exige ao menos uma invocação reconhecível e nenhum skip/falha correspondente.
+
 Cada seleção válida grava `target/progressive/<UTC>/selection.json`: SHA, branch,
 worktree dirty, ambiente/Java, candidatos/helpers, seletores, não selecionados,
 comandos, relações e limites. `result.json` preserva cada gate, duração, código

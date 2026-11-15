@@ -28,6 +28,31 @@ def record(name, module, kind="unit"):
 
 
 class ProgressiveTests(unittest.TestCase):
+    def test_incremental_methods_require_actual_cases(self):
+        subprocess.run(['git', '-C', str(self.root), 'init', '-q'], check=True)
+        path = java(self.root, 'src/test/java/com/jeepclub/backend/tools/ExistingTest.java',
+                    'package com.jeepclub.backend.tools; class ExistingTest { @Test void old1() {} @Test void old2() {} }')
+        subprocess.run(['git', '-C', str(self.root), 'add', '.'], check=True)
+        subprocess.run(['git', '-C', str(self.root), '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'base'], check=True)
+        base = progressive.git(self.root, 'rev-parse', 'HEAD')
+        path.write_text('package com.jeepclub.backend.tools; class ExistingTest { @Test void old1() {} @Test void old2() {} @Test void added() {} @ParameterizedTest void params(int x) {} @Nested class Group { @Test void nested() {} } @Disabled @Test void disabled() {} void helper() {} }')
+        records, _ = progressive.inventory(self.root)
+        selected = progressive.select(records, 'F2', modules=['tools'])
+        methods = progressive.new_test_methods(self.root, base, selected)
+        self.assertEqual({'added', 'params', 'nested', 'disabled'}, {m['method'] for m in methods})
+        report = self.root / 'reports'
+        report.mkdir()
+        name = records[0]['name']
+        xml = report / 'TEST-existing.xml'
+        xml.write_text('<testsuite name="' + name + '"><testcase classname="' + name + '" name="old1"/><testcase classname="' + name + '" name="old2"/><testcase classname="' + name + '" name="params(int)[1]"/><testcase classname="Nested display" name="disabled"><skipped/></testcase></testsuite>')
+        stats = progressive.reconcile(selected, report)
+        states = {m['method']: m['status'] for m in progressive.reconcile_new_methods(methods, stats['cases'])}
+        self.assertEqual({'added': 'not_discovered', 'params': 'executed', 'nested': 'not_discovered', 'disabled': 'skipped'}, states)
+        xml.write_text('<testsuite name="' + name + '"><testcase classname="' + name + '" name="added"/><testcase classname="' + name + '" name="params(int)[1]"/><testcase classname="Nested display" name="nested"/><testcase classname="' + name + '" name="disabled"/></testsuite>')
+        states = {m['method']: m['status'] for m in progressive.reconcile_new_methods(methods, progressive.reconcile(selected, report)['cases'])}
+        self.assertTrue(all(s == 'executed' for s in states.values()))
+        self.assertEqual('unproven', progressive.reconcile_new_methods([dict(methods[0], annotation='TestFactory')], []) [0]['status'])
+
     def test_migration_full_is_not_project_full(self):
         self.assertEqual('migration_full', progressive.validation_scope(None, 'M4'))
         self.assertEqual('project_full', progressive.validation_scope('F5', None))

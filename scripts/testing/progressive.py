@@ -233,6 +233,90 @@ def validate_maven(root):
             raise Invalid(f'Failsafe discovery changed for {profile}: {actual}; review discovery contract')
 
 
+def executable_methods(text):
+    """Conservatively identify directly annotated Jupiter methods, excluding helpers."""
+    text = source(text)
+    method = re.compile(r'\b(?:void|[\w.$<>\[\],?]+)\s+(\w+)\s*\([^;{}]*\)\s*(?:throws\s+[\w.,\s]+)?\s*[{;]')
+    found = []
+    for annotation in ANNOTATION.finditer(text):
+        # Stop at a different executable annotation or class declaration; never
+        # guess across an unsupported declaration.
+        tail = text[annotation.end():]
+        match = method.search(tail)
+        boundary = re.search(r'\b(?:class|interface|record|enum)\s+\w+|@(?:[\w.]+\.)?(?:Test|ParameterizedTest|RepeatedTest|TestFactory|TestTemplate)\b', tail)
+        if not match or (boundary and boundary.start() < match.start()):
+            raise Invalid('Unrecognized annotated test declaration; manual verification required')
+        found.append((match.group(1), annotation.group(1)))
+    return found
+
+
+def new_test_methods(root, base, selected):
+    """Compare existing test sources with a verified base; inheritance is conservative."""
+    paths = sorted((root / 'src/test/java').rglob('*.java'))
+    by_stem = {}
+    for path in paths:
+        by_stem.setdefault(path.stem, []).append(path)
+    changed = set(git(root, 'diff', '--name-only', base, '--', 'src/test/java').splitlines())
+    result = []
+    for row in selected:
+        if 'path' not in row:
+            continue
+        path = root / row['path']
+        chain, seen = [], set()
+        while path and path not in seen:
+            seen.add(path)
+            text = path.read_text(encoding='utf-8-sig')
+            chain.append((path, text))
+            parent = re.search(r'\bextends\s+(\w+)', source(text))
+            if not parent:
+                break
+            candidates = by_stem.get(parent.group(1), [])
+            if len(candidates) > 1:
+                raise Invalid(f'Cannot resolve inherited tests for {row["name"]}: {parent.group(1)}')
+            if not candidates:
+                break  # External parent cannot be changed in this source tree.
+            path = candidates[0]
+        for path, current in chain:
+            rel = path.relative_to(root).as_posix()
+            if rel not in changed:
+                continue
+            exists = subprocess.run(['git', '-C', str(root), 'cat-file', '-e', f'{base}:{rel}'],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+            if not exists:
+                continue  # New classes already require class-level reconciliation.
+            old = subprocess.check_output(['git', '-C', str(root), 'show', f'{base}:{rel}']).decode('utf-8-sig')
+            before = set(executable_methods(old))
+            now = executable_methods(current)
+            for name, annotation in now:
+                if (name, annotation) not in before:
+                    if '#' in row['selector'] and row['selector'].partition('#')[2] != name:
+                        continue
+                    if sum(n == name for n, _ in now) != 1:
+                        raise Invalid(f'Ambiguous new test method {rel}#{name}; manual verification required')
+                    result.append(dict(classname=row['name'], method=name, annotation=annotation, source=rel))
+    return list({(x['classname'], x['method'], x['source']): x for x in result}.values())
+
+
+def reconcile_new_methods(methods, cases):
+    results = []
+    for item in methods:
+        cls, name = item['classname'], item['method']
+        matching = [c for c in cases if (c['classname'] == cls or c['classname'].startswith(cls + '$'))
+                    and (c['name'] == name or c['name'].startswith(name + '(') or c['name'].startswith(name + '['))]
+        if item['annotation'] == 'TestFactory':
+            state = 'unproven'  # Dynamic testcase names do not prove their factory identity.
+        elif not matching:
+            state = 'not_discovered'
+        elif any(c['status'] in ('failure', 'error') for c in matching):
+            state = 'failed'
+        elif any(c['status'] == 'skipped' for c in matching):
+            state = 'skipped'
+        else:
+            state = 'executed'
+        results.append(dict(item, status=state))
+    return results
+
+
 def commands(selected, full=False, migration=None):
     mvn = ['mvnw.cmd' if os.name == 'nt' else './mvnw', '--batch-mode', '--no-transfer-progress']
     if full or migration == 'M4':
@@ -328,6 +412,10 @@ def compact(stats):
             samples[key] = values[:3]
     if samples:
         result['diagnostic_sample'] = samples
+    pending = [m for m in stats.get('new_methods', []) if m['status'] != 'executed']
+    if pending:
+        result['new_methods_pending'] = len(pending)
+        result['new_methods_sample'] = pending[:3]
     return result
 
 
@@ -374,10 +462,13 @@ def run(root, plan, out):
         if cmd[0] == 'bash':
             report = root / 'target/forward-migration-evidence/failsafe-reports'
         stats = reconcile(relevant, report)
+        required = [m for m in plan.get('new_test_methods', []) if any(
+            r['name'] == m['classname'] and ('#' not in r['selector'] or r['selector'].partition('#')[2] == m['method']) for r in relevant)]
+        stats['new_methods'] = reconcile_new_methods(required, stats['cases'])
         if report.exists():
             shutil.copytree(report, folder / 'reports')
         skipped = stats['counts'].get('skipped', 0)
-        ok = not (code or stats['not_executed'] or stats['all_skipped_selectors'] or stats['unexpected_cases'] or stats['counts'].get('failure') or stats['counts'].get('error')
+        ok = not (code or stats['not_executed'] or stats['all_skipped_selectors'] or stats['unexpected_cases'] or any(m['status'] != 'executed' for m in stats['new_methods']) or stats['counts'].get('failure') or stats['counts'].get('error')
                   or (skipped and any(r['kind'] != 'unit' for r in relevant)))
         runs.append(dict(command=cmd, selected_selectors=[r['selector'] for r in relevant], exit_code=code, passed=ok, seconds=round(time.monotonic()-started, 3),
                          log=str(log), **stats))
@@ -417,7 +508,7 @@ def main(argv=None):
         records, helpers = inventory(root)
         risks = {}
         edges = relations(root, {r['module'] for r in records})
-        base = git(root, 'merge-base', 'HEAD', args.base) if args.migration else None
+        base = git(root, 'merge-base', 'HEAD', args.base)
         static = static_migrations(root, base) if args.migration else None
         if args.migration and (args.module or args.test or args.dependency):
             raise Invalid('Migration levels cannot be narrowed with functional selectors')
@@ -450,6 +541,7 @@ def main(argv=None):
         else:
             selected = select(records, args.band, args.module, args.test, args.dependency, edges)
         cmds = [] if args.migration == 'M1' else commands(selected, args.band == 'F5', args.migration)
+        new_methods = new_test_methods(root, base, selected)
         plan = dict(sha=git(root, 'rev-parse', 'HEAD'), branch=git(root, 'branch', '--show-current'),
                     dirty=bool(git(root, 'status', '--porcelain')), band=args.band, migration=args.migration,
                     partial=args.band != 'F5', validation_scope=validation_scope(args.band, args.migration), environment=dict(
@@ -462,6 +554,7 @@ def main(argv=None):
                     migrations=static, commands=cmds,
                     request=dict(modules=args.module, tests=args.test, dependencies=args.dependency, base=args.base),
                     risk_review=risks,
+                    new_test_methods=new_methods, comparison_base=base,
                     limitations=['Source candidates are not JUnit case counts; XML reconciles execution.',
                                  'Import closure cannot infer reflection, events, configuration or external consumers.',
                                  'Partial execution is not full validation or JaCoCo coverage.'])
