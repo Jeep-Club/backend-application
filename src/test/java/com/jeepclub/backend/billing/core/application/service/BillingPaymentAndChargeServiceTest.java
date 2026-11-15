@@ -146,7 +146,18 @@ class BillingPaymentAndChargeServiceTest {
     @Test void brokenCycleReferenceFailsWithoutFallback() {
         when(charges.findById(2L)).thenReturn(Optional.of(charge()));
         assertThatThrownBy(() -> memberCharges.findMineById(10L, 2L))
-                .isInstanceOf(IllegalStateException.class).hasMessageContaining("missing or inconsistent cycle");
+                .isInstanceOf(MemberChargeCycleIntegrityException.class);
+    }
+    @Test void mismatchedCycleDefinitionFailsWithoutReturningMetadata() {
+        var wrongDefinitionCycle = ChargeCycle.reconstitute(4L, 999L, "wrong", null, AMOUNT,
+                com.jeepclub.backend.billing.core.domain.enums.ChargeRecurrenceType.ONE_TIME, true,
+                com.jeepclub.backend.billing.core.domain.enums.cycle.PaymentAcceptancePolicy.UNTIL_DUE_DATE,
+                null, "wrong-code", DUE, com.jeepclub.backend.billing.core.domain.enums.cycle.ChargeCycleStatus.GENERATED,
+                99L, NOW, null, null, null, null, null, null, NOW, null);
+        when(charges.findById(2L)).thenReturn(Optional.of(charge()));
+        when(cycles.findById(4L)).thenReturn(Optional.of(wrongDefinitionCycle));
+        assertThatThrownBy(() -> memberCharges.findMineById(10L, 2L))
+                .isInstanceOf(MemberChargeCycleIntegrityException.class);
     }
     @ParameterizedTest @ValueSource(ints = {0, 1, 2, 3, 4})
     void invalidSubmissionNeverTouchesStorage(int conflict) {

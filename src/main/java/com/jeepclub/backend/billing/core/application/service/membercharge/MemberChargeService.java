@@ -1,6 +1,7 @@
 package com.jeepclub.backend.billing.core.application.service.membercharge;
 
 import com.jeepclub.backend.billing.core.application.exception.charge.MemberChargeAccessDeniedException;
+import com.jeepclub.backend.billing.core.application.exception.charge.MemberChargeCycleIntegrityException;
 import com.jeepclub.backend.billing.core.application.exception.charge.MemberChargeNotFoundException;
 import com.jeepclub.backend.billing.core.application.result.charge.MemberChargeResult;
 import com.jeepclub.backend.billing.core.application.result.charge.MemberChargeSelfServiceResult;
@@ -68,7 +69,7 @@ public class MemberChargeService {
 
     private MemberChargeSelfServiceResult enrich(MemberCharge charge, ChargeCycle cycle) {
         if (cycle == null || !Objects.equals(cycle.getChargeDefinitionId(), charge.getChargeDefinitionId())) {
-            throw new IllegalStateException("Member charge references a missing or inconsistent cycle.");
+            throw new MemberChargeCycleIntegrityException();
         }
         return new MemberChargeSelfServiceResult(toResult(charge), cycle.getChargeDefinitionNameSnapshot(), cycle.getCode());
     }
