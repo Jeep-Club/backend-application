@@ -375,7 +375,8 @@ def reconcile_new_methods(methods, cases, selected=None):
     return results
 
 
-def migration_risk_selectors(info, records, risk_file):
+def migration_risk_selectors(info, records, risk_file, root=None):
+    root = root or ROOT
     if not info['new']:
         return {}, []
     risks = json.loads(risk_file.read_text(encoding='utf-8')) if risk_file and risk_file.is_file() else {}
@@ -389,6 +390,31 @@ def migration_risk_selectors(info, records, risk_file):
         chosen = select(records, 'F1', focus=risk['tests'])
         if any('#' not in r['selector'] for r in chosen):
             raise Invalid('Migration risk review requires explicit regression methods, not whole classes')
+        sources = {}
+        for path in (root / 'src/test/java').rglob('*.java'):
+            sources.setdefault(path.stem, []).append(path)
+        for row in chosen:
+            if row['kind'] != 'mysql' or not row.get('path'):
+                raise Invalid('Migrations require MySQL integration selectors with source evidence')
+            pending, seen, declared = [root / row['path']], set(), []
+            while pending:
+                path = pending.pop()
+                if path in seen:
+                    continue
+                seen.add(path)
+                text = path.read_text(encoding='utf-8-sig')
+                declared.extend(executable_methods(text))
+                for parent in test_parents(text, path.stem):
+                    matches = sources.get(parent, [])
+                    if len(matches) > 1:
+                        raise Invalid(f'Ambiguous inherited risk test in {row["selector"]}')
+                    if matches:
+                        pending.append(matches[0])
+            method = row['selector'].partition('#')[2]
+            if any(annotation == 'TestFactory' for _, annotation in declared):
+                raise Invalid(f'Dynamic risk test attribution is unproven: {row["selector"]}')
+            if sum(name == method for name, _ in declared) != 1:
+                raise Invalid(f'Risk selector is not an unambiguous annotated JUnit test: {row["selector"]}')
         if all(r['selector'] in [MYSQL + '#' + m for m in SMOKE] for r in chosen):
             raise Invalid(f'New migration {migration["path"]}: schema smoke alone cannot prove historical compatibility')
         selectors.extend(r['selector'] for r in chosen)
@@ -628,7 +654,7 @@ def main(argv=None):
         risk_selectors = []
         if args.migration in ('M3', 'M4') or args.band == 'F5':
             risk_path = args.risk_file or root / 'docs/testing/migration-risk.json'
-            risks, risk_selectors = migration_risk_selectors(static, records, risk_path)
+            risks, risk_selectors = migration_risk_selectors(static, records, risk_path, root)
         if args.migration and (args.module or args.test or args.dependency):
             raise Invalid('Migration levels cannot be narrowed with functional selectors')
         if args.band == 'F3' and not (args.impact_review and args.impact_review.strip()):

@@ -28,6 +28,14 @@ def record(name, module, kind="unit"):
     return dict(name=name, module=module, kind=kind, selector=name)
 
 
+def mysql_fixture(root):
+    rel = 'src/test/java/com/jeepclub/backend/platform/database/MySqlMigrationIT.java'
+    java(root, rel, 'package com.jeepclub.backend.platform.database; class MySqlMigrationIT { '
+         + ' '.join('@Test void ' + name + '() {}' for name in progressive.SMOKE + ['upgrade'])
+         + ' void helper() {} }')
+    return dict(record(progressive.MYSQL, 'platform', 'mysql'), methods=progressive.SMOKE + ['upgrade', 'helper'], inherited=False, path=rel)
+
+
 class ProgressiveTests(unittest.TestCase):
     def test_full_gate_preserves_old_compiled_classes_before_execution(self):
         target = self.root / 'target/test-classes'
@@ -130,7 +138,7 @@ class ProgressiveTests(unittest.TestCase):
         reports = self.root / 'reports'
         reports.mkdir()
         stamp, output = self.root / 'stamp.json', self.root / 'out.json'
-        row = dict(record(progressive.MYSQL, 'platform', 'mysql'), methods=['upgrade'], inherited=False)
+        row = mysql_fixture(self.root)
         risk = self.root / 'risk.json'
         risk.write_text(json.dumps({'digest': {'reason': 'legacy data and constraints', 'tests': ['MySqlMigrationIT#upgrade']}}))
         info = {'new': [{'path': 'V99__test.sql', 'sha256': 'digest'}]}
@@ -190,19 +198,20 @@ class ProgressiveTests(unittest.TestCase):
             progressive.new_test_methods(self.root, base, selected)
 
     def test_new_migration_requires_hash_review_and_executed_mysql_regression(self):
-        mysql = dict(record(progressive.MYSQL, 'platform', 'mysql'), methods=progressive.SMOKE + ['upgrade'], inherited=False)
+        mysql = mysql_fixture(self.root)
         info = {'new': [{'path': 'V99__new.sql', 'sha256': 'correct'}]}
         risk_file = self.root / 'risk.json'
-        self.assertEqual(({}, []), progressive.migration_risk_selectors({'new': []}, [mysql], risk_file))
+        self.assertEqual(({}, []), progressive.migration_risk_selectors({'new': []}, [mysql], risk_file, self.root))
         for payload in ({}, {'wrong': {'reason': 'review', 'tests': ['MySqlMigrationIT#upgrade']}},
                         {'correct': {'reason': 'review', 'tests': ['MySqlMigrationIT']}},
+                        {'correct': {'reason': 'review', 'tests': ['MySqlMigrationIT#helper']}},
                         {'correct': {'reason': 'review', 'tests': ['MySqlMigrationIT#' + progressive.SMOKE[0]]}},
                         {'correct': {'reason': 'review', 'tests': ['MySqlMigrationIT#missing']}}):
             risk_file.write_text(json.dumps(payload))
             with self.assertRaises(progressive.Invalid):
-                progressive.migration_risk_selectors(info, [mysql], risk_file)
+                progressive.migration_risk_selectors(info, [mysql], risk_file, self.root)
         risk_file.write_text(json.dumps({'correct': {'reason': 'legacy data and constraints reviewed', 'tests': ['MySqlMigrationIT#upgrade']}}))
-        _, required = progressive.migration_risk_selectors(info, [mysql], risk_file)
+        _, required = progressive.migration_risk_selectors(info, [mysql], risk_file, self.root)
         reports = self.root / 'reports'
         reports.mkdir()
         with self.assertRaisesRegex(progressive.Invalid, 'lacks successful'):
@@ -212,10 +221,14 @@ class ProgressiveTests(unittest.TestCase):
             progressive.verify_migration_risks(required, reports)
         (reports / 'TEST-mysql.xml').write_text('<testsuite><testcase classname="' + progressive.MYSQL + '" name="upgrade"/></testsuite>')
         self.assertEqual({'passed': 1}, progressive.verify_migration_risks(required, reports)['counts'])
+        mysql_source = self.root / mysql['path']
+        mysql_source.write_text(mysql_source.read_text().replace('void helper()', '@TestFactory Object generated() { return null; } void helper()'))
+        with self.assertRaisesRegex(progressive.Invalid, 'Dynamic risk test attribution'):
+            progressive.migration_risk_selectors(info, [mysql], risk_file, self.root)
         postgres = dict(record('com.jeepclub.backend.tools.UpgradePostgresIT', 'tools', 'postgres'), methods=['upgrade'], inherited=False)
         risk_file.write_text(json.dumps({'correct': {'reason': 'review', 'tests': ['UpgradePostgresIT#upgrade']}}))
         with self.assertRaisesRegex(progressive.Invalid, 'MySQL'):
-            progressive.migration_risk_selectors(info, [mysql, postgres], risk_file)
+            progressive.migration_risk_selectors(info, [mysql, postgres], risk_file, self.root)
 
     def test_incremental_methods_require_actual_cases(self):
         subprocess.run(['git', '-C', str(self.root), 'init', '-q'], check=True)
@@ -333,14 +346,17 @@ class ProgressiveTests(unittest.TestCase):
         self.assertEqual([], stats['not_executed'])
 
     def test_m3_new_migration_requires_review_and_rejects_smoke_only(self):
-        row = dict(record(progressive.MYSQL, 'platform', 'mysql'), methods=progressive.SMOKE, inherited=False)
-        upgrade = dict(record('com.jeepclub.backend.platform.NewUpgradeMySqlIT', 'platform', 'mysql'), methods=['upgrade'], inherited=False)
+        row = mysql_fixture(self.root)
+        rel = 'src/test/java/com/jeepclub/backend/platform/NewUpgradeMySqlIT.java'
+        java(self.root, rel, 'package com.jeepclub.backend.platform; class NewUpgradeMySqlIT { @Test void upgrade() {} }')
+        upgrade = dict(record('com.jeepclub.backend.platform.NewUpgradeMySqlIT', 'platform', 'mysql'), methods=['upgrade'], inherited=False, path=rel)
         risk_file = self.root / 'risk.json'
         new = {'path': 'V99__new.sql', 'sha256': 'digest'}
         args = ['--migration', 'M3', '--risk-file', str(risk_file), '--inspect']
         with mock.patch.object(progressive, 'ROOT', self.root), mock.patch.object(progressive, 'validate_maven'), \
              mock.patch.object(progressive, 'git', return_value='sha'), \
              mock.patch.object(progressive, 'inventory', return_value=([row, upgrade], [])), \
+             mock.patch.object(progressive, 'new_test_methods', return_value=[]), \
              mock.patch.object(progressive, 'relations', return_value=[]), \
              mock.patch.object(progressive, 'static_migrations', return_value={'new': [new]}), \
              mock.patch.object(progressive.platform, 'platform', return_value='test-platform'), \

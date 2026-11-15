@@ -42,7 +42,7 @@ def main():
     full_stats = reconcile(full, args.reports)
     if not full or full_stats['not_executed'] or full_stats['all_skipped_selectors'] or full_stats['unexpected_cases'] or any(full_stats['counts'].get(s) for s in ('failure', 'error', 'skipped')):
         raise ValueError('MySQL evidence is not the complete successful profile')
-    risks, required = migration_risk_selectors(info, records, args.risk_file)
+    risks, required = migration_risk_selectors(info, records, args.risk_file, ROOT)
     evidence = verify_migration_risks(required, args.reports)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(dict(sha=sha, base=base, gate_identity=identity,
