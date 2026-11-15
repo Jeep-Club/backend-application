@@ -337,8 +337,6 @@ def new_test_methods(root, base, selected):
             now = executable_methods(current, with_scopes=True)
             for owner, name, annotation in now:
                 if (owner, name, annotation) not in before:
-                    if '#' in row['selector'] and row['selector'].partition('#')[2] != name:
-                        continue
                     if sum(n == name for _, n, _ in now) != 1 or any(n == name and prior_owner != owner for prior_owner, n, _ in before):
                         raise Invalid(f'Ambiguous new test method {rel}#{name}; manual verification required')
                     if any(name in {n for n, _ in executable_methods(other_text)} for other_path, other_text in chain if other_path != path):
@@ -349,13 +347,16 @@ def new_test_methods(root, base, selected):
     return list({(x['classname'], x['method'], x['source']): x for x in result}.values())
 
 
-def reconcile_new_methods(methods, cases):
+def reconcile_new_methods(methods, cases, selected=None):
     results = []
     for item in methods:
         cls, name = item['classname'], item['method']
         matching = [c for c in cases if (c['classname'] == cls or c['classname'].startswith(cls + '$'))
                     and (c['name'] == name or c['name'].startswith(name + '(') or c['name'].startswith(name + '['))]
-        if item['annotation'] == 'TestFactory' or item.get('dynamic_ambiguity'):
+        scoped = [r for r in selected or [] if r['name'] == cls]
+        if selected is not None and not any('#' not in r['selector'] or r['selector'].partition('#')[2] == name for r in scoped):
+            state = 'not_selected'
+        elif item['annotation'] == 'TestFactory' or item.get('dynamic_ambiguity'):
             state = 'unproven'  # Dynamic testcase names do not prove their factory identity.
         elif not matching:
             state = 'unproven' if item['annotation'] == 'TestTemplate' else 'not_discovered'
@@ -551,9 +552,8 @@ def run(root, plan, out):
         if cmd[0] == 'bash':
             report = root / 'target/forward-migration-evidence/failsafe-reports'
         stats = reconcile(relevant, report)
-        required = [m for m in plan.get('new_test_methods', []) if any(
-            r['name'] == m['classname'] and ('#' not in r['selector'] or r['selector'].partition('#')[2] == m['method']) for r in relevant)]
-        stats['new_methods'] = reconcile_new_methods(required, stats['cases'])
+        required = [m for m in plan.get('new_test_methods', []) if any(r['name'] == m['classname'] for r in relevant)]
+        stats['new_methods'] = reconcile_new_methods(required, stats['cases'], relevant)
         risk_error = None
         integrity_error = None
         if plan.get('band') == 'F5' or plan.get('migration') == 'M4':

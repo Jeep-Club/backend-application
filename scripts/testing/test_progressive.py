@@ -29,6 +29,23 @@ def record(name, module, kind="unit"):
 
 
 class ProgressiveTests(unittest.TestCase):
+    def test_focus_cannot_hide_new_method_of_same_class(self):
+        row = record('com.jeepclub.backend.tools.ExistingTest', 'tools')
+        row['selector'] += '#old1'
+        required = [dict(classname=row['name'], method='added', annotation='Test', source='ExistingTest.java')]
+        out = self.root / 'out'
+        out.mkdir()
+        def maven(cmd, cwd, stdout, stderr):
+            reports = Path(cwd) / 'target/surefire-reports'
+            reports.mkdir(parents=True)
+            (reports / 'TEST-existing.xml').write_text('<testsuite><testcase classname="' + row['name'] + '" name="old1"/></testsuite>')
+            return mock.Mock(returncode=0)
+        plan = {'selected': [row], 'commands': [['mvnw', 'test']], 'new_test_methods': required}
+        with mock.patch.object(progressive.subprocess, 'run', side_effect=maven):
+            self.assertEqual(1, progressive.run(self.root, plan, out))
+        result = json.loads((out / 'result.json').read_text())
+        self.assertEqual('not_selected', result['runs'][0]['new_methods'][0]['status'])
+
     def test_missing_new_method_fails_runner_despite_old_cases(self):
         row = record('com.jeepclub.backend.tools.ExistingTest', 'tools')
         required = [dict(classname=row['name'], method='added', annotation='Test', source='ExistingTest.java')]

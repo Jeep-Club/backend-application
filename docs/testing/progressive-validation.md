@@ -169,7 +169,9 @@ O runner e o auditor comparam métodos Jupiter anotados em fontes existentes com
 merge-base de `--base` (padrão `origin/develop`). O checkout precisa conter essa
 referência e ancestralidade; ausência falha explicitamente. Cada método novo no
 escopo é confrontado com os XMLs, distinguindo executado, skipped, não descoberto,
-falho e não comprovado. `@TestFactory`, ou um factory que torne a atribuição de
+falho, não selecionado e não comprovado. Se um foco omitir outro método novo da
+mesma classe, o resultado falha com `not_selected`; inclua-o ou execute a classe.
+`@TestFactory`, ou um factory que torne a atribuição de
 outro caso ambígua, exige comprovação manual e bloqueia o aceite; hierarquia de
 classe/interface alterada, herança ambígua e declarações não reconhecidas exigem revisão. Helpers e
 hooks sem anotação de teste não entram nessa comparação. A execução parametrizada
