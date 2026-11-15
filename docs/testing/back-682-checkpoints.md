@@ -211,3 +211,21 @@ Uma regressão específica prova esse bloqueio, inclusive com Maven zero.
 
 Inputs originais e declarações de risco por hash são conservados no manifesto.
 30 regressões aprovadas em Windows (0,888 s) e Linux Python 3.12 (0,163 s).
+
+## Correções de auditoria F-01–F-03
+
+- F-01: `18accd55` separa `project_full` de `migration_full`; M4 é parcial no
+  projeto. A inspeção manteve os comandos originais.
+- F-02: `b71615af` iniciou comparação incremental de métodos anotados com o
+  merge-base; o complemento de F-03 protege escopos nested e herança por interfaces,
+  bloqueando casos ambíguos/dinâmicos. XMLs distinguem executado, skipped, não
+  descoberto, falha e não comprovado. CI busca histórico suficiente.
+- F-03: a revisão por hash e métodos MySQL explícitos também é obrigatória em
+  F5/M4. A execução verifica XMLs frescos no mesmo HEAD; no CI, o marcador pré-gate
+  vincula SHA, run e job e o auditor posterior exige o profile completo. Nenhuma
+  justificativa textual substitui revisão humana de dados/constraints.
+- Regressões sintéticas: ausência/presença de método, parametrizado, nested,
+  herança/interface, skipped, helper, factory, hash incorreto, smoke isolado,
+  método inexistente, evidência ausente/antiga/outro SHA e preservação histórica.
+  Não houve rerun de suites DB locais para alterações exclusivamente no runner.
+  O CI do commit publicado é a evidência final dos gates originais.

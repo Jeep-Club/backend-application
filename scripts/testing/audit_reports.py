@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import sys
 
-from progressive import ROOT, compact, git, inventory, new_test_methods, reconcile, reconcile_new_methods, validate_maven
+from progressive import ROOT, compact, inventory, new_test_methods, reconcile, reconcile_new_methods, trusted_base, validate_maven
 
 
 def main():
@@ -21,7 +21,7 @@ def main():
     selected = ([r for r in manifest['selected'] if r['kind'] == args.kind] if manifest else
                 [dict(r, selector=r['name']) for r in rows if r['kind'] == args.kind])
     stats = reconcile(selected, args.reports)
-    base = git(ROOT, 'merge-base', 'HEAD', args.base)
+    base = trusted_base(ROOT, args.base, full=not bool(manifest))
     stats['new_methods'] = reconcile_new_methods(new_test_methods(ROOT, base, selected), stats['cases'])
     passed = bool(selected) and not (stats['not_executed'] or stats['all_skipped_selectors'] or stats['unexpected_cases'] or any(m['status'] != 'executed' for m in stats['new_methods']) or
                                     stats['counts'].get('failure') or stats['counts'].get('error') or

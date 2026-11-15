@@ -2,6 +2,7 @@
 import hashlib
 import json
 import importlib.util
+import os
 import subprocess
 import sys
 import tempfile
@@ -28,6 +29,147 @@ def record(name, module, kind="unit"):
 
 
 class ProgressiveTests(unittest.TestCase):
+    def test_missing_new_method_fails_runner_despite_old_cases(self):
+        row = record('com.jeepclub.backend.tools.ExistingTest', 'tools')
+        required = [dict(classname=row['name'], method='added', annotation='Test', source='ExistingTest.java')]
+        out = self.root / 'out'
+        out.mkdir()
+        def maven(cmd, cwd, stdout, stderr):
+            reports = Path(cwd) / 'target/surefire-reports'
+            reports.mkdir(parents=True)
+            (reports / 'TEST-existing.xml').write_text('<testsuite><testcase classname="' + row['name'] + '" name="old1"/><testcase classname="' + row['name'] + '" name="old2"/></testsuite>')
+            return mock.Mock(returncode=0)
+        plan = {'selected': [row], 'commands': [['mvnw', 'test']], 'new_test_methods': required}
+        with mock.patch.object(progressive.subprocess, 'run', side_effect=maven):
+            self.assertEqual(1, progressive.run(self.root, plan, out))
+        result = json.loads((out / 'result.json').read_text())
+        self.assertEqual('not_discovered', result['runs'][0]['new_methods'][0]['status'])
+
+    def test_nested_method_moved_to_another_group_fails_closed(self):
+        subprocess.run(['git', '-C', str(self.root), 'init', '-q'], check=True)
+        path = java(self.root, 'src/test/java/com/jeepclub/backend/tools/GroupsTest.java', 'package com.jeepclub.backend.tools; class GroupsTest { @Nested class A { @Test void same() {} } @Nested class B {} }')
+        subprocess.run(['git', '-C', str(self.root), 'add', '.'], check=True)
+        subprocess.run(['git', '-C', str(self.root), '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'base'], check=True)
+        base = progressive.git(self.root, 'rev-parse', 'HEAD')
+        path.write_text('package com.jeepclub.backend.tools; class GroupsTest { @Nested class A {} @Nested class B { @Test void same() {} } }')
+        records, _ = progressive.inventory(self.root)
+        with self.assertRaisesRegex(progressive.Invalid, 'Ambiguous new test method'):
+            progressive.new_test_methods(self.root, base, progressive.select(records, 'F2', modules=['tools']))
+
+    def test_repeated_dynamic_and_template_methods_are_classified(self):
+        methods = progressive.executable_methods('class Example { @RepeatedTest(2) void repeated() {} @TestFactory Object generated() {} @TestTemplate void template() {} @BeforeEach void setup() {} void helper() {} }')
+        self.assertEqual({('repeated', 'RepeatedTest'), ('generated', 'TestFactory'), ('template', 'TestTemplate')}, set(methods))
+        required = [dict(classname='com.jeepclub.backend.ExampleTest', method=n, annotation=a, source='ExampleTest.java') for n, a in methods]
+        cases = [dict(classname='com.jeepclub.backend.ExampleTest', name='repeated()[1]', status='passed')]
+        states = {r['method']: r['status'] for r in progressive.reconcile_new_methods(required, cases)}
+        self.assertEqual({'repeated': 'executed', 'generated': 'unproven', 'template': 'unproven'}, states)
+        ambiguous = dict(required[0], dynamic_ambiguity=True)
+        self.assertEqual('unproven', progressive.reconcile_new_methods([ambiguous], cases)[0]['status'])
+
+    def test_full_scope_rejects_base_newer_than_develop(self):
+        def fake_git(root, *args):
+            if args == ('merge-base', 'HEAD', 'HEAD'):
+                return 'head'
+            return 'develop'
+        with mock.patch.object(progressive, 'git', side_effect=fake_git):
+            with self.assertRaisesRegex(progressive.Invalid, 'ancestor'):
+                progressive.trusted_base(self.root, 'HEAD', full=True)
+
+    def test_ci_migration_evidence_requires_matching_sha_and_fresh_reports(self):
+        spec = importlib.util.spec_from_file_location('audit_migrations', SCRIPT.with_name('audit_migrations.py'))
+        audit = importlib.util.module_from_spec(spec)
+        with mock.patch.dict(sys.modules, {'progressive': progressive}):
+            spec.loader.exec_module(audit)
+        reports = self.root / 'reports'
+        reports.mkdir()
+        stamp, output = self.root / 'stamp.json', self.root / 'out.json'
+        row = dict(record(progressive.MYSQL, 'platform', 'mysql'), methods=['upgrade'], inherited=False)
+        risk = self.root / 'risk.json'
+        risk.write_text(json.dumps({'digest': {'reason': 'legacy data and constraints', 'tests': ['MySqlMigrationIT#upgrade']}}))
+        info = {'new': [{'path': 'V99__test.sql', 'sha256': 'digest'}]}
+        def fake_git(root, *args):
+            return '' if args[0] == 'status' else ('base' if args[0] == 'merge-base' else 'head')
+        env = {'GITHUB_RUN_ID': '123', 'GITHUB_JOB': 'mysql', 'GITHUB_SHA': 'head'}
+        common = ['audit', '--stamp', str(stamp)]
+        with mock.patch.object(audit, 'ROOT', self.root), mock.patch.object(audit, 'git', side_effect=fake_git), \
+             mock.patch.object(audit, 'trusted_base', return_value='base'), \
+             mock.patch.object(audit, 'inventory', return_value=([row], [])), \
+             mock.patch.object(audit, 'static_migrations', return_value=info), mock.patch.dict(os.environ, env):
+            with mock.patch.object(sys, 'argv', common + ['--start']), mock.patch.object(audit.time, 'time_ns', return_value=1000000000):
+                audit.main()
+            xml = reports / 'TEST-mysql.xml'
+            xml.write_text('<testsuite><testcase classname="' + progressive.MYSQL + '" name="upgrade"/></testsuite>')
+            argv = common + ['--reports', str(reports), '--out', str(output), '--risk-file', str(risk)]
+            with mock.patch.object(sys, 'argv', argv):
+                audit.main()
+                other = dict(record('com.jeepclub.backend.tools.OtherMySqlIT', 'tools', 'mysql'), methods=['other'], inherited=False)
+                with mock.patch.object(audit, 'inventory', return_value=([row, other], [])), self.assertRaisesRegex(ValueError, 'complete successful profile'):
+                    audit.main()
+                with mock.patch.dict(os.environ, {'GITHUB_SHA': 'other'}), self.assertRaises(ValueError):
+                    audit.main()
+                os.utime(xml, ns=(1, 1))
+                with self.assertRaisesRegex(ValueError, 'older'):
+                    audit.main()
+
+    def test_inherited_new_method_is_checked_on_subclass(self):
+        subprocess.run(['git', '-C', str(self.root), 'init', '-q'], check=True)
+        parent = java(self.root, 'src/test/java/com/jeepclub/backend/tools/Base.java', 'package com.jeepclub.backend.tools; abstract class Base { @Test void old() {} }')
+        java(self.root, 'src/test/java/com/jeepclub/backend/tools/ChildTest.java', 'package com.jeepclub.backend.tools; class ChildTest extends Base {}')
+        subprocess.run(['git', '-C', str(self.root), 'add', '.'], check=True)
+        subprocess.run(['git', '-C', str(self.root), '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'base'], check=True)
+        base = progressive.git(self.root, 'rev-parse', 'HEAD')
+        parent.write_text('package com.jeepclub.backend.tools; abstract class Base { @Test void old() {} @Test void added() {} }')
+        records, _ = progressive.inventory(self.root)
+        selected = progressive.select(records, 'F2', modules=['tools'])
+        methods = progressive.new_test_methods(self.root, base, selected)
+        self.assertEqual([('com.jeepclub.backend.tools.ChildTest', 'added')], [(m['classname'], m['method']) for m in methods])
+        self.assertEqual('not_discovered', progressive.reconcile_new_methods(methods, [])[0]['status'])
+
+    def test_new_default_interface_method_is_checked_and_hierarchy_changes_block(self):
+        subprocess.run(['git', '-C', str(self.root), 'init', '-q'], check=True)
+        contract = java(self.root, 'src/test/java/com/jeepclub/backend/tools/Contract.java', 'package com.jeepclub.backend.tools; interface Contract { @Test default void old() {} }')
+        child = java(self.root, 'src/test/java/com/jeepclub/backend/tools/ChildTest.java', 'package com.jeepclub.backend.tools; class ChildTest implements Contract {}')
+        subprocess.run(['git', '-C', str(self.root), 'add', '.'], check=True)
+        subprocess.run(['git', '-C', str(self.root), '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'base'], check=True)
+        base = progressive.git(self.root, 'rev-parse', 'HEAD')
+        contract.write_text('package com.jeepclub.backend.tools; interface Contract { @Test default void old() {} @Test default void added() {} }')
+        records, _ = progressive.inventory(self.root)
+        self.assertIn('added', records[0]['methods'])
+        selected = progressive.select(records, 'F2', modules=['tools'])
+        methods = progressive.new_test_methods(self.root, base, selected)
+        self.assertEqual([('com.jeepclub.backend.tools.ChildTest', 'added')], [(m['classname'], m['method']) for m in methods])
+        child.write_text('package com.jeepclub.backend.tools; class ChildTest {}')
+        with self.assertRaisesRegex(progressive.Invalid, 'Changed test inheritance'):
+            progressive.new_test_methods(self.root, base, selected)
+
+    def test_new_migration_requires_hash_review_and_executed_mysql_regression(self):
+        mysql = dict(record(progressive.MYSQL, 'platform', 'mysql'), methods=progressive.SMOKE + ['upgrade'], inherited=False)
+        info = {'new': [{'path': 'V99__new.sql', 'sha256': 'correct'}]}
+        risk_file = self.root / 'risk.json'
+        self.assertEqual(({}, []), progressive.migration_risk_selectors({'new': []}, [mysql], risk_file))
+        for payload in ({}, {'wrong': {'reason': 'review', 'tests': ['MySqlMigrationIT#upgrade']}},
+                        {'correct': {'reason': 'review', 'tests': ['MySqlMigrationIT']}},
+                        {'correct': {'reason': 'review', 'tests': ['MySqlMigrationIT#' + progressive.SMOKE[0]]}},
+                        {'correct': {'reason': 'review', 'tests': ['MySqlMigrationIT#missing']}}):
+            risk_file.write_text(json.dumps(payload))
+            with self.assertRaises(progressive.Invalid):
+                progressive.migration_risk_selectors(info, [mysql], risk_file)
+        risk_file.write_text(json.dumps({'correct': {'reason': 'legacy data and constraints reviewed', 'tests': ['MySqlMigrationIT#upgrade']}}))
+        _, required = progressive.migration_risk_selectors(info, [mysql], risk_file)
+        reports = self.root / 'reports'
+        reports.mkdir()
+        with self.assertRaisesRegex(progressive.Invalid, 'lacks successful'):
+            progressive.verify_migration_risks(required, reports)
+        (reports / 'TEST-mysql.xml').write_text('<testsuite><testcase classname="' + progressive.MYSQL + '" name="upgrade"><skipped/></testcase></testsuite>')
+        with self.assertRaisesRegex(progressive.Invalid, 'lacks successful'):
+            progressive.verify_migration_risks(required, reports)
+        (reports / 'TEST-mysql.xml').write_text('<testsuite><testcase classname="' + progressive.MYSQL + '" name="upgrade"/></testsuite>')
+        self.assertEqual({'passed': 1}, progressive.verify_migration_risks(required, reports)['counts'])
+        postgres = dict(record('com.jeepclub.backend.tools.UpgradePostgresIT', 'tools', 'postgres'), methods=['upgrade'], inherited=False)
+        risk_file.write_text(json.dumps({'correct': {'reason': 'review', 'tests': ['UpgradePostgresIT#upgrade']}}))
+        with self.assertRaisesRegex(progressive.Invalid, 'MySQL'):
+            progressive.migration_risk_selectors(info, [mysql, postgres], risk_file)
+
     def test_incremental_methods_require_actual_cases(self):
         subprocess.run(['git', '-C', str(self.root), 'init', '-q'], check=True)
         path = java(self.root, 'src/test/java/com/jeepclub/backend/tools/ExistingTest.java',
@@ -174,7 +316,10 @@ class ProgressiveTests(unittest.TestCase):
         row = record('com.jeepclub.backend.tools.ToolTest', 'tools')
         (reports / 'TEST-tool.xml').write_text('<testsuite><testcase classname="' + row['name'] + '" name="works"/></testsuite>')
         argv = ['audit_reports.py', '--kind', 'unit', '--reports', str(reports), '--out', str(self.root / 'audit.json')]
-        with mock.patch.object(sys, 'argv', argv), mock.patch.object(audit, 'validate_maven'), mock.patch.object(audit, 'inventory', return_value=([row], [])):
+        with mock.patch.object(sys, 'argv', argv), mock.patch.object(audit, 'validate_maven'), \
+             mock.patch.object(audit, 'trusted_base', return_value='base'), \
+             mock.patch.object(audit, 'new_test_methods', return_value=[]), \
+             mock.patch.object(audit, 'inventory', return_value=([row], [])):
             self.assertEqual(0, audit.main())
             (reports / 'TEST-tool.xml').unlink()
             self.assertEqual(1, audit.main())

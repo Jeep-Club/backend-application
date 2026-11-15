@@ -89,6 +89,8 @@ jobs:
       - run: chmod +x mvnw
       - name: Verify frozen historical fixture hashes
         run: cd src/test/resources/database/historical && sha256sum -c SHA256SUMS
+      - name: Record MySQL gate provenance
+        run: python3 scripts/testing/audit_migrations.py --start
       - name: Validate empty and historical MySQL schemas
         run: ./mvnw --batch-mode --no-transfer-progress -Pmysql-migrations -DskipUnitTests=true verify
       - name: Reconcile eligible MySQL sources and execution
@@ -97,6 +99,8 @@ jobs:
         run: bash deploy/test-future-migration.sh
       - name: Reconcile forward compatibility execution
         run: python3 scripts/testing/audit_reports.py --kind mysql --reports target/forward-migration-evidence/failsafe-reports --out target/progressive-ci-forward.json
+      - name: Audit new migration risk against full MySQL evidence
+        run: python3 scripts/testing/audit_migrations.py --reports target/failsafe-reports --out target/progressive-ci-migration-risk.json
       - name: Preserve migration test results
         if: always()
         uses: actions/upload-artifact@v4

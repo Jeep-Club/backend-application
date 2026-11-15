@@ -69,6 +69,11 @@ Uma migration nova exige revisão vinculada ao hash e regressão de upgrade adeq
 se faltar cenário, registre bloqueio. Não altere fixtures/hashes históricos nem
 use repair/clean/baseline automática para contornar falhas.
 
+F5 e M4 também exigem a revisão e evidência dos métodos MySQL declarados no mesmo
+HEAD, aproveitando os XMLs do gate integral. Método novo de teste precisa de caso
+executado nos XMLs; skipped, discovery ausente ou identificação incerta bloqueia a
+comprovação. O CI busca a base Git completa e valida a proveniência do gate MySQL.
+
 **Obrigatório em toda funcionalidade futura:** ao adicionar/modificar testes,
 módulos, dependências ou migrations, demonstre sua descoberta na faixa apropriada
 por manifesto e execução real. Um seletor antigo não pode excluir silenciosamente

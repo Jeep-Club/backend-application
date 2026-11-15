@@ -30,6 +30,15 @@ def git(root, *args):
     return subprocess.check_output(['git', '-C', str(root), *args], text=True).strip()
 
 
+def trusted_base(root, reference, full=False):
+    base = git(root, 'merge-base', 'HEAD', reference)
+    if full:
+        develop = git(root, 'merge-base', 'HEAD', 'origin/develop')
+        if git(root, 'merge-base', base, develop) != base:
+            raise Invalid('Full validation base must be an ancestor of the fetched origin/develop merge-base')
+    return base
+
+
 def digest(data):
     return hashlib.sha256(data.replace(b'\r\n', b'\n')).hexdigest()
 
@@ -47,6 +56,26 @@ def module(name):
     if parts[0] in ('identity', 'authentication', 'authorization'):
         return 'iam.' + parts[0]  # Legacy test packages still present in this checkout.
     return '.'.join(parts[:2]) if parts[0] == 'iam' and len(parts) > 1 else parts[0]
+
+
+def test_parents(text, name):
+    """Names referenced by the top-level test type, including default-method interfaces."""
+    match = re.search(r'\b(?:class|interface)\s+' + re.escape(name) + r'\b([^{};]*)\{', source(text))
+    if not match:
+        return []
+    header = match.group(1)
+    while re.search(r'<[^<>]*>', header):
+        header = re.sub(r'<[^<>]*>', '', header)
+    if '<' in header or '>' in header:
+        raise Invalid(f'Cannot resolve generic test inheritance for {name}')
+    names = []
+    for section in re.finditer(r'\b(?:extends|implements)\s+(.*?)(?=\b(?:extends|implements)\b|$)', header):
+        for item in section.group(1).split(','):
+            item = item.strip()
+            if not re.fullmatch(r'[\w.]+', item):
+                raise Invalid(f'Cannot resolve test inheritance for {name}: {item}')
+            names.append(item.rsplit('.', 1)[-1])
+    return names
 
 
 def inventory(root):
@@ -89,14 +118,14 @@ def inventory(root):
     sources = {}
     for path in paths:
         sources.setdefault(path.stem, []).append(source(path.read_text(encoding='utf-8-sig')))
-    def inherited_methods(text, seen):
+    def inherited_methods(text, name, seen):
         methods = set(re.findall(r'\b[\w<>?,.\[\]]+\s+(\w+)\s*\(', text))
-        parent = re.search(r'\bextends\s+(\w+)', text)
-        if parent and parent[1] not in seen and len(sources.get(parent[1], [])) == 1:
-            methods |= inherited_methods(sources[parent[1]][0], seen | {parent[1]})
+        for parent in test_parents(text, name):
+            if parent not in seen and len(sources.get(parent, [])) == 1:
+                methods |= inherited_methods(sources[parent][0], parent, seen | {parent})
         return methods
     for record in records:
-        record['methods'] = sorted(inherited_methods(source((root / record['path']).read_text(encoding='utf-8-sig')), set()))
+        record['methods'] = sorted(inherited_methods(source((root / record['path']).read_text(encoding='utf-8-sig')), Path(record['path']).stem, set()))
     return records, helpers
 
 
@@ -233,7 +262,7 @@ def validate_maven(root):
             raise Invalid(f'Failsafe discovery changed for {profile}: {actual}; review discovery contract')
 
 
-def executable_methods(text):
+def executable_methods(text, with_scopes=False):
     """Conservatively identify directly annotated Jupiter methods, excluding helpers."""
     text = source(text)
     method = re.compile(r'\b(?:void|[\w.$<>\[\],?]+)\s+(\w+)\s*\([^;{}]*\)\s*(?:throws\s+[\w.,\s]+)?\s*[{;]')
@@ -246,7 +275,19 @@ def executable_methods(text):
         boundary = re.search(r'\b(?:class|interface|record|enum)\s+\w+|@(?:[\w.]+\.)?(?:Test|ParameterizedTest|RepeatedTest|TestFactory|TestTemplate)\b', tail)
         if not match or (boundary and boundary.start() < match.start()):
             raise Invalid('Unrecognized annotated test declaration; manual verification required')
-        found.append((match.group(1), annotation.group(1)))
+        scopes, pending = [], None
+        for token in re.finditer(r'\b(?:class|interface|record|enum)\s+(\w+)|[{}]', text[:annotation.start()]):
+            if token.group(1):
+                pending = token.group(1)
+            elif token.group() == '{':
+                scopes.append(pending)
+                pending = None
+            elif scopes:
+                scopes.pop()
+        owner = '.'.join(s for s in scopes if s)
+        if not owner:
+            raise Invalid('Cannot determine test method owner; manual verification required')
+        found.append((owner, match.group(1), annotation.group(1)) if with_scopes else (match.group(1), annotation.group(1)))
     return found
 
 
@@ -257,43 +298,54 @@ def new_test_methods(root, base, selected):
     for path in paths:
         by_stem.setdefault(path.stem, []).append(path)
     changed = set(git(root, 'diff', '--name-only', base, '--', 'src/test/java').splitlines())
+    changed.update(git(root, 'ls-files', '--others', '--exclude-standard', '--', 'src/test/java').splitlines())
+    if not changed:
+        return []
     result = []
     for row in selected:
         if 'path' not in row:
             continue
-        path = root / row['path']
-        chain, seen = [], set()
-        while path and path not in seen:
+        initial = root / row['path']
+        initial_rel = initial.relative_to(root).as_posix()
+        initial_exists = subprocess.run(['git', '-C', str(root), 'cat-file', '-e', f'{base}:{initial_rel}'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+        chain, seen, pending = [], set(), [initial]
+        while pending:
+            path = pending.pop()
+            if path in seen:
+                continue
             seen.add(path)
             text = path.read_text(encoding='utf-8-sig')
             chain.append((path, text))
-            parent = re.search(r'\bextends\s+(\w+)', source(text))
-            if not parent:
-                break
-            candidates = by_stem.get(parent.group(1), [])
-            if len(candidates) > 1:
-                raise Invalid(f'Cannot resolve inherited tests for {row["name"]}: {parent.group(1)}')
-            if not candidates:
-                break  # External parent cannot be changed in this source tree.
-            path = candidates[0]
+            for parent in test_parents(text, path.stem):
+                candidates = by_stem.get(parent, [])
+                if len(candidates) > 1 and (not initial_exists or any(p.relative_to(root).as_posix() in changed for p in candidates)):
+                    raise Invalid(f'Cannot resolve inherited tests for {row["name"]}: {parent}')
+                if len(candidates) == 1:
+                    pending.append(candidates[0])
         for path, current in chain:
             rel = path.relative_to(root).as_posix()
-            if rel not in changed:
+            if rel not in changed and initial_exists:
                 continue
             exists = subprocess.run(['git', '-C', str(root), 'cat-file', '-e', f'{base}:{rel}'],
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
-            if not exists:
-                continue  # New classes already require class-level reconciliation.
-            old = subprocess.check_output(['git', '-C', str(root), 'show', f'{base}:{rel}']).decode('utf-8-sig')
-            before = set(executable_methods(old))
-            now = executable_methods(current)
-            for name, annotation in now:
-                if (name, annotation) not in before:
+            old = subprocess.check_output(['git', '-C', str(root), 'show', f'{base}:{rel}']).decode('utf-8-sig') if exists else ''
+            if exists and test_parents(old, path.stem) != test_parents(current, path.stem):
+                raise Invalid(f'Changed test inheritance in {rel}; manual verification required')
+            if not initial_exists:
+                old = ''  # A new subclass must prove every inherited executable method too.
+            before = set(executable_methods(old, with_scopes=True))
+            now = executable_methods(current, with_scopes=True)
+            for owner, name, annotation in now:
+                if (owner, name, annotation) not in before:
                     if '#' in row['selector'] and row['selector'].partition('#')[2] != name:
                         continue
-                    if sum(n == name for n, _ in now) != 1:
+                    if sum(n == name for _, n, _ in now) != 1 or any(n == name and prior_owner != owner for prior_owner, n, _ in before):
                         raise Invalid(f'Ambiguous new test method {rel}#{name}; manual verification required')
-                    result.append(dict(classname=row['name'], method=name, annotation=annotation, source=rel))
+                    if any(name in {n for n, _ in executable_methods(other_text)} for other_path, other_text in chain if other_path != path):
+                        raise Invalid(f'Overridden or ambiguous inherited test {rel}#{name}; manual verification required')
+                    dynamic = any(a == 'TestFactory' for _, chain_text in chain for _, a in executable_methods(chain_text))
+                    result.append(dict(classname=row['name'], method=name, annotation=annotation, source=rel,
+                                       owner=owner, dynamic_ambiguity=dynamic))
     return list({(x['classname'], x['method'], x['source']): x for x in result}.values())
 
 
@@ -303,10 +355,10 @@ def reconcile_new_methods(methods, cases):
         cls, name = item['classname'], item['method']
         matching = [c for c in cases if (c['classname'] == cls or c['classname'].startswith(cls + '$'))
                     and (c['name'] == name or c['name'].startswith(name + '(') or c['name'].startswith(name + '['))]
-        if item['annotation'] == 'TestFactory':
+        if item['annotation'] == 'TestFactory' or item.get('dynamic_ambiguity'):
             state = 'unproven'  # Dynamic testcase names do not prove their factory identity.
         elif not matching:
-            state = 'not_discovered'
+            state = 'unproven' if item['annotation'] == 'TestTemplate' else 'not_discovered'
         elif any(c['status'] in ('failure', 'error') for c in matching):
             state = 'failed'
         elif any(c['status'] == 'skipped' for c in matching):
@@ -315,6 +367,43 @@ def reconcile_new_methods(methods, cases):
             state = 'executed'
         results.append(dict(item, status=state))
     return results
+
+
+def migration_risk_selectors(info, records, risk_file):
+    if not info['new']:
+        return {}, []
+    risks = json.loads(risk_file.read_text(encoding='utf-8')) if risk_file and risk_file.is_file() else {}
+    if not isinstance(risks, dict):
+        raise Invalid('Risk file must contain a JSON object keyed by migration sha256')
+    selectors = []
+    for migration in info['new']:
+        risk = risks.get(migration['sha256'], {})
+        if not isinstance(risk, dict) or not isinstance(risk.get('reason'), str) or not risk['reason'].strip() or not isinstance(risk.get('tests'), list) or not risk['tests']:
+            raise Invalid(f'Uncovered new migration {migration["path"]}: require sha256-bound risk review and upgrade/constraint tests in --risk-file')
+        chosen = select(records, 'F1', focus=risk['tests'])
+        if any('#' not in r['selector'] for r in chosen):
+            raise Invalid('Migration risk review requires explicit regression methods, not whole classes')
+        if all(r['selector'] in [MYSQL + '#' + m for m in SMOKE] for r in chosen):
+            raise Invalid(f'New migration {migration["path"]}: schema smoke alone cannot prove historical compatibility')
+        selectors.extend(r['selector'] for r in chosen)
+    selected = select(records, 'F1', focus=selectors)
+    if any(r['kind'] != 'mysql' for r in selected):
+        raise Invalid('Migrations require MySQL integration selectors')
+    return risks, selected
+
+
+def verify_migration_risks(required, report):
+    if not required:
+        return None
+    result = reconcile(required, report)
+    if result['not_executed'] or result['all_skipped_selectors'] or result['counts'].get('failure') or result['counts'].get('error') or result['counts'].get('skipped'):
+        raise Invalid('Migration risk regression lacks successful MySQL execution: ' + str(result['not_executed'] or result['all_skipped_selectors']))
+    cases = [c for c in result['cases'] if any(
+        (c['classname'] == r['name'] or c['classname'].startswith(r['name'] + '$')) and
+        (c['name'] == r['selector'].partition('#')[2] or c['name'].startswith(r['selector'].partition('#')[2] + '(') or c['name'].startswith(r['selector'].partition('#')[2] + '['))
+        for r in required)]
+    return dict(selectors=[r['selector'] for r in required], cases=cases,
+                counts=dict(Counter(c['status'] for c in cases)))
 
 
 def commands(selected, full=False, migration=None):
@@ -465,10 +554,22 @@ def run(root, plan, out):
         required = [m for m in plan.get('new_test_methods', []) if any(
             r['name'] == m['classname'] and ('#' not in r['selector'] or r['selector'].partition('#')[2] == m['method']) for r in relevant)]
         stats['new_methods'] = reconcile_new_methods(required, stats['cases'])
+        risk_error = None
+        integrity_error = None
+        if plan.get('band') == 'F5' or plan.get('migration') == 'M4':
+            if git(root, 'rev-parse', 'HEAD') != plan['sha'] or git(root, 'status', '--porcelain'):
+                integrity_error = 'Full gate requires the same clean committed HEAD throughout execution'
+        if '-Pmysql-migrations' in cmd and (plan.get('band') == 'F5' or plan.get('migration') == 'M4') and plan.get('risk_selectors'):
+            try:
+                verify_migration_risks(plan['risk_selectors'], report)
+            except Invalid as exc:
+                risk_error = str(exc)
+        stats['migration_risk_error'] = risk_error
+        stats['gate_integrity_error'] = integrity_error
         if report.exists():
             shutil.copytree(report, folder / 'reports')
         skipped = stats['counts'].get('skipped', 0)
-        ok = not (code or stats['not_executed'] or stats['all_skipped_selectors'] or stats['unexpected_cases'] or any(m['status'] != 'executed' for m in stats['new_methods']) or stats['counts'].get('failure') or stats['counts'].get('error')
+        ok = not (code or risk_error or integrity_error or stats['not_executed'] or stats['all_skipped_selectors'] or stats['unexpected_cases'] or any(m['status'] != 'executed' for m in stats['new_methods']) or stats['counts'].get('failure') or stats['counts'].get('error')
                   or (skipped and any(r['kind'] != 'unit' for r in relevant)))
         runs.append(dict(command=cmd, selected_selectors=[r['selector'] for r in relevant], exit_code=code, passed=ok, seconds=round(time.monotonic()-started, 3),
                          log=str(log), **stats))
@@ -477,7 +578,7 @@ def run(root, plan, out):
             remaining_commands=plan['commands'][index + 1:],
             not_run=sorted({r['name'] for r in plan['selected']} - reported)), indent=2), encoding='utf-8')
         print(json.dumps(dict(exit_code=code, passed=ok, seconds=runs[-1]['seconds'],
-                              log=str(log), **compact(stats)), ensure_ascii=False))
+                              log=str(log), migration_risk_error=risk_error, gate_integrity_error=integrity_error, **compact(stats)), ensure_ascii=False))
         if not ok:
             return code or 1
     return 0
@@ -508,8 +609,12 @@ def main(argv=None):
         records, helpers = inventory(root)
         risks = {}
         edges = relations(root, {r['module'] for r in records})
-        base = git(root, 'merge-base', 'HEAD', args.base)
-        static = static_migrations(root, base) if args.migration else None
+        base = trusted_base(root, args.base, args.band == 'F5' or args.migration == 'M4')
+        static = static_migrations(root, base) if args.migration or args.band == 'F5' else None
+        risk_selectors = []
+        if args.migration in ('M3', 'M4') or args.band == 'F5':
+            risk_path = args.risk_file or root / 'docs/testing/migration-risk.json'
+            risks, risk_selectors = migration_risk_selectors(static, records, risk_path)
         if args.migration and (args.module or args.test or args.dependency):
             raise Invalid('Migration levels cannot be narrowed with functional selectors')
         if args.band == 'F3' and not (args.impact_review and args.impact_review.strip()):
@@ -522,19 +627,8 @@ def main(argv=None):
                 selected = []
             if args.migration in ('M2', 'M3'):
                 selectors = [MYSQL + '#' + m for m in SMOKE] if args.migration == 'M2' else [MYSQL]
-                if args.migration == 'M3' and static['new']:
-                    risks = json.loads(args.risk_file.read_text(encoding='utf-8')) if args.risk_file else {}
-                    if not isinstance(risks, dict):
-                        raise Invalid('Risk file must contain a JSON object keyed by migration sha256')
-                    for new in static['new']:
-                        risk = risks.get(new['sha256'], {})
-                        if not isinstance(risk, dict):
-                            raise Invalid('Each migration risk declaration must be a JSON object')
-                        if not isinstance(risk.get('reason'), str) or not risk['reason'].strip() or not isinstance(risk.get('tests'), list) or not risk['tests']:
-                            raise Invalid(f'Uncovered new migration {new["path"]}: require sha256-bound risk review and upgrade/constraint tests in --risk-file')
-                        if all(t in [MYSQL + '#' + m for m in SMOKE] for t in risk['tests']):
-                            raise Invalid(f'New migration {new["path"]}: schema smoke alone cannot prove historical compatibility')
-                        selectors.extend(risk['tests'])
+                if args.migration == 'M3':
+                    selectors.extend(r['selector'] for r in risk_selectors)
                 selected = select(records, 'F1', focus=selectors)
                 if any(r['kind'] != 'mysql' for r in selected):
                     raise Invalid('Migrations require MySQL integration selectors')
@@ -553,7 +647,8 @@ def main(argv=None):
                     relations=edges if args.band == 'F3' else [], impact_review=args.impact_review,
                     migrations=static, commands=cmds,
                     request=dict(modules=args.module, tests=args.test, dependencies=args.dependency, base=args.base),
-                    risk_review=risks,
+                    risk_review=risks, risk_selectors=risk_selectors,
+                    semantic_review_required=bool(risk_selectors),
                     new_test_methods=new_methods, comparison_base=base,
                     limitations=['Source candidates are not JUnit case counts; XML reconciles execution.',
                                  'Import closure cannot infer reflection, events, configuration or external consumers.',

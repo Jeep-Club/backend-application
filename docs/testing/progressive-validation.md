@@ -135,6 +135,17 @@ Uma migration nova deixa M1/M2 explicitamente parciais e bloqueia M3 até fornec
 }
 ```
 
+F5 e M4 aplicam a mesma exigência. O arquivo padrão é
+`docs/testing/migration-risk.json` (versione-o junto à migration) ou use
+`--risk-file`. Declare métodos MySQL explícitos: classe inteira ou somente smoke
+não comprova a regressão. O runner confronta esses métodos com os XMLs recém-gerados
+do profile integral no mesmo HEAD limpo, sem repetir M3. O CI registra identidade
+do checkout/run antes do comando MySQL original e audita seus XMLs depois do V+1;
+relatórios antigos, incompletos, de outro SHA ou run são recusados. A aprovação da
+revisão semântica e da suficiência dos cenários de dados/constraints permanece humana.
+Para F5/M4 e auditorias completas, a base escolhida deve ser ancestral do merge-base
+com `origin/develop` obtido por fetch; base ausente ou avançada indevidamente falha.
+
 Os seletores precisam existir e ser MySQL. A declaração deve apontar regressões de
 upgrade/dados/constraints proporcionais ao risco; smoke vazio sozinho não é suficiente.
 O runner verifica existência e execução, não consegue provar a suficiência semântica
@@ -158,8 +169,9 @@ O runner e o auditor comparam métodos Jupiter anotados em fontes existentes com
 merge-base de `--base` (padrão `origin/develop`). O checkout precisa conter essa
 referência e ancestralidade; ausência falha explicitamente. Cada método novo no
 escopo é confrontado com os XMLs, distinguindo executado, skipped, não descoberto,
-falho e não comprovado. `@TestFactory` exige comprovação manual e bloqueia o aceite;
-namespaces, herança ambígua e declarações não reconhecidas exigem revisão. Helpers e
+falho e não comprovado. `@TestFactory`, ou um factory que torne a atribuição de
+outro caso ambígua, exige comprovação manual e bloqueia o aceite; hierarquia de
+classe/interface alterada, herança ambígua e declarações não reconhecidas exigem revisão. Helpers e
 hooks sem anotação de teste não entram nessa comparação. A execução parametrizada
 exige ao menos uma invocação reconhecível e nenhum skip/falha correspondente.
 
