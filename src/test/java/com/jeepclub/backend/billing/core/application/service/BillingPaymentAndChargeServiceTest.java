@@ -44,7 +44,7 @@ class BillingPaymentAndChargeServiceTest {
     @BeforeEach void setup() {
         adminPayments = new AdminMemberPaymentService(payments, charges, CLOCK, cycles, refunds);
         adminCharges = new AdminMemberChargeService(charges, payments, CLOCK);
-        memberCharges = new MemberChargeService(charges, CLOCK);
+        memberCharges = new MemberChargeService(charges, cycles, CLOCK);
         memberPayments = memberPayments(CLOCK);
     }
     private MemberPaymentService memberPayments(Clock clock) {
@@ -93,7 +93,9 @@ class BillingPaymentAndChargeServiceTest {
     @Test void memberReadsAreOwnerScopedAndAdministrativeFilterCombinationsUseCorrectRepository() {
         var c = charge(); var page = new PageImpl<>(List.of(c)); var pageable = Pageable.unpaged();
         when(charges.findById(2L)).thenReturn(Optional.of(c));
-        assertThat(memberCharges.findMineById(10L, 2L).userId()).isEqualTo(10L);
+        when(cycles.findById(4L)).thenReturn(Optional.of(cycle()));
+        when(cycles.findByIds(any())).thenReturn(List.of(cycle()));
+        assertThat(memberCharges.findMineById(10L, 2L).charge().userId()).isEqualTo(10L);
         assertThatThrownBy(() -> memberCharges.findMineById(20L, 2L)).isInstanceOf(MemberChargeAccessDeniedException.class);
         assertThatThrownBy(() -> memberCharges.findMineById(10L, 404L)).isInstanceOf(MemberChargeNotFoundException.class);
         when(charges.findByUserId(10L, pageable)).thenReturn(page); when(charges.findByUserIdAndStatus(10L, MemberChargeStatus.PENDING, pageable)).thenReturn(page);
@@ -105,6 +107,46 @@ class BillingPaymentAndChargeServiceTest {
         assertThat(adminCharges.findAll(null, MemberChargeStatus.PENDING, pageable).getContent()).hasSize(1);
         assertThat(adminCharges.findAll(10L, MemberChargeStatus.PENDING, pageable).getContent()).hasSize(1);
         assertThat(adminCharges.findById(2L).id()).isEqualTo(2L);
+    }
+    @Test void memberPageResolvesDistinctCyclesOnceAndPreservesPage() {
+        var first = charge(); var second = charge();
+        var pageable = PageRequest.of(1, 2, Sort.by("id"));
+        when(charges.findByUserId(10L, pageable)).thenReturn(new PageImpl<>(List.of(first, second), pageable, 5));
+        when(cycles.findByIds(List.of(4L))).thenReturn(List.of(cycle()));
+        var result = memberCharges.findMine(10L, null, pageable);
+        assertThat(result.getTotalElements()).isEqualTo(5);
+        assertThat(result.getTotalPages()).isEqualTo(3);
+        assertThat(result.getContent()).extracting(r -> r.charge().id()).containsExactly(2L, 2L);
+        assertThat(result.getContent()).allSatisfy(r -> {
+            assertThat(r.chargeDefinitionNameSnapshot()).isEqualTo("monthly fee");
+            assertThat(r.chargeCycleCode()).isEqualTo("2026-09");
+        });
+        verify(cycles).findByIds(List.of(4L));
+        verifyNoMoreInteractions(cycles);
+    }
+    @Test void memberPageAssociatesDistinctCyclesWithoutPerChargeLookups() {
+        var other = MemberCharge.reconstitute(8L, 10L, 3L, 9L, AMOUNT, AMOUNT, DUE,
+                com.jeepclub.backend.billing.core.domain.enums.cycle.PaymentAcceptancePolicy.UNTIL_DUE_DATE,
+                null, DUE, MemberChargeStatus.PENDING, NOW, null, null, null);
+        var secondCycle = withId(ChargeCycle.generate(definition(), "another-cycle", DUE, 99L, NOW), 9L);
+        when(charges.findByUserId(10L, Pageable.unpaged())).thenReturn(new PageImpl<>(List.of(charge(), other)));
+        when(cycles.findByIds(List.of(4L, 9L))).thenReturn(List.of(secondCycle, cycle()));
+        var result = memberCharges.findMine(10L, null, Pageable.unpaged());
+        assertThat(result.getContent()).extracting(r -> r.chargeCycleCode()).containsExactly("2026-09", "another-cycle");
+        verify(cycles).findByIds(List.of(4L, 9L));
+        verifyNoMoreInteractions(cycles);
+    }
+    @Test void emptyPageAndDeniedDetailNeverReadCycles() {
+        when(charges.findByUserId(10L, Pageable.unpaged())).thenReturn(Page.empty());
+        assertThat(memberCharges.findMine(10L, null, Pageable.unpaged())).isEmpty();
+        when(charges.findById(2L)).thenReturn(Optional.of(charge()));
+        assertThatThrownBy(() -> memberCharges.findMineById(20L, 2L)).isInstanceOf(MemberChargeAccessDeniedException.class);
+        verifyNoInteractions(cycles);
+    }
+    @Test void brokenCycleReferenceFailsWithoutFallback() {
+        when(charges.findById(2L)).thenReturn(Optional.of(charge()));
+        assertThatThrownBy(() -> memberCharges.findMineById(10L, 2L))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("missing or inconsistent cycle");
     }
     @ParameterizedTest @ValueSource(ints = {0, 1, 2, 3, 4})
     void invalidSubmissionNeverTouchesStorage(int conflict) {

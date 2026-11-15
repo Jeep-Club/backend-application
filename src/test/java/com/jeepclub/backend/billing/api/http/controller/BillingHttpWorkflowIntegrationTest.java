@@ -163,14 +163,39 @@ class BillingHttpWorkflowIntegrationTest {
                 .andExpect(content().contentTypeCompatibleWith("application/problem+json")).andExpect(jsonPath("$.code").value("MEMBER_CHARGE_ACCESS_DENIED"))
                 .andExpect(jsonPath("$.timestamp").exists());
         mvc.perform(token(get("/billing/me/member-charges"))).andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(0));
-        auth(10L); mvc.perform(token(get("/billing/me/member-charges?status=PENDING"))).andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(1));
-        mvc.perform(token(get("/billing/me/member-charges/{id}", debt.getId()))).andExpect(status().isOk());
+        auth(10L); mvc.perform(token(get("/billing/me/member-charges?status=PENDING"))).andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(1))
+                .andExpect(jsonPath("$.content[0].chargeDefinitionNameSnapshot").value("seed"))
+                .andExpect(jsonPath("$.content[0].chargeCycleCode").value("seed-cycle"));
+        mvc.perform(token(get("/billing/me/member-charges/{id}", debt.getId()))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.chargeDefinitionNameSnapshot").value("seed"))
+                .andExpect(jsonPath("$.chargeCycleCode").value("seed-cycle"));
+        mvc.perform(token(get("/billing/me/member-charges/999999"))).andExpect(status().isNotFound());
+        mvc.perform(get("/billing/me/member-charges")).andExpect(status().isUnauthorized());
         when(storage.store(any(), any())).thenReturn(new StoredFile("private-key"));
         mvc.perform(upload("/billing/member-charges/{id}/payments", debt.getId(), false)).andExpect(status().isCreated());
         mvc.perform(upload("/billing/member-charges/{id}/payments", debt.getId(), false)).andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("MEMBER_PAYMENT_ALREADY_EXISTS"));
         auth(99L, "BILLING_MEMBER_CHARGE_UPDATE");
         mvc.perform(body(patch("/billing/member-charges/{id}/final-amount", debt.getId()), "{\"finalAmount\":50}"))
                 .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("MEMBER_CHARGE_CANNOT_UPDATE_FINAL_AMOUNT"));
+    }
+    @Test void historicalCycleMetadataSurvivesRenameAndArchiveAndAdminContractRemainsStable() throws Exception {
+        var debt = seedCharge();
+        var cycle = cycles.findById(debt.getChargeCycleId()).orElseThrow();
+        cycle.finish(99L, NOW); cycle.archive(99L, NOW); cycles.save(cycle);
+        jdbc.update("update billing_charge_definitions set name=? where id=?", "renamed", debt.getChargeDefinitionId());
+        auth(10L);
+        mvc.perform(token(get("/billing/me/member-charges").param("size", "100").param("sort", "id,desc")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.size").value(50))
+                .andExpect(jsonPath("$.content[0].id").value(debt.getId()))
+                .andExpect(jsonPath("$.content[0].chargeDefinitionNameSnapshot").value("seed"))
+                .andExpect(jsonPath("$.content[0].chargeCycleCode").value("seed-cycle"));
+        mvc.perform(token(get("/billing/me/member-charges/{id}", debt.getId())))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.chargeDefinitionNameSnapshot").value("seed"))
+                .andExpect(jsonPath("$.chargeCycleCode").value("seed-cycle"));
+        auth(99L, "BILLING_MEMBER_CHARGE_READ");
+        mvc.perform(token(get("/billing/member-charges/{id}", debt.getId())))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.chargeCycleCode").doesNotExist())
+                .andExpect(jsonPath("$.chargeDefinitionNameSnapshot").doesNotExist());
     }
     @ParameterizedTest @ValueSource(strings = {"{}", "{\"name\":\" \",\"defaultAmount\":0}", "{\"name\":\"fee\",\"recurrenceType\":\"INVALID\"}"})
     void invalidDefinitionPayloadUsesBeanValidationProblem(String payload) throws Exception {
