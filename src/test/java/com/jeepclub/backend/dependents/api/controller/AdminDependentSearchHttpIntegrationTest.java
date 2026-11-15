@@ -1,8 +1,13 @@
 package com.jeepclub.backend.dependents.api.controller;
 
+import com.jeepclub.backend.dependents.core.application.query.AdminDependentFilter;
 import com.jeepclub.backend.dependents.core.domain.enums.DependentStatus;
 import com.jeepclub.backend.dependents.core.domain.enums.RelationshipType;
 import com.jeepclub.backend.dependents.infra.persistence.entity.DependentEntity;
+import com.jeepclub.backend.dependents.infra.persistence.entity.DependentHistoryEntity;
+import com.jeepclub.backend.health.core.domain.enums.BloodType;
+import com.jeepclub.backend.health.core.domain.enums.MedicalProfileOwnerType;
+import com.jeepclub.backend.health.infra.persistence.entity.MedicalProfileEntity;
 import com.jeepclub.backend.iam.authentication.core.application.service.security.AccessTokenAuthenticationService;
 import com.jeepclub.backend.iam.identity.api.module.UserQuery;
 import com.jeepclub.backend.iam.identity.api.module.UserStatus;
@@ -205,17 +210,104 @@ class AdminDependentSearchHttpIntegrationTest {
     }
 
     @Test
+    void multiOwnerAndMultiIdSelectionApplyOrWithinListsAndAcrossFiltersWithoutLeakingHistoryOrClinicalData() throws Exception {
+        long ownerA = owner("Titular Família A");
+        long ownerB = owner("Titular Família B");
+        long ownerC = owner("Titular Família C");
+
+        var depA1 = dependent(ownerA, "Helena Silva", "10020030040", RelationshipType.CHILD, "11911110001", "SECRET_STORAGE_SENTINEL");
+        var depA2 = dependent(ownerA, "Igor Silva", "10020030041", RelationshipType.SPOUSE, "11911110002", null);
+        depA2.setStatus(DependentStatus.INACTIVE);
+        var depB1 = dependent(ownerB, "Helena Souza", "20030040050", RelationshipType.CHILD, "11922220001", null);
+        var depC1 = dependent(ownerC, "Helena Costa", "30040050060", RelationshipType.CHILD, "11933330001", null);
+
+        var history = new DependentHistoryEntity();
+        history.setDependentId(888888L);
+        history.setUserId(ownerA);
+        history.setName("Helena Removida");
+        history.setCpf("40050060070");
+        history.setBirthDate(LocalDate.of(2011, 3, 10));
+        history.setRelationshipType(RelationshipType.CHILD);
+        history.setStatus(DependentStatus.ACTIVE);
+        history.setDeletedByUserId(99L);
+        history.setCreatedAt(Instant.parse("2026-06-30T12:00:00Z"));
+        history.setDeletedAt(Instant.parse("2026-06-30T13:00:00Z"));
+        em.persist(history);
+
+        var medical = new MedicalProfileEntity();
+        medical.setOwnerType(MedicalProfileOwnerType.DEPENDENT);
+        medical.setOwnerId(depA1.getId());
+        medical.setBloodType(BloodType.O_POSITIVE);
+        medical.setAllergies("CLINICAL_SENTINEL");
+        medical.setCreatedAt(Instant.parse("2026-06-30T12:00:00Z"));
+        medical.setUpdatedAt(Instant.parse("2026-06-30T12:00:00Z"));
+        em.persist(medical);
+        em.flush();
+        em.clear();
+        Sql.statements.get().clear();
+
+        // Selection across 2 owners with duplicate userIds, verifying batch owner resolution and no N+1
+        var multiOwnerResponse = mvc.perform(get("/admin/dependents")
+                        .header("Authorization", "Bearer search-token")
+                        .param("userIds", Long.toString(ownerA), Long.toString(ownerB), Long.toString(ownerA)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(3))
+                .andExpect(jsonPath("$.content.length()").value(3))
+                .andExpect(jsonPath("$.content[0].id").value(depA1.getId()))
+                .andExpect(jsonPath("$.content[0].ownerName").value("Titular Família A"))
+                .andExpect(jsonPath("$.content[1].id").value(depA2.getId()))
+                .andExpect(jsonPath("$.content[2].id").value(depB1.getId()))
+                .andExpect(jsonPath("$.content[2].ownerName").value("Titular Família B"))
+                .andReturn().getResponse().getContentAsString();
+        assertThat(multiOwnerResponse).doesNotContain("CLINICAL_SENTINEL", "SECRET_STORAGE_SENTINEL", "Helena Costa", "Helena Removida");
+        // 2 statements for dependents (page + count) + 1 batch statement for UserQuery.findByIds
+        assertThat(Sql.statements.get()).hasSize(3);
+
+        // Selection by multiple dependent IDs with duplicates and a removed historical ID (888888)
+        mvc.perform(get("/admin/dependents")
+                        .header("Authorization", "Bearer search-token")
+                        .param("ids", Long.toString(depB1.getId()), Long.toString(depA1.getId()), Long.toString(depB1.getId()), "888888"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(2))
+                .andExpect(jsonPath("$.content.length()").value(2))
+                .andExpect(jsonPath("$.content[0].id").value(depA1.getId()))
+                .andExpect(jsonPath("$.content[1].id").value(depB1.getId()));
+
+        // Combined OR within lists and AND across filter groups (ids + userIds + name + status)
+        mvc.perform(get("/admin/dependents")
+                        .header("Authorization", "Bearer search-token")
+                        .param("ids", Long.toString(depA1.getId()), Long.toString(depA2.getId()), Long.toString(depB1.getId()), Long.toString(depC1.getId()))
+                        .param("userIds", Long.toString(ownerA), Long.toString(ownerB))
+                        .param("name", "helena")
+                        .param("status", "ACTIVE"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(2))
+                .andExpect(jsonPath("$.content[0].id").value(depA1.getId()))
+                .andExpect(jsonPath("$.content[1].id").value(depB1.getId()));
+
+        // Nonexistent IDs in admin search return empty page (200 OK)
+        mvc.perform(get("/admin/dependents")
+                        .header("Authorization", "Bearer search-token")
+                        .param("ids", "999999"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(0))
+                .andExpect(jsonPath("$.content").isEmpty());
+    }
+
+    @Test
     void invalidParametersAre400AndAuthorizationIsPreserved() throws Exception {
-        Map<String, String> invalidParams = Map.of(
-                "fields", "PHOTO_STORAGE_KEY",
-                "sort", "ownerName,asc",
-                "userId", "0",
-                "status", "INVALID",
-                "relationshipType", "INVALID",
-                "q", "x".repeat(151),
-                "page", "-1",
-                "size", "0",
-                "cpf", "---"
+        Map<String, String> invalidParams = Map.ofEntries(
+                Map.entry("fields", "PHOTO_STORAGE_KEY"),
+                Map.entry("sort", "ownerName,asc"),
+                Map.entry("userId", "0"),
+                Map.entry("ids", "0"),
+                Map.entry("userIds", "0"),
+                Map.entry("status", "INVALID"),
+                Map.entry("relationshipType", "INVALID"),
+                Map.entry("q", "x".repeat(151)),
+                Map.entry("page", "-1"),
+                Map.entry("size", "0"),
+                Map.entry("cpf", "---")
         );
         for (var invalid : invalidParams.entrySet()) {
             mvc.perform(get("/admin/dependents")
@@ -224,6 +316,32 @@ class AdminDependentSearchHttpIntegrationTest {
                     .andExpect(status().isBadRequest())
                     .andExpect(content().contentTypeCompatibleWith("application/problem+json"));
         }
+
+        for (String param : List.of("ids", "userIds")) {
+            for (String invalidValue : List.of("", "-5", "abc")) {
+                mvc.perform(get("/admin/dependents")
+                                .header("Authorization", "Bearer search-token")
+                                .param(param, invalidValue))
+                        .andExpect(status().isBadRequest())
+                        .andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+            }
+            String[] oversized = java.util.stream.LongStream.rangeClosed(1, AdminDependentFilter.MAX_IDS + 1)
+                    .mapToObj(Long::toString)
+                    .toArray(String[]::new);
+            mvc.perform(get("/admin/dependents")
+                            .header("Authorization", "Bearer search-token")
+                            .param(param, oversized))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+        }
+
+        // Ambiguous combination userId + userIds must return 400
+        mvc.perform(get("/admin/dependents")
+                        .header("Authorization", "Bearer search-token")
+                        .param("userId", "1")
+                        .param("userIds", "1", "2"))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith("application/problem+json"));
 
         mvc.perform(get("/admin/dependents")
                         .header("Authorization", "Bearer search-token")
@@ -245,6 +363,15 @@ class AdminDependentSearchHttpIntegrationTest {
                 .andExpect(status().isNotFound());
 
         mvc.perform(get("/admin/dependents")).andExpect(status().isUnauthorized());
+
+        // DEPENDENTS_DEPENDENT_EXPORT does not grant access to operational READ endpoints
+        when(authorities.findAuthorityCodesByUserId(99L)).thenReturn(List.of("DEPENDENTS_DEPENDENT_EXPORT"));
+        mvc.perform(get("/admin/dependents")
+                        .header("Authorization", "Bearer search-token"))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/admin/dependents/1")
+                        .header("Authorization", "Bearer search-token"))
+                .andExpect(status().isForbidden());
 
         when(authorities.findAuthorityCodesByUserId(99L)).thenReturn(List.of());
         mvc.perform(get("/admin/dependents")

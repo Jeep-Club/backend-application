@@ -27,6 +27,7 @@ import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Set;
 
 /** Module-local tuple query; no Identity persistence access and no entity materialization. */
@@ -50,8 +51,8 @@ public final class AdminDependentJpaQuery {
     private final UserNameCriteria ownerNames;
 
     public AdminDependentJpaQuery(EntityManager em, UserNameCriteria ownerNames) {
-        this.em = em;
-        this.ownerNames = ownerNames;
+        this.em = Objects.requireNonNull(em, "em cannot be null");
+        this.ownerNames = Objects.requireNonNull(ownerNames, "ownerNames cannot be null");
     }
 
     public Page<AdminDependentSearchResult> findAll(
@@ -121,11 +122,19 @@ public final class AdminDependentJpaQuery {
             CommonAbstractCriteria query
     ) {
         List<Predicate> result = new ArrayList<>();
+        if (filter.ids() != null) {
+            result.add(filter.ids().size() == 1
+                    ? cb.equal(root.get("id"), filter.ids().get(0))
+                    : root.get("id").in(filter.ids()));
+        }
+        List<Long> effectiveUserIds = filter.effectiveUserIds();
+        if (effectiveUserIds != null) {
+            result.add(effectiveUserIds.size() == 1
+                    ? cb.equal(root.get("userId"), effectiveUserIds.get(0))
+                    : root.get("userId").in(effectiveUserIds));
+        }
         if (filter.status() != null) {
             result.add(cb.equal(root.get("status"), filter.status()));
-        }
-        if (filter.userId() != null) {
-            result.add(cb.equal(root.get("userId"), filter.userId()));
         }
         if (filter.relationshipType() != null) {
             result.add(cb.equal(root.get("relationshipType"), filter.relationshipType()));
@@ -146,9 +155,7 @@ public final class AdminDependentJpaQuery {
                 orBranches.add(cb.like(root.get("cpf"), numericPattern, '!'));
                 orBranches.add(cb.like(root.get("phoneNumber"), numericPattern, '!'));
             }
-            if (ownerNames != null) {
-                orBranches.add(ownerNames.matches(cb, query, root.get("userId"), filter.q()));
-            }
+            orBranches.add(ownerNames.matches(cb, query, root.get("userId"), filter.q()));
             result.add(cb.or(orBranches.toArray(Predicate[]::new)));
         }
         return result;

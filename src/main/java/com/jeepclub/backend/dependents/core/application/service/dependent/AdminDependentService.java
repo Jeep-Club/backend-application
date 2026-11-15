@@ -9,7 +9,7 @@ import com.jeepclub.backend.dependents.core.application.result.DependentResult;
 import com.jeepclub.backend.dependents.core.domain.model.Dependent;
 import com.jeepclub.backend.dependents.core.port.DependentUserPort;
 import com.jeepclub.backend.dependents.core.repository.DependentRepository;
-import org.springframework.beans.factory.annotation.Autowired;
+import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -21,23 +21,11 @@ import java.util.Objects;
 import java.util.Set;
 
 @Service
+@RequiredArgsConstructor
 public class AdminDependentService {
 
     private final DependentRepository dependentRepository;
     private final DependentUserPort userPort;
-
-    public AdminDependentService(DependentRepository dependentRepository) {
-        this(dependentRepository, null);
-    }
-
-    @Autowired
-    public AdminDependentService(
-            DependentRepository dependentRepository,
-            DependentUserPort userPort
-    ) {
-        this.dependentRepository = dependentRepository;
-        this.userPort = userPort;
-    }
 
     @Transactional(readOnly = true)
     public Page<AdminDependentSearchResult> search(
@@ -49,7 +37,7 @@ public class AdminDependentService {
             throw new InvalidDependentSearchException("Pagination offset exceeds the supported range.");
         }
         Page<AdminDependentSearchResult> page = dependentRepository.search(filter, fields, pageable);
-        if (!fields.contains(AdminDependentField.OWNER_NAME) || page.isEmpty() || userPort == null) {
+        if (!fields.contains(AdminDependentField.OWNER_NAME) || page.isEmpty()) {
             return page;
         }
         List<Long> ownerIds = page.getContent().stream()
@@ -65,9 +53,7 @@ public class AdminDependentService {
     public AdminDependentSearchResult findAdminById(Long id) {
         Dependent dependent = dependentRepository.findById(id)
                 .orElseThrow(() -> new DependentNotFoundException(id));
-        String ownerName = userPort == null
-                ? null
-                : userPort.findNamesByIds(List.of(dependent.getUserId())).get(dependent.getUserId());
+        String ownerName = userPort.findNamesByIds(List.of(dependent.getUserId())).get(dependent.getUserId());
         return AdminDependentSearchResult.from(dependent, ownerName);
     }
 

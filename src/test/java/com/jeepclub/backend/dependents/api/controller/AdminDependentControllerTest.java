@@ -80,7 +80,10 @@ class AdminDependentControllerTest {
                 .thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(searchRow)));
         when(adminDependentService.findAdminById(10L)).thenReturn(searchRow);
 
-        mockMvc.perform(get("/admin/dependents").param("q", "Pedro"))
+        mockMvc.perform(get("/admin/dependents")
+                        .param("q", "Pedro")
+                        .param("ids", "10", "11")
+                        .param("userIds", "5", "6"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content[0].id").value(10L))
                 .andExpect(jsonPath("$.content[0].ownerName").value("João Silva"))

@@ -27,12 +27,7 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class DependentRepositoryAdapter implements DependentRepository {
     private final jakarta.persistence.EntityManager entityManager;
-    private com.jeepclub.backend.iam.identity.api.module.UserNameCriteria ownerNames;
-
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    public void setOwnerNames(com.jeepclub.backend.iam.identity.api.module.UserNameCriteria ownerNames) {
-        this.ownerNames = ownerNames;
-    }
+    private final com.jeepclub.backend.iam.identity.api.module.UserNameCriteria ownerNames;
 
     @Override
     public org.springframework.data.domain.Page<com.jeepclub.backend.dependents.core.application.result.AdminDependentSearchResult> search(
