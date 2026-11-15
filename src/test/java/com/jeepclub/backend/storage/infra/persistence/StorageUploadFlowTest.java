@@ -552,7 +552,7 @@ class StorageUploadFlowTest {
         var resolver=new MediaResolutionService(catalog,blobs,governance,List.of(new Configuration().policy()),source);
         var controller=new com.jeepclub.backend.storage.api.http.StorageMediaController(upload,resolver,references);
         var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller)
-            .setControllerAdvice(new com.jeepclub.backend.storage.api.http.StorageMediaErrors())
+            .setControllerAdvice(new com.jeepclub.backend.storage.api.http.StorageMediaErrors(new com.jeepclub.backend.platform.web.exception.ApiProblemFactory(new org.springframework.context.support.StaticMessageSource(),java.time.Clock.systemUTC())))
             .setCustomArgumentResolvers(new org.springframework.web.method.support.HandlerMethodArgumentResolver() {
                 public boolean supportsParameter(org.springframework.core.MethodParameter p) {return p.getParameterType()==com.jeepclub.backend.platform.security.principal.UserPrincipal.class;}
                 public Object resolveArgument(org.springframework.core.MethodParameter p,org.springframework.web.method.support.ModelAndViewContainer m,

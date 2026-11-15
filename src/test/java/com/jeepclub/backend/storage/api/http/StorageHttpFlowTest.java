@@ -139,16 +139,19 @@ class StorageHttpFlowTest {
         for(var invalidFile:invalidFiles) {
             String error=mvc.perform(multipart("/storage/media/profile").file(invalidFile).header("Authorization","Bearer "+owner.accessToken()))
                 .andExpect(status().isBadRequest()).andExpect(content().contentTypeCompatibleWith("application/problem+json"))
+                .andExpect(jsonPath("$.code").value("INVALID_MEDIA_REQUEST")).andExpect(jsonPath("$.timestamp").exists())
                 .andReturn().getResponse().getContentAsString();
             org.assertj.core.api.Assertions.assertThat(error).doesNotContain("storageKey","sha256","Exception","fixture","private-images");
         }
         mvc.perform(multipart("/storage/media/profile").header("Authorization","Bearer "+owner.accessToken()))
-            .andExpect(status().isBadRequest()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+            .andExpect(status().isBadRequest()).andExpect(content().contentTypeCompatibleWith("application/problem+json"))
+            .andExpect(jsonPath("$.code").value("INVALID_MEDIA_REQUEST")).andExpect(jsonPath("$.timestamp").exists());
         var unreadable=new MockMultipartFile("file","unreadable.png","image/png",png) {
             @Override public java.io.InputStream getInputStream() throws java.io.IOException {throw new java.io.IOException("secret path /private-images/fixture");}
         };
         String readError=mvc.perform(multipart("/storage/media/profile").file(unreadable).header("Authorization","Bearer "+owner.accessToken()))
             .andExpect(status().isServiceUnavailable()).andExpect(content().contentTypeCompatibleWith("application/problem+json"))
+            .andExpect(jsonPath("$.code").value("STORAGE_UNAVAILABLE")).andExpect(jsonPath("$.timestamp").exists())
             .andReturn().getResponse().getContentAsString();
         org.assertj.core.api.Assertions.assertThat(readError).doesNotContain("secret path","private-images","fixture","Exception");
         org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject("select count(*) from storage_media_assets",Long.class)).isEqualTo(assetCount);

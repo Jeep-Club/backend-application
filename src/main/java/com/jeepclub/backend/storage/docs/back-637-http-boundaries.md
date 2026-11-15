@@ -19,6 +19,18 @@ completa é recebida. Portanto, a entrega de corpo RFC 9457 ao cliente para todo
 request acima de 30 MiB **não está comprovada**. Não se alterou configuração
 global do Tomcat nem limites de endpoints legados.
 
+Em outro ensaio por socket, o cliente escreve integralmente o multipart com
+arquivo de 10 MiB + 1 antes de ler: recebe 413 com `application/problem+json`,
+`code` e `timestamp`. O cenário de limite total é distinto e pode encerrar a
+conexão durante a leitura. Os negativos por socket também comparam variantes
+e arquivos físicos, além de assets, blobs catalogados e permits.
+
+Para `/storage/media/profile`, erros de arquivo inválido, parte ausente e
+limite multipart recebido pelo Spring usam `ApiProblemFactory`, com `code` e
+`timestamp` no envelope transversal. O handler global conserva o comportamento
+anterior para os demais endpoints. Essa padronização não garante entrega do
+corpo caso o cliente ou o container encerrem o transporte durante o envio.
+
 Os testes MockMvc de `StorageHttpFlowTest` exercitam também o limite do
 controller: 10 MiB válidos recebem 201 e 10 MiB + 1 recebe 400; o segundo caso
 não chega à reserva. Verificam MIME ausente ou incompatível,

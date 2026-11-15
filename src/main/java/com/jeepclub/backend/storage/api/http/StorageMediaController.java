@@ -18,7 +18,11 @@ public class StorageMediaController {
     public StorageMediaController(MediaUploadService upload,MediaResolutionService resolution,MediaReferenceService references) { this.upload=upload;this.resolution=resolution;this.references=references; }
     @PostMapping(value="/profile",consumes=MediaType.MULTIPART_FORM_DATA_VALUE)
     @io.swagger.v3.oas.annotations.Operation(summary="Upload de imagem de perfil", description="A parte file deve declarar image/jpeg, image/png ou image/webp coerente com o conteúdo. Limite de entrada: 10 MiB.")
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="503", description="Capacidade de upload ou armazenamento indisponível")
+    @io.swagger.v3.oas.annotations.responses.ApiResponses({
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400",description="Arquivo ou requisição inválida",content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/problem+json",schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.jeepclub.backend.platform.web.exception.ApiErrorResponse.class))),
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="413",description="Limite multipart excedido; a conexão pode ser encerrada durante o envio",content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/problem+json",schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.jeepclub.backend.platform.web.exception.ApiErrorResponse.class))),
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="503",description="Capacidade de upload ou armazenamento indisponível",content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/problem+json",schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.jeepclub.backend.platform.web.exception.ApiErrorResponse.class)))
+    })
     public ResponseEntity<MediaUploadService.Uploaded> upload(@AuthenticationPrincipal UserPrincipal user,@RequestPart("file") MultipartFile file,
         @RequestPart(value="options",required=false) com.jeepclub.backend.storage.core.repository.MediaImageProcessor.Options options) throws IOException {
         if(user==null) throw new AccessDeniedException("Media unavailable");
