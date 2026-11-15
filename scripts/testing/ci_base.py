@@ -60,10 +60,18 @@ def resolve_comparison_base(root, event_name, payload, github_sha, github_ref):
         if not isinstance(number, int) or github_ref != expected_ref:
             raise BaseError(f"PR event ref {github_ref!r} does not match payload merge ref {expected_ref!r}")
         parents = _git(root, "rev-list", "--parents", "-n", "1", head).split()[1:]
-        if len(parents) != 2 or set(parents) != {base, source}:
-            raise BaseError("Tested pull_request merge commit does not have the exact base/head SHAs from its event payload")
-        return dict(sha=base, source="pull_request.base.sha", event=event_name, ref=github_ref,
-                    head=head, pr_head=source)
+        if len(parents) != 2 or parents.count(source) != 1:
+            raise BaseError("Tested pull_request merge commit does not contain the exact head SHA from its event payload")
+        merge_base = parents[0] if parents[1] == source else parents[1]
+        if merge_base != base:
+            # A PR can remain open while its target branch advances. GitHub
+            # may synthesize the tested merge against that newer target tip;
+            # accept it only when the payload base is a proven ancestor.
+            _ancestor(root, base, merge_base, "pull_request.base.sha")
+        return dict(sha=merge_base,
+                    source="pull_request.base.sha" if merge_base == base else "pull_request.merge_base",
+                    event=event_name, ref=github_ref, head=head, pr_head=source,
+                    event_base=base)
 
     if event_name == "push":
         ref = payload.get("ref")

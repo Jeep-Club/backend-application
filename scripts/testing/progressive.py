@@ -36,7 +36,8 @@ def trusted_base(root, reference=None, full=False):
     except subprocess.CalledProcessError as exc:
         raise Invalid(f'Cannot resolve checked-out HEAD as a Git commit: {exc}') from exc
     default_reference = reference is None
-    reference = reference or 'origin/develop'
+    if default_reference:
+        reference = 'origin/develop'
     if default_reference and not full:
         # Local partial runs compare from the shared point, including a branch
         # with no commits of its own (where that point can be HEAD).

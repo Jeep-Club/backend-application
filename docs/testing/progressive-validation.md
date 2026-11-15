@@ -143,8 +143,11 @@ Uma migration nova deixa M1/M2 explicitamente parciais e bloqueia M3 até fornec
 }
 ```
 
-F5 e M4 aplicam a mesma exigência. No CI, PR usa `pull_request.base.sha` e prova
-que `GITHUB_SHA` é o merge sintético exato dos SHAs base/head do payload; push em
+F5 e M4 aplicam a mesma exigência. No CI, PR prova que `GITHUB_SHA` é o merge
+sintético contendo o head exato do payload. Se o alvo avançar enquanto o PR está
+aberto, o pai de base do merge pode ser mais novo que `pull_request.base.sha`; ele
+só é aceito se o SHA de base do evento for ancestral comprovado, e esse pai real
+é usado como comparação. Push em
 `develop`/`master` usa `push.before` até `push.after`, incluindo todos os commits
 intermediários; dispatch exige o input obrigatório `migration_base`, um SHA ancestral
 explícito. SHA inválido/zero, base igual ao HEAD, commit ausente, relação não ancestral,

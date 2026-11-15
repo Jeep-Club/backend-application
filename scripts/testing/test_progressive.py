@@ -117,6 +117,8 @@ class ProgressiveTests(unittest.TestCase):
             progressive.trusted_base(self.root)
         with self.assertRaisesRegex(progressive.Invalid, 'missing or does not resolve'):
             progressive.trusted_base(self.root, 'refs/heads/missing-explicit-base')
+        with self.assertRaisesRegex(progressive.Invalid, 'missing or does not resolve'):
+            progressive.trusted_base(self.root, '')
 
     def test_full_bands_keep_strict_baseline_policy(self):
         base = init_test_repo(self.root)
@@ -534,7 +536,8 @@ class ProgressiveTests(unittest.TestCase):
         row = record('com.jeepclub.backend.tools.ToolTest', 'tools')
         (reports / 'TEST-tool.xml').write_text('<testsuite><testcase classname="' + row['name'] + '" name="works"/></testsuite>')
         argv = ['audit_reports.py', '--kind', 'unit', '--reports', str(reports), '--out', str(self.root / 'audit.json')]
-        with mock.patch.object(sys, 'argv', argv), mock.patch.object(audit, 'validate_maven'), \
+        with mock.patch.object(sys, 'argv', argv), mock.patch.dict(os.environ, {}, clear=True), \
+             mock.patch.object(audit, 'validate_maven'), \
              mock.patch.object(audit, 'trusted_base', return_value='base'), \
              mock.patch.object(audit, 'new_test_methods', return_value=[]), \
              mock.patch.object(audit, 'inventory', return_value=([row], [])):

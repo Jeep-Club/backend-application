@@ -163,9 +163,30 @@ class CiBaseTests(unittest.TestCase):
         source, merge = self.add_pr_merge("docs")
         self.assertEqual([], self.info(self.pr(self.base, source, merge))["new"])
 
+    def test_pull_request_base_advanced_while_open_uses_verified_merge_parent(self):
+        self.repo.git("checkout", "-qb", "pr-head", self.base)
+        self.add_migration()
+        source = self.repo.git("rev-parse", "HEAD")
+        self.repo.git("checkout", "-qb", "develop-advanced", self.base)
+        self.repo.write("develop-advanced.txt", "target branch advanced\n")
+        updated_base = self.repo.commit("advance target branch")
+        self.repo.git("merge", "--no-ff", "--no-commit", "pr-head")
+        self.repo.git("commit", "-qm", "synthetic pull request merge")
+        merge = self.repo.git("rev-parse", "HEAD")
+        result = self.pr(self.base, source, merge)
+        self.assertEqual(updated_base, result["sha"])
+        self.assertEqual(self.base, result["event_base"])
+        self.assertEqual("pull_request.merge_base", result["source"])
+        self.assertEqual(1, len(self.info(result)["new"]))
+
+    def test_pull_request_updated_base_must_be_ancestor_of_synthetic_parent(self):
+        source, merge = self.add_pr_merge("docs")
+        with self.assertRaisesRegex(ci_base.BaseError, "not a proven ancestor"):
+            self.pr(source, source, merge)
+
     def test_stale_pull_request_base_or_checkout_ref_fails(self):
         source, merge = self.add_pr_merge()
-        with self.assertRaisesRegex(ci_base.BaseError, "exact base/head"):
+        with self.assertRaisesRegex(ci_base.BaseError, "not a proven ancestor"):
             self.pr(source, source, merge)
         with self.assertRaisesRegex(ci_base.BaseError, "does not match payload"):
             ci_base.resolve_comparison_base(self.repo.path, "pull_request",
