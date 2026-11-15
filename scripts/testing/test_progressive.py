@@ -526,6 +526,36 @@ class ProgressiveTests(unittest.TestCase):
             risk_file.write_text(json.dumps({'digest': {'reason': 'previous-version upgrade and data/constraints preservation', 'tests': [upgrade['name'] + '#upgrade']}}))
             self.assertEqual(0, progressive.main(args))
 
+    def test_partial_report_audit_defaults_to_shared_git_base_with_uncommitted_method(self):
+        # HEAD == origin/develop is valid for a partial local audit.
+        base = init_test_repo(self.root)
+        java(self.root, 'src/test/java/com/jeepclub/backend/tools/ExistingTest.java',
+             'package com.jeepclub.backend.tools; class ExistingTest { @Test void old() {} @Test void newLocal() {} }')
+        rows, _ = progressive.inventory(self.root)
+        row = next(r for r in rows if r['name'].endswith('.ExistingTest'))
+        selection = self.root / 'selection.json'
+        selection.write_text(json.dumps({'sha': base, 'selected': [dict(row, selector=row['name'])]}), encoding='utf-8')
+        reports = self.root / 'reports'
+        reports.mkdir()
+        (reports / 'TEST-existing.xml').write_text(
+            '<testsuite><testcase classname="' + row['name'] + '" name="old"/>'
+            '<testcase classname="' + row['name'] + '" name="newLocal"/></testsuite>', encoding='utf-8')
+        output = self.root / 'audit.json'
+        spec = importlib.util.spec_from_file_location('audit_reports', SCRIPT.with_name('audit_reports.py'))
+        audit = importlib.util.module_from_spec(spec)
+        with mock.patch.dict(sys.modules, {'progressive': progressive}):
+            spec.loader.exec_module(audit)
+        argv = ['audit_reports.py', '--kind', 'unit', '--reports', str(reports),
+                '--out', str(output), '--selection', str(selection)]
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(sys, 'argv', argv), \\
+             mock.patch.object(audit, 'ROOT', self.root), mock.patch.object(audit, 'validate_maven'), \\
+             redirect_stdout(io.StringIO()):
+            self.assertEqual(0, audit.main())
+        audited = json.loads(output.read_text(encoding='utf-8'))
+        self.assertEqual([('newLocal', 'executed')],
+                         [(m['method'], m['status']) for m in audited['new_methods']])
+        self.assertTrue(audited['partial'])
+
     def test_audit_gate_accepts_complete_xml_and_rejects_missing_candidate(self):
         audit_spec = importlib.util.spec_from_file_location('audit_reports', SCRIPT.with_name('audit_reports.py'))
         audit = importlib.util.module_from_spec(audit_spec)

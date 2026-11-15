@@ -15,7 +15,7 @@ def main():
     parser.add_argument('--reports', type=Path, required=True)
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--selection', type=Path, help='Reconcile a saved partial selection instead of the full inventory')
-    parser.add_argument('--base', default='origin/develop')
+    parser.add_argument('--base', help='Explicit trusted comparison ref; partial local audits default to the HEAD/origin-develop merge-base')
     args = parser.parse_args()
     validate_maven(ROOT)
     rows, helpers = inventory(ROOT)
