@@ -107,9 +107,9 @@ sistema. Ao alterar o módulo, escolha cobertura proporcional conforme as
 [regras globais](../../../../../../../../docs/architecture/feature-development-rules.md#testes-m%C3%ADnimos).
 
 
-## Exportações CSV/PDF — BACK-410
+## Exportações CSV/PDF — BACK-410 / BACK-609
 
-DEPENDENTS_DEPENDENT_EXPORT permite todos, id, userId e histórico separado. CSV plano e PDF por titular agrupado. DependentsQuery.findDetailsByIds/findDetailsByUser oferecem identificação, vínculo/status e paginação para composição pública de relatórios; não expõem entities.
+DEPENDENTS_DEPENDENT_EXPORT permite todos, id, ids, userId, userIds, name, status e histórico separado (`OR` dentro de `ids`/`userIds`, `AND` entre grupos de filtros, máximo de 200 IDs positivos e deduplicados por lista; `id+ids` ou `userId+userIds` retornam `400`). CSV plano e PDF por titular agrupado quando filtrado por um único titular. DependentsQuery.findDetailsByIds/findDetailsByUser oferecem identificação, vínculo/status e paginação para composição pública de relatórios; não expõem entities.
 
 Contratos HTTP, limites, segurança e evidências estão em `docs/exports/` na raiz do repositório. As exportações são administrativas, sem paginação HTTP, com auditoria síncrona e `Cache-Control: no-store`.
 
@@ -142,3 +142,8 @@ secreto. Query pública para Health/Publications e exports CSV/PDF não expõem 
 privada. A proteção ampla de dados/históricos da BACK-482 permanece fora deste escopo.
 Exemplos de frontend, segurança, testes e checklist em
 [BACK-524](../../../../../../../../docs/back-524-dependent-photo.md).
+
+## Consulta administrativa paginada — BACK-608
+
+`GET /admin/dependents` e `GET /admin/dependents/{id}` exigem `DEPENDENTS_DEPENDENT_READ`.
+A listagem paginada usa `AdminDependentJpaQuery` (Criteria tuple query sem materialização de entidades ou acesso direto a `UserEntity`) e `UserNameCriteria` da API pública de Identity para correlacionar o nome do titular via `EXISTS`, sem limite de cardinalidade. `ids` e `userIds` (ou escalar `userId` por compatibilidade; `userId+userIds` retorna `400`) aplicam `OR` dentro de cada lista (máximo de 200 IDs positivos e deduplicados). `q` aplica `OR` entre nome do dependente, nome do titular e, somente quando composto por dígitos e pontuação de documento/telefone, CPF e telefone. `ids`, `userIds`/`userId`, `name`, `cpf`, `relationshipType`, `status` e `q` combinam com `AND` antes da paginação e do count. `fields` seleciona apenas as colunas pedidas sem expor `photoStorageKey` ou `userId` auxiliar.
