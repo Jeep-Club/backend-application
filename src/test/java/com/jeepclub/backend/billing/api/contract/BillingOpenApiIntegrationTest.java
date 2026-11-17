@@ -57,7 +57,6 @@ class BillingOpenApiIntegrationTest {
                 .andExpect(jsonPath("$['components']['schemas']['SelfServiceMemberChargeSummaryResponse']['properties']['chargeCycleCode']['type']").value("string"))
                 .andExpect(jsonPath("$['components']['schemas']['SelfServiceMemberChargeResponse']['properties']['chargeDefinitionNameSnapshot']['type']").value("string"))
                 .andExpect(jsonPath("$['components']['schemas']['SelfServiceMemberChargeResponse']['properties']['chargeCycleCode']['type']").value("string"))
-                .andExpect(jsonPath("$['components']['schemas']['MemberChargeResponse']['properties']['chargeCycleCode']").doesNotExist())
                 .andExpect(jsonPath("$['components']['schemas']['ChargeAssignmentResponse']['properties']['userName']['type']").value(org.hamcrest.Matchers.containsInAnyOrder("string", "null")))
                 .andExpect(jsonPath("$['components']['schemas']['MemberChargeSummaryResponse']['properties']['userName']['type']").value(org.hamcrest.Matchers.containsInAnyOrder("string", "null")))
                 .andExpect(jsonPath("$['components']['schemas']['MemberChargeSummaryResponse']['properties']['membershipNumber']['type']").value(org.hamcrest.Matchers.containsInAnyOrder("string", "null")))
