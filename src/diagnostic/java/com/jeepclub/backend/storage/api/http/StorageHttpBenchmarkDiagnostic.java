@@ -23,7 +23,7 @@ import com.jayway.jsonpath.JsonPath;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-class StorageHttpBenchmarkMySqlIT extends StorageHttpFlowTest {
+class StorageHttpBenchmarkDiagnostic extends StorageHttpFlowTest {
     @Test
     @org.junit.jupiter.api.condition.EnabledIfSystemProperty(named="storage.benchmark",matches="true")
     void benchmarkConcurrentProfileUploads() throws Exception {

@@ -26,6 +26,7 @@ public class SqlUploadAdmission implements UploadAdmission {
         this.em=em;this.userBytes=userBytes;this.globalBytes=globalBytes;this.hourly=hourly;this.concurrent=concurrent;this.maxUploads=maxUploads;
         tx=new TransactionTemplate(manager);tx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         tx.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        tx.setTimeout(5);
     }
     private void ensure(long scope) {
         try {tx.executeWithoutResult(status -> {

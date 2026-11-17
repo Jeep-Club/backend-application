@@ -39,6 +39,32 @@ class StorageBlobMySqlIT extends StorageUploadFlowTest {
             org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject("select count(*) from storage_blobs where sha256=?",Long.class,original.sha256())).isEqualTo(1);
         } finally {executor.shutdownNow();}
     }
+    @org.junit.jupiter.api.Test void admissionLockTimeoutRollsBackReservation() throws Exception {
+        long actor=987780L;
+        var warm=admission.reserve(actor);admission.finish(warm);
+        long before=jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=?",Long.class,actor);
+        var executor=java.util.concurrent.Executors.newSingleThreadExecutor();
+        try (var blocker=java.sql.DriverManager.getConnection(MYSQL.getJdbcUrl(),MYSQL.getUsername(),MYSQL.getPassword());
+             var observer=java.sql.DriverManager.getConnection(MYSQL.getJdbcUrl(),"root",MYSQL.getPassword())) {
+            blocker.setAutoCommit(false);long blockerId;
+            try(var statement=blocker.createStatement();var row=statement.executeQuery("select connection_id()")){row.next();blockerId=row.getLong(1);}
+            try(var statement=blocker.createStatement();var row=statement.executeQuery("select scope_id from storage_upload_budgets where scope_id=0 for update")){
+                org.assertj.core.api.Assertions.assertThat(row.next()).isTrue();
+            }
+            long started=System.nanoTime();var pending=executor.submit(() -> admission.reserve(actor));boolean observed=false;
+            try(var query=observer.prepareStatement("select count(*) from performance_schema.data_lock_waits w join performance_schema.data_locks l on l.ENGINE_LOCK_ID=w.REQUESTING_ENGINE_LOCK_ID join performance_schema.data_locks b on b.ENGINE_LOCK_ID=w.BLOCKING_ENGINE_LOCK_ID join performance_schema.threads t on t.THREAD_ID=b.THREAD_ID where l.OBJECT_SCHEMA=database() and l.OBJECT_NAME='storage_upload_budgets' and t.PROCESSLIST_ID=?")){
+                query.setLong(1,blockerId);long deadline=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(4);
+                while(System.nanoTime()<deadline && !observed){try(var rows=query.executeQuery()){rows.next();observed=rows.getLong(1)>0;}if(!observed) Thread.sleep(50);}
+                org.assertj.core.api.Assertions.assertThat(observed).as("MySQL must report real lock contention").isTrue();
+                org.assertj.core.api.Assertions.assertThatThrownBy(() -> pending.get(12,java.util.concurrent.TimeUnit.SECONDS))
+                    .isInstanceOf(java.util.concurrent.ExecutionException.class);
+                org.assertj.core.api.Assertions.assertThat(java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-started)).isLessThan(12000);
+            } finally {blocker.rollback();}
+            org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=?",Long.class,actor)).isEqualTo(before);
+            org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject("select in_flight from storage_upload_budgets where scope_id=?",Integer.class,actor)).isZero();
+            org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject("select count(*) from storage_upload_permits where actor_user_id=? and completed=false",Long.class,actor)).isZero();
+        } finally {executor.shutdownNow();}
+    }
     @org.junit.jupiter.api.Test void uppercaseConstraintIsEnforcedAfterFlywayEvolution() throws Exception {
         var a=upload.upload(88,com.jeepclub.backend.storage.core.domain.enums.MediaContext.IDENTITY_PROFILE,"88",image(88));
         var v=catalog.findVariant(a.mediaId(),"AVATAR_SMALL").orElseThrow();
