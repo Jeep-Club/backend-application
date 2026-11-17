@@ -364,7 +364,7 @@
         <!-- Diagnostic sources are opt-in and never part of the required CI inventory. -->
         <profile>
             <id>storage-diagnostics</id>
-            <build><plugins><plugin>
+            <build><directory>${project.basedir}/target/storage-diagnostics</directory><plugins><plugin>
                 <groupId>org.codehaus.mojo</groupId><artifactId>build-helper-maven-plugin</artifactId><version>3.6.1</version>
                 <executions><execution><id>add-storage-diagnostics</id><phase>generate-test-sources</phase>
                     <goals><goal>add-test-source</goal></goals>
