@@ -86,7 +86,8 @@ public class AdminMemberChargeController {
     @ApiResponse(responseCode = "404", description = "Cobrança não encontrada.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class)))
     @Operation(
             summary = "Buscar cobrança de membro por ID",
-            description = "Consulta os dados completos de uma cobrança de membro específica, incluindo o status calculado na data atual."
+            description = "Consulta os dados completos de uma cobrança de membro específica, incluindo o status calculado na data atual.",
+            responses = @ApiResponse(responseCode = "200", description = "Cobrança retornada.", content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = MemberChargeResponse.class)))
     )
     public ResponseEntity<MemberChargeResponse> findById(
             @PathVariable @Positive(message = "ID da cobrança deve ser maior que zero.") Long memberChargeId
