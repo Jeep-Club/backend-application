@@ -36,7 +36,18 @@ public class SqlUploadAdmission implements UploadAdmission {
             em.persist(row);em.flush();
         });} catch(RuntimeException collision) {if(!Boolean.TRUE.equals(tx.execute(s -> em.find(UploadBudgetEntity.class,scope)!=null))) throw collision;}
     }
-    private UploadBudgetEntity lock(long scope) {return em.find(UploadBudgetEntity.class,scope,LockModeType.PESSIMISTIC_WRITE);}
+    private UploadBudgetEntity lock(long scope) {
+        var row=em.find(UploadBudgetEntity.class,scope,LockModeType.PESSIMISTIC_WRITE);
+        // A request-scoped persistence context can already contain an older version.
+        // Locking alone need not refresh managed state after another transaction commits.
+        if(row!=null) em.refresh(row,LockModeType.PESSIMISTIC_WRITE);
+        return row;
+    }
+    private UploadPermitEntity lockPermit(String id) {
+        var row=em.find(UploadPermitEntity.class,id,LockModeType.PESSIMISTIC_WRITE);
+        if(row!=null) em.refresh(row,LockModeType.PESSIMISTIC_WRITE);
+        return row;
+    }
     @Override public Permit reserve(long actor) {
         if(actor<=0) throw new IllegalArgumentException("Invalid actor");ensure(0);ensure(actor);
         return tx.execute(status -> {
@@ -53,7 +64,7 @@ public class SqlUploadAdmission implements UploadAdmission {
     @Override public void charge(Permit permit,long bytes) {
         if(bytes<=0 || bytes>MAX_RESERVATION) throw new IllegalArgumentException("Invalid representation budget");
         tx.executeWithoutResult(status -> {
-            var global=lock(0);var user=lock(permit.actor());var row=em.find(UploadPermitEntity.class,permit.id(),LockModeType.PESSIMISTIC_WRITE);
+            var global=lock(0);var user=lock(permit.actor());var row=lockPermit(permit.id());
             if(row==null || row.getActorUserId()!=permit.actor() || row.isCompleted() || row.isCharged()) throw new IllegalArgumentException("Invalid upload permit");
             if(user.getChargedUploads()>=maxUploads) throw new LimitExceeded();
             long difference=bytes-row.getAccountedBytes();global.setUsedBytes(global.getUsedBytes()+difference);user.setUsedBytes(user.getUsedBytes()+difference);
@@ -63,7 +74,7 @@ public class SqlUploadAdmission implements UploadAdmission {
     @Override public void recordPlannedBlobs(Permit permit,java.util.List<PlannedBlob> blobs) {
         if(blobs==null || blobs.isEmpty()) throw new IllegalArgumentException("Missing planned blobs");
         tx.executeWithoutResult(status -> {
-            var row=em.find(UploadPermitEntity.class,permit.id(),LockModeType.PESSIMISTIC_WRITE);
+            var row=lockPermit(permit.id());
             if(row==null || row.getActorUserId()!=permit.actor() || row.isCompleted() || !row.isCharged()) throw new IllegalArgumentException("Invalid upload permit");
             long total=0;
             for(var blob:blobs) {
@@ -80,7 +91,7 @@ public class SqlUploadAdmission implements UploadAdmission {
     }
     @Override public void abortBeforeStore(Permit permit) {
         tx.executeWithoutResult(status -> {
-            var global=lock(0);var user=lock(permit.actor());var row=em.find(UploadPermitEntity.class,permit.id(),LockModeType.PESSIMISTIC_WRITE);
+            var global=lock(0);var user=lock(permit.actor());var row=lockPermit(permit.id());
             if(row==null || row.getActorUserId()!=permit.actor()) throw new IllegalArgumentException("Invalid upload permit");
             if(row.isCompleted()) return;
             global.setUsedBytes(global.getUsedBytes()-row.getAccountedBytes());
@@ -101,7 +112,7 @@ public class SqlUploadAdmission implements UploadAdmission {
         row.setCatalogAssetId(mediaId);em.flush();
     }
     private void finishLocked(Permit permit) {
-            var global=lock(0);var user=lock(permit.actor());var row=em.find(UploadPermitEntity.class,permit.id(),LockModeType.PESSIMISTIC_WRITE);
+            var global=lock(0);var user=lock(permit.actor());var row=lockPermit(permit.id());
             if(row==null || row.getActorUserId()!=permit.actor()) throw new IllegalArgumentException("Invalid upload permit");
             if(row.isCompleted()) return;
             if(!row.isCharged()){global.setUsedBytes(global.getUsedBytes()-row.getAccountedBytes());user.setUsedBytes(user.getUsedBytes()-row.getAccountedBytes());row.setAccountedBytes(0);}

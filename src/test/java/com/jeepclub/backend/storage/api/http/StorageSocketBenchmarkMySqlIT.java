@@ -106,6 +106,10 @@ class StorageSocketBenchmarkMySqlIT {
             +" permits="+jdbc.queryForList("select completed,charged,count(*) as quantity from storage_upload_permits group by completed,charged"));
         assertThat(results).allSatisfy(r -> {assertThat(r.status()).isEqualTo(201);assertThat(r.mediaId()).isPositive();});
         assertThat(new HashSet<>(results.stream().map(Result::mediaId).toList())).hasSize(20);
+        assertThat(jdbc.queryForObject("select in_flight from storage_upload_budgets where scope_id=1",Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("select charged_uploads from storage_upload_budgets where scope_id=1",Long.class)).isEqualTo(22);
+        assertThat(jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=1",Long.class))
+            .isEqualTo(jdbc.queryForObject("select coalesce(sum(accounted_bytes),0) from storage_upload_permits where actor_user_id=1",Long.class));
         for(var result:results) {
             var rows=jdbc.queryForList("select v.variant_code,b.sha256,b.size_bytes,cast(b.ready as unsigned) as ready from storage_media_variants v join storage_variant_blobs vb on vb.variant_id=v.id join storage_blobs b on b.sha256=vb.sha256 where v.media_id=?",result.mediaId());
             assertThat(rows).hasSize(3);
