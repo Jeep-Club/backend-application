@@ -7,6 +7,32 @@ import org.springframework.test.context.DynamicPropertySource;
 
 @Testcontainers
 class StorageBlobMySqlIT extends StorageUploadFlowTest {
+    @org.junit.jupiter.api.Test void blobLockTimeoutRetainsExistingCustody() throws Exception {
+        byte[] bytes=image(222);
+        var original=blobs.store(bytes);
+        var executor=java.util.concurrent.Executors.newSingleThreadExecutor();
+        try (var blocker=java.sql.DriverManager.getConnection(MYSQL.getJdbcUrl(),MYSQL.getUsername(),MYSQL.getPassword());
+             var observer=java.sql.DriverManager.getConnection(MYSQL.getJdbcUrl(),"root",MYSQL.getPassword())) {
+            blocker.setAutoCommit(false); long blockerId;
+            try(var statement=blocker.createStatement();var row=statement.executeQuery("select connection_id()")){row.next();blockerId=row.getLong(1);}
+            try(var lock=blocker.prepareStatement("select sha256 from storage_blobs where sha256=? for update")) {
+                lock.setString(1,original.sha256()); try(var row=lock.executeQuery()){org.assertj.core.api.Assertions.assertThat(row.next()).isTrue();}
+            }
+            var pending=executor.submit(() -> blobs.store(bytes)); boolean observed=false;
+            try(var query=observer.prepareStatement("select count(*) from performance_schema.data_lock_waits w join performance_schema.data_locks l on l.ENGINE_LOCK_ID=w.REQUESTING_ENGINE_LOCK_ID join performance_schema.data_locks b on b.ENGINE_LOCK_ID=w.BLOCKING_ENGINE_LOCK_ID join performance_schema.threads t on t.THREAD_ID=b.THREAD_ID where l.OBJECT_SCHEMA=database() and l.OBJECT_NAME='storage_blobs' and t.PROCESSLIST_ID=?")) {
+                query.setLong(1,blockerId); long deadline=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(4);
+                while(System.nanoTime()<deadline && !observed){try(var rows=query.executeQuery()){rows.next();observed=rows.getLong(1)>0;}if(!observed) Thread.sleep(50);}
+                org.assertj.core.api.Assertions.assertThat(observed).as("MySQL reports blob lock contention").isTrue();
+                var failure=org.assertj.core.api.Assertions.catchThrowable(() -> pending.get(12,java.util.concurrent.TimeUnit.SECONDS));
+                org.assertj.core.api.Assertions.assertThat(failure).isInstanceOf(java.util.concurrent.ExecutionException.class);
+                var causes=new java.util.ArrayList<String>();
+                for(Throwable cause=failure;cause!=null;cause=cause.getCause()) causes.add(cause.getClass().getName());
+                org.assertj.core.api.Assertions.assertThat(causes).anyMatch(name -> name.contains("Timeout") || name.contains("QueryInterrupted"));
+            } finally {blocker.rollback();}
+            org.assertj.core.api.Assertions.assertThat(blobs.read(original)).containsExactly(bytes);
+            org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject("select count(*) from storage_blobs where sha256=? and ready=true",Long.class,original.sha256())).isEqualTo(1);
+        } finally {executor.shutdownNow();}
+    }
     @org.junit.jupiter.api.Test void identicalStoreWaitsForExistingBlobLockAndReusesTheSameBytes() throws Exception {
         byte[] bytes=image(221);
         var original=blobs.store(bytes);

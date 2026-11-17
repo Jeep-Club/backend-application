@@ -137,3 +137,15 @@ o bootstrap recusa novas reservas e exige reconciliação: não substitui
 a contabilidade de tentativas pela soma incompatível de blobs ou assets.
 Um permit aberto pode pertencer a requisição ativa ou a processo encerrado;
 sem lease e fencing, idade isolada não autoriza estorno ou liberação automática.
+
+## Limites adicionais do catálogo — BACK-639
+
+As transações isoladas de reserva e bloqueio de blob e a transação de conclusão
+do catálogo também configuram timeout Spring de cinco segundos. Esse limite é
+aplicado aos statements JDBC quando suportado pelo gerenciador e driver; não é
+deadline para `putVerified`, `force`, movimentação, codec ou commit. O lock do
+blob continua durante o I/O para preservar serialização e integridade da
+deduplicação; uma transação expirada pode continuar ocupando recursos enquanto
+o provider não retorna. A exceção original da reserva é preservada caso a
+verificação posterior de colisão também falhe. O teste de contenção MySQL deve
+ser executado no SHA entregue antes de atribuir garantia ao caminho de blob.

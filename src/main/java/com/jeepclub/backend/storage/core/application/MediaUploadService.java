@@ -26,6 +26,8 @@ public class MediaUploadService {
         transaction.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         // The quota refresh following a locking read must see the latest committed counters on MySQL.
         transaction.setIsolationLevel(org.springframework.transaction.TransactionDefinition.ISOLATION_READ_COMMITTED);
+        // Bounds supported JDBC statements in catalog completion, not codec, filesystem or commit.
+        transaction.setTimeout(5);
     }
     public Uploaded upload(long actor,MediaContext context,String consumerId,byte[] bytes) {
         return upload(actor,context,consumerId,() -> bytes);
