@@ -38,6 +38,7 @@ class BillingHttpWorkflowIntegrationTest {
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper json;
     @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
+    @Autowired jakarta.persistence.EntityManager entityManager;
     @Autowired ChargeDefinitionRepository definitions;
     @Autowired ChargeCycleRepository cycles;
     @Autowired MemberChargeRepository charges;
@@ -162,15 +163,119 @@ class BillingHttpWorkflowIntegrationTest {
         mvc.perform(token(get("/billing/me/member-charges/{id}", debt.getId()))).andExpect(status().isForbidden())
                 .andExpect(content().contentTypeCompatibleWith("application/problem+json")).andExpect(jsonPath("$.code").value("MEMBER_CHARGE_ACCESS_DENIED"))
                 .andExpect(jsonPath("$.timestamp").exists());
+        mvc.perform(token(get("/billing/me/member-charges/{id}", debt.getId())))
+                .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("MEMBER_CHARGE_ACCESS_DENIED"));
         mvc.perform(token(get("/billing/me/member-charges"))).andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(0));
-        auth(10L); mvc.perform(token(get("/billing/me/member-charges?status=PENDING"))).andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(1));
-        mvc.perform(token(get("/billing/me/member-charges/{id}", debt.getId()))).andExpect(status().isOk());
+        auth(10L); mvc.perform(token(get("/billing/me/member-charges?status=PENDING"))).andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(1))
+                .andExpect(jsonPath("$.content[0].chargeDefinitionNameSnapshot").value("seed"))
+                .andExpect(jsonPath("$.content[0].chargeCycleCode").value("seed-cycle"));
+        mvc.perform(token(get("/billing/me/member-charges/{id}", debt.getId()))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.chargeDefinitionNameSnapshot").value("seed"))
+                .andExpect(jsonPath("$.chargeCycleCode").value("seed-cycle"));
+        mvc.perform(token(get("/billing/me/member-charges/999999"))).andExpect(status().isNotFound());
+        mvc.perform(get("/billing/me/member-charges")).andExpect(status().isUnauthorized());
         when(storage.store(any(), any())).thenReturn(new StoredFile("private-key"));
         mvc.perform(upload("/billing/member-charges/{id}/payments", debt.getId(), false)).andExpect(status().isCreated());
         mvc.perform(upload("/billing/member-charges/{id}/payments", debt.getId(), false)).andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("MEMBER_PAYMENT_ALREADY_EXISTS"));
         auth(99L, "BILLING_MEMBER_CHARGE_UPDATE");
         mvc.perform(body(patch("/billing/member-charges/{id}/final-amount", debt.getId()), "{\"finalAmount\":50}"))
                 .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("MEMBER_CHARGE_CANNOT_UPDATE_FINAL_AMOUNT"));
+    }
+    @Test void inconsistentCycleDefinitionReturnsSanitizedInternalProblem() throws Exception {
+        var debt = seedCharge();
+        var cycleDefinition = definitions.save(ChargeDefinition.create("other", null, AMOUNT,
+                com.jeepclub.backend.billing.core.domain.enums.ChargeRecurrenceType.ONE_TIME, true,
+                PaymentAcceptancePolicy.AFTER_DUE_DATE, null, NOW));
+        jdbc.update("update billing_charge_cycles set charge_definition_id=? where id=?", cycleDefinition.getId(), debt.getChargeCycleId());
+        entityManager.clear();
+        auth(10L);
+        mvc.perform(token(get("/billing/me/member-charges/{id}", debt.getId())))
+                .andExpect(status().isInternalServerError())
+                .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
+                .andExpect(jsonPath("$.code").value("BILLING_DATA_INTEGRITY_ERROR"))
+                .andExpect(jsonPath("$.detail").value(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString(cycleDefinition.getId().toString()))))
+                .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("wrong-code"))));
+    }
+    @Test void memberChargeCycleLookupUsesOneBatchStatementRegardlessOfCycleCount() throws Exception {
+        var statistics = entityManager.getEntityManagerFactory().unwrap(org.hibernate.SessionFactory.class).getStatistics();
+        statistics.setStatisticsEnabled(true);
+        try {
+            auth(10L);
+            var emptyBefore = statistics.getPrepareStatementCount();
+            mvc.perform(token(get("/billing/me/member-charges")).param("page", "900").param("size", "20"))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.content.length()").value(0));
+            entityManager.clear();
+            var emptyStatements = statistics.getPrepareStatementCount() - emptyBefore;
+
+            seedCharge();
+            entityManager.flush(); entityManager.clear();
+            var oneBefore = statistics.getPrepareStatementCount();
+            mvc.perform(token(get("/billing/me/member-charges"))).andExpect(status().isOk());
+            entityManager.clear();
+            var oneStatements = statistics.getPrepareStatementCount() - oneBefore;
+
+            var d2 = definitions.save(ChargeDefinition.create("second", null, AMOUNT,
+                    com.jeepclub.backend.billing.core.domain.enums.ChargeRecurrenceType.ONE_TIME, true,
+                    PaymentAcceptancePolicy.AFTER_DUE_DATE, null, NOW));
+            var c2 = cycles.save(ChargeCycle.generate(d2, "second-cycle", DUE, 99L, NOW));
+            charges.save(MemberCharge.create(10L, d2.getId(), c2.getId(), AMOUNT, DUE,
+                    PaymentAcceptancePolicy.AFTER_DUE_DATE, null, NOW));
+            var d2b = definitions.save(ChargeDefinition.create("second-b", null, AMOUNT,
+                    com.jeepclub.backend.billing.core.domain.enums.ChargeRecurrenceType.ONE_TIME, true,
+                    PaymentAcceptancePolicy.AFTER_DUE_DATE, null, NOW));
+            var c2b = cycles.save(ChargeCycle.generate(d2b, "second-b-cycle", DUE, 99L, NOW));
+            for (int i = 0; i < 7; i++) {
+                var extraDefinition = definitions.save(ChargeDefinition.create("second-b-" + i, null, AMOUNT,
+                        com.jeepclub.backend.billing.core.domain.enums.ChargeRecurrenceType.ONE_TIME, true,
+                        PaymentAcceptancePolicy.AFTER_DUE_DATE, null, NOW));
+                var extraCycle = cycles.save(ChargeCycle.generate(extraDefinition, "second-b-cycle-" + i, DUE, 99L, NOW));
+                charges.save(MemberCharge.create(10L, extraDefinition.getId(), extraCycle.getId(), AMOUNT, DUE,
+                        PaymentAcceptancePolicy.AFTER_DUE_DATE, null, NOW));
+            }
+            entityManager.flush(); entityManager.clear();
+            var repeatedBefore = statistics.getPrepareStatementCount();
+            mvc.perform(token(get("/billing/me/member-charges")).param("size", "50"))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.content.length()").value(9));
+            entityManager.clear();
+            var repeatedStatements = statistics.getPrepareStatementCount() - repeatedBefore;
+
+            var d3 = definitions.save(ChargeDefinition.create("third", null, AMOUNT,
+                    com.jeepclub.backend.billing.core.domain.enums.ChargeRecurrenceType.ONE_TIME, true,
+                    PaymentAcceptancePolicy.AFTER_DUE_DATE, null, NOW));
+            var c3 = cycles.save(ChargeCycle.generate(d3, "third-cycle", DUE, 99L, NOW));
+            charges.save(MemberCharge.create(10L, d3.getId(), c3.getId(), AMOUNT, DUE,
+                    PaymentAcceptancePolicy.AFTER_DUE_DATE, null, NOW));
+            entityManager.flush(); entityManager.clear();
+            var distinctBefore = statistics.getPrepareStatementCount();
+            mvc.perform(token(get("/billing/me/member-charges")).param("size", "50"))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.content.length()").value(10));
+            entityManager.clear();
+            var distinctStatements = statistics.getPrepareStatementCount() - distinctBefore;
+
+            assertThat(emptyStatements).isLessThanOrEqualTo(2);
+            assertThat(oneStatements).isEqualTo(2);
+            assertThat(repeatedStatements).isEqualTo(oneStatements);
+            assertThat(distinctStatements).isEqualTo(oneStatements);
+        } finally { statistics.setStatisticsEnabled(false); }
+    }
+    @Test void historicalCycleMetadataSurvivesRenameAndArchiveAndAdminContractRemainsStable() throws Exception {
+        var debt = seedCharge();
+        var cycle = cycles.findById(debt.getChargeCycleId()).orElseThrow();
+        cycle.finish(99L, NOW); cycle.archive(99L, NOW); cycles.save(cycle);
+        jdbc.update("update billing_charge_definitions set name=? where id=?", "renamed", debt.getChargeDefinitionId());
+        auth(10L);
+        mvc.perform(token(get("/billing/me/member-charges").param("size", "100").param("sort", "id,desc")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.size").value(50))
+                .andExpect(jsonPath("$.content[0].id").value(debt.getId()))
+                .andExpect(jsonPath("$.content[0].chargeDefinitionNameSnapshot").value("seed"))
+                .andExpect(jsonPath("$.content[0].chargeCycleCode").value("seed-cycle"));
+        mvc.perform(token(get("/billing/me/member-charges/{id}", debt.getId())))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.chargeDefinitionNameSnapshot").value("seed"))
+                .andExpect(jsonPath("$.chargeCycleCode").value("seed-cycle"));
+        auth(99L, "BILLING_MEMBER_CHARGE_READ");
+        mvc.perform(token(get("/billing/member-charges/{id}", debt.getId())))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.chargeCycleCode").doesNotExist())
+                .andExpect(jsonPath("$.chargeDefinitionNameSnapshot").doesNotExist());
     }
     @ParameterizedTest @ValueSource(strings = {"{}", "{\"name\":\" \",\"defaultAmount\":0}", "{\"name\":\"fee\",\"recurrenceType\":\"INVALID\"}"})
     void invalidDefinitionPayloadUsesBeanValidationProblem(String payload) throws Exception {
