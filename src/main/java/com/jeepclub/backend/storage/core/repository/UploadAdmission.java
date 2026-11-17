@@ -9,6 +9,8 @@ public interface UploadAdmission {
     void recordPlannedBlobs(Permit permit, java.util.List<PlannedBlob> blobs);
     /** Complete within the caller's catalog transaction; failure rolls back the catalog. */
     void finishInCatalogTransaction(Permit permit, long mediaId);
+    /** Only when the caller has not invoked the physical storage port. Idempotent. */
+    void abortBeforeStore(Permit permit);
     void finish(Permit permit);
     final class LimitExceeded extends RuntimeException {public LimitExceeded(){super("Upload allowance exceeded");}}
 }

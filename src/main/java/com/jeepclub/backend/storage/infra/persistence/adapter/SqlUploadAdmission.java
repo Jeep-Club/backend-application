@@ -55,6 +55,7 @@ public class SqlUploadAdmission implements UploadAdmission {
         tx.executeWithoutResult(status -> {
             var global=lock(0);var user=lock(permit.actor());var row=em.find(UploadPermitEntity.class,permit.id(),LockModeType.PESSIMISTIC_WRITE);
             if(row==null || row.getActorUserId()!=permit.actor() || row.isCompleted() || row.isCharged()) throw new IllegalArgumentException("Invalid upload permit");
+            if(user.getChargedUploads()>=maxUploads) throw new LimitExceeded();
             long difference=bytes-row.getAccountedBytes();global.setUsedBytes(global.getUsedBytes()+difference);user.setUsedBytes(user.getUsedBytes()+difference);
             user.setChargedUploads(user.getChargedUploads()+1);row.setAccountedBytes(bytes);row.setCharged(true);em.flush();
         });
@@ -75,6 +76,17 @@ public class SqlUploadAdmission implements UploadAdmission {
                 planned.setPermitId(permit.id());planned.setPosition(index);planned.setSha256(blob.sha256());planned.setSizeBytes(blob.sizeBytes());em.persist(planned);
             }
             em.flush();
+        });
+    }
+    @Override public void abortBeforeStore(Permit permit) {
+        tx.executeWithoutResult(status -> {
+            var global=lock(0);var user=lock(permit.actor());var row=em.find(UploadPermitEntity.class,permit.id(),LockModeType.PESSIMISTIC_WRITE);
+            if(row==null || row.getActorUserId()!=permit.actor()) throw new IllegalArgumentException("Invalid upload permit");
+            if(row.isCompleted()) return;
+            global.setUsedBytes(global.getUsedBytes()-row.getAccountedBytes());
+            user.setUsedBytes(user.getUsedBytes()-row.getAccountedBytes());
+            if(row.isCharged()) user.setChargedUploads(user.getChargedUploads()-1);
+            user.setInFlight(user.getInFlight()-1);row.setAccountedBytes(0);row.setCompleted(true);em.flush();
         });
     }
     @Override public void finish(Permit permit) {

@@ -40,6 +40,7 @@ public class MediaUploadService {
         if (!inFlight.tryAcquire()) throw new IllegalStateException("Upload capacity exceeded");
         try {
         var permit=admission.reserve(actor);
+        boolean storeStarted=false;
         try {
         var processed=images.process(content.get(),context,options);
         admission.charge(permit,processed.images().stream().mapToLong(i -> i.bytes().length).sum());
@@ -51,6 +52,7 @@ public class MediaUploadService {
             } catch (java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
         }).toList();
         admission.recordPlannedBlobs(permit,planned);
+        storeStarted=true; // From here an exception cannot prove that the provider wrote nothing.
         var stored=processed.images().stream().map(i -> blobs.store(i.bytes())).toList();
         return transaction.execute(status -> {
             Instant now=Instant.now(); var audit=new MediaAuditContext(MediaActorKind.USER,actor,now,null);
@@ -67,7 +69,8 @@ public class MediaUploadService {
             return new Uploaded(asset.mediaId(),null);
         });
         } catch (RuntimeException | Error failure) {
-            try { admission.finish(permit); } catch (RuntimeException cleanup) { failure.addSuppressed(cleanup); }
+            try { if(storeStarted) admission.finish(permit); else admission.abortBeforeStore(permit); }
+            catch (RuntimeException cleanup) { failure.addSuppressed(cleanup); }
             throw failure;
         }
         } finally {inFlight.release();}

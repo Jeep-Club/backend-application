@@ -35,7 +35,7 @@ class MediaUploadCapacityTest {
         assertThatThrownBy(() -> service.upload(1,MediaContext.IDENTITY_PROFILE,"1",new byte[]{1}))
             .isInstanceOf(IllegalStateException.class).hasMessage("plan failed");
         verify(blobs,never()).store(any());
-        verify(admission).finish(permit);
+        verify(admission).abortBeforeStore(permit);
     }
     @Test void boundsPayloadReadsAcrossUsersAndReleasesCapacityAfterFailure() throws Exception {
         var admission=mock(UploadAdmission.class);

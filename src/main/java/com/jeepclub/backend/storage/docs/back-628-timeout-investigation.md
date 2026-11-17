@@ -63,13 +63,27 @@ ausÃªncia de custÃ³dia.
 
 ## Rastreabilidade da tentativa
 
-Antes do primeiro `store`, a tentativa confirma em transação independente a lista
-ordenada de SHA-256 e tamanhos das representações planejadas. O registro é intenção,
-não prova de existência ou integridade física; pode incluir representações cuja
-escrita ainda não começou. A conclusão associa o permit ao asset na mesma transação
-do catálogo. Uma falha posterior mantém a cobrança conservadora e os registros para
-reconciliação manual, inclusive com `storage_blobs` e arquivos `.pending`. Permits
-históricos não possuem este vínculo. A ausência do vínculo após falha não autoriza
-retry cego enquanto a transação possa ainda estar em curso; nenhum identificador
-de idempotência é entregue ao cliente. Isto não limita codec, filesystem, lock ou
-commit e não resolve a decisão F-02 nem a política de reconciliação de quota.
+Antes do primeiro `store`, a tentativa confirma em transaÃ§Ã£o independente a lista
+ordenada de SHA-256 e tamanhos das representaÃ§Ãµes planejadas. O registro Ã© intenÃ§Ã£o,
+nÃ£o prova de existÃªncia ou integridade fÃ­sica; pode incluir representaÃ§Ãµes cuja
+escrita ainda nÃ£o comeÃ§ou. A conclusÃ£o associa o permit ao asset na mesma transaÃ§Ã£o
+do catÃ¡logo. Uma falha posterior mantÃ©m a cobranÃ§a conservadora e os registros para
+reconciliaÃ§Ã£o manual, inclusive com `storage_blobs` e arquivos `.pending`. Permits
+histÃ³ricos nÃ£o possuem este vÃ­nculo. A ausÃªncia do vÃ­nculo apÃ³s falha nÃ£o autoriza
+retry cego enquanto a transaÃ§Ã£o possa ainda estar em curso; nenhum identificador
+de idempotÃªncia Ã© entregue ao cliente. Isto nÃ£o limita codec, filesystem, lock ou
+commit e nÃ£o resolve a decisÃ£o F-02 nem a polÃ­tica de reconciliaÃ§Ã£o de quota.
+
+
+## CompensaÃ§Ã£o anterior ao armazenamento
+
+A falha antes da primeira chamada ao port de armazenamento libera a reserva e,
+se confirmada, a cobranÃ§a, mesmo que a resposta da transaÃ§Ã£o de cobranÃ§a tenha
+sido perdida. A compensaÃ§Ã£o Ã© idempotente e preserva as intenÃ§Ãµes registradas.
+ApÃ³s iniciar `store`, mantÃ©m-se a cobranÃ§a conservadora: uma exceÃ§Ã£o nÃ£o prova
+que a escrita falhou. O limite de uploads retidos Ã© revalidado sob lock no
+`charge`, pois vÃ¡rias reservas podem ter sido admitidas antes da primeira cobranÃ§a.
+Uma falha de compensaÃ§Ã£o conserva o permit para investigaÃ§Ã£o; falha ao reservar
+pode ter resultado desconhecido antes que o identificador retorne ao chamador.
+Os registros de intenÃ§Ã£o e permits nÃ£o tÃªm expiraÃ§Ã£o automÃ¡tica: retenÃ§Ã£o e
+reconciliaÃ§Ã£o permanecem manuais, sem purge autorizado.
