@@ -735,6 +735,15 @@ class StorageUploadFlowTest {
         assertThat(jdbc.queryForObject("select internal_note from storage_governance_events where media_id=? and operation='LEGAL_HOLD_RELEASED'",String.class,a.mediaId())).isEqualTo("Private release justification");
         assertThat(admin.events(a.mediaId(),0,100).toString()).doesNotContain("Private release justification");
     }
+    @Test void missingUserBudgetWithHistoricalPermitsFailsClosed() {
+        long actor=987781L;
+        var prior=admission.reserve(actor);admission.charge(prior,1000);admission.finish(prior);
+        assertThat(jdbc.update("delete from storage_upload_budgets where scope_id=?",actor)).isEqualTo(1);
+        assertThatThrownBy(() -> admission.reserve(actor)).isInstanceOf(IllegalStateException.class)
+            .hasMessage("Upload budget requires reconciliation");
+        assertThat(jdbc.queryForObject("select count(*) from storage_upload_budgets where scope_id=?",Long.class,actor)).isZero();
+        assertThat(jdbc.queryForObject("select accounted_bytes from storage_upload_permits where id=?",Long.class,prior.id())).isEqualTo(1000);
+    }
     @Test void uploadAdmissionSerializesPerUserConcurrencyAndRetainsCustodyCharges() {
         var a=admission.reserve(94);var b=admission.reserve(94);
         assertThatThrownBy(() -> admission.reserve(94)).isInstanceOf(UploadAdmission.LimitExceeded.class);

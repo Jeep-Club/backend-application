@@ -31,6 +31,12 @@ public class SqlUploadAdmission implements UploadAdmission {
     private void ensure(long scope) {
         try {tx.executeWithoutResult(status -> {
             if(em.find(UploadBudgetEntity.class,scope)!=null) return;
+            // Existing permits are a different accounting ledger from blobs/assets.
+            // Reconstructing a missing budget from those sources could undercount custody.
+            Long permits=scope==0 ? em.createQuery("select count(p) from UploadPermitEntity p",Long.class).getSingleResult()
+                : em.createQuery("select count(p) from UploadPermitEntity p where p.actorUserId=:actor",Long.class)
+                    .setParameter("actor",scope).getSingleResult();
+            if(permits>0) throw new IllegalStateException("Upload budget requires reconciliation");
             var row=new UploadBudgetEntity();row.setScopeId(scope);row.setWindowStart(Instant.now());
             Long existing=scope==0?em.createQuery("select coalesce(sum(b.sizeBytes),0) from StoredBlobEntity b",Long.class).getSingleResult():
                 em.createQuery("select coalesce(sum(v.sizeBytes),0) from MediaVariantEntity v,MediaAssetEntity a where v.mediaId=a.mediaId and a.uploadedByUserId=:actor",Long.class).setParameter("actor",scope).getSingleResult();
