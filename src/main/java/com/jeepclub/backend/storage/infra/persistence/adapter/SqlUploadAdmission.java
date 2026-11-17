@@ -25,6 +25,7 @@ public class SqlUploadAdmission implements UploadAdmission {
         if(userBytes<MAX_RESERVATION || globalBytes<MAX_RESERVATION || hourly<1 || concurrent<1 || concurrent>10 || maxUploads<1) throw new IllegalArgumentException("Invalid upload budget");
         this.em=em;this.userBytes=userBytes;this.globalBytes=globalBytes;this.hourly=hourly;this.concurrent=concurrent;this.maxUploads=maxUploads;
         tx=new TransactionTemplate(manager);tx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        tx.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
     }
     private void ensure(long scope) {
         try {tx.executeWithoutResult(status -> {

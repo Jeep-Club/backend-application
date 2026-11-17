@@ -24,6 +24,8 @@ public class MediaUploadService {
         List<StorageConsumerPolicy> policies,PlatformTransactionManager manager,io.micrometer.core.instrument.MeterRegistry metrics,UploadAdmission admission) {
         this.admission=admission;this.metrics=metrics;this.catalog=catalog;this.blobs=blobs;this.images=images;this.governance=governance;this.policies=List.copyOf(policies);transaction=new TransactionTemplate(manager);
         transaction.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        // The quota refresh following a locking read must see the latest committed counters on MySQL.
+        transaction.setIsolationLevel(org.springframework.transaction.TransactionDefinition.ISOLATION_READ_COMMITTED);
     }
     public Uploaded upload(long actor,MediaContext context,String consumerId,byte[] bytes) {
         return upload(actor,context,consumerId,() -> bytes);
