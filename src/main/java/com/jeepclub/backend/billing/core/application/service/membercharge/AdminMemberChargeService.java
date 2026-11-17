@@ -8,6 +8,8 @@ import com.jeepclub.backend.billing.core.domain.enums.payment.MemberPaymentStatu
 import com.jeepclub.backend.billing.core.domain.model.MemberCharge;
 import com.jeepclub.backend.billing.core.repository.MemberChargeRepository;
 import com.jeepclub.backend.billing.core.repository.MemberPaymentRepository;
+import com.jeepclub.backend.billing.core.application.result.charge.MemberChargeCycleResult;
+import com.jeepclub.backend.billing.core.repository.ChargeCycleRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -27,9 +29,14 @@ public class AdminMemberChargeService {
     private final MemberChargeRepository memberChargeRepository;
     private final MemberPaymentRepository memberPaymentRepository;
     private final Clock clock;
+    private final ChargeCycleRepository chargeCycles;
 
     @Transactional(readOnly = true)
-    public Page<MemberChargeResult> findAll(
+    public Page<MemberChargeCycleResult> findAll(Long userId, MemberChargeStatus status, Pageable pageable) {
+        return MemberChargeCyclePresentation.enrich(findPage(userId, status, pageable), chargeCycles);
+    }
+
+    private Page<MemberChargeResult> findPage(
             Long userId,
             MemberChargeStatus status,
             Pageable pageable
@@ -53,8 +60,9 @@ public class AdminMemberChargeService {
     }
 
     @Transactional(readOnly = true)
-    public MemberChargeResult findById(Long id) {
-        return toResult(findMemberChargeOrThrow(id));
+    public MemberChargeCycleResult findById(Long id) {
+        var charge = toResult(findMemberChargeOrThrow(id));
+        return MemberChargeCyclePresentation.enrich(charge, chargeCycles.findById(charge.chargeCycleId()).orElse(null));
     }
 
     @Transactional

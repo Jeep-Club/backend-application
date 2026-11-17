@@ -3,6 +3,8 @@ package com.jeepclub.backend.billing.api.http.controller.admin;
 import com.jeepclub.backend.billing.core.application.result.ChargeAssignmentResult;
 import com.jeepclub.backend.billing.core.domain.enums.assignment.ChargeAudienceType;
 import com.jeepclub.backend.iam.authorization.api.module.RolePresentationQuery;
+import com.jeepclub.backend.iam.identity.api.module.UserDetails;
+import com.jeepclub.backend.iam.identity.api.module.UserQuery;
 import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
@@ -16,7 +18,9 @@ import static org.mockito.Mockito.*;
 
 class ChargeAssignmentPresentationTest {
     private final RolePresentationQuery roles = mock(RolePresentationQuery.class);
-    private final ChargeAssignmentPresentation presentation = new ChargeAssignmentPresentation(roles);
+    private final UserQuery identity = mock(UserQuery.class);
+    private final ChargeAssignmentPresentation presentation = new ChargeAssignmentPresentation(roles,
+            new BillingUserNamePresentation(identity));
 
     private ChargeAssignmentResult assignment(long id, ChargeAudienceType type, Long roleId) {
         return new ChargeAssignmentResult(id, 1L, type, null, roleId, null, true, Instant.EPOCH, null);
@@ -43,5 +47,41 @@ class ChargeAssignmentPresentationTest {
         assertThat(presentation.present(new PageImpl<>(List.of(assignment(2, ChargeAudienceType.ALL_MEMBERS, null)))).getContent().get(0).roleName()).isNull();
         assertThat(presentation.present(new PageImpl<>(List.<ChargeAssignmentResult>of())).getContent()).isEmpty();
         verifyNoInteractions(roles);
+    }
+
+    @Test void resolvesEligibleNamesOncePerPageAndKeepsMutationsUnenriched() {
+        var first = userAssignment(1L, 12L);
+        var duplicate = userAssignment(2L, 12L);
+        var inactive = userAssignment(3L, 13L);
+        var absent = userAssignment(4L, 14L);
+        var unnamed = userAssignment(5L, 15L);
+        var rows = new PageImpl<>(List.of(first, duplicate, inactive, absent, unnamed));
+        authorize(false);
+        assertThat(presentation.present(rows).getContent()).extracting("userName").containsOnlyNulls();
+        verifyNoInteractions(identity);
+
+        SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(
+                "user", "n/a", List.of(new SimpleGrantedAuthority("IDENTITY_USER_READ"))));
+        assertThat(presentation.present(first).userName()).isNull();
+        assertThat(presentation.present(new PageImpl<>(List.<ChargeAssignmentResult>of())).getContent()).isEmpty();
+        verifyNoInteractions(identity);
+        when(identity.findByIds(List.of(12L, 13L, 14L, 15L))).thenReturn(List.of(
+                user(12L, "Nome atual", true), user(13L, "Oculto", false), user(15L, " ", true)));
+
+        assertThat(presentation.present(rows).getContent()).extracting("userName")
+                .containsExactly("Nome atual", "Nome atual", null, null, null);
+        verify(identity).findByIds(List.of(12L, 13L, 14L, 15L));
+        verifyNoMoreInteractions(identity);
+
+        when(identity.findByIds(List.of(12L))).thenReturn(List.of(user(12L, "Nome atual", true)));
+        assertThat(presentation.presentRead(first).userName()).isEqualTo("Nome atual");
+    }
+
+    private static ChargeAssignmentResult userAssignment(long id, long userId) {
+        return new ChargeAssignmentResult(id, 1L, ChargeAudienceType.USER, userId, null, null, true, Instant.EPOCH, null);
+    }
+
+    private static UserDetails user(long id, String name, boolean active) {
+        return new UserDetails(id, name, null, null, null, null, null, null, active, null, null, null);
     }
 }

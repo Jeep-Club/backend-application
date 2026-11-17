@@ -163,7 +163,7 @@ public class AdminChargeAssignmentController {
     ) {
         ChargeAssignmentResult result = adminChargeAssignmentService.findById(assignmentId);
 
-        return ResponseEntity.ok(presentation.present(result));
+        return ResponseEntity.ok(presentation.presentRead(result));
     }
 
     @PatchMapping("/billing/charge-assignments/{assignmentId}/activate")

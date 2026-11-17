@@ -133,3 +133,17 @@ protegido por teste focal em `/v3/api-docs`.
 Cinco produtos: definições × atribuições (inclui sem atribuição), ciclos históricos, cobranças, pagamentos e reembolsos. Filtros de ano/mês derivam do vencimento do ciclo; EventChargeContext fornece o vínculo de evento. Cobranças por chargeCycleId formam o relatório do ciclo e incluem o último pagamento, sem multiplicar cobranças. Situação efetiva usa o domínio existente. EventFinancialQuery acrescenta snapshots e vencimento mantendo o construtor anterior; EventFinanceReportQuery fornece definições e totais por status, com limites antes da composição. Nome/CPF, papel e evento são resolvidos por contratos públicos em lote.
 
 Contratos HTTP, limites, segurança e evidências estão em `docs/exports/` na raiz do repositório. As exportações são administrativas, sem paginação HTTP, com auditoria síncrona e `Cache-Control: no-store`.
+
+## Apresentação administrativa de atribuições e cobranças
+
+Os GETs administrativos consultam, após a paginação, apenas os IDs distintos
+presentes no resultado. Billing apresenta o nome atual de um usuário ativo e
+não arquivado com `IDENTITY_USER_READ` e a matrícula vigente com
+`MEMBERSHIP_MEMBER_READ`. Em atribuições, o nome se aplica somente ao público
+`USER`. A visibilidade de roles segue `AUTHORIZATION_ROLE_READ`.
+
+Ausência cadastral ou de permissão complementar resulta em campo nulo. Falhas
+técnicas seguem o tratamento sanitizado de erros HTTP e não são tratadas como
+cadastro ausente. O nome histórico e o código vêm do ciclo gravado, com a mesma
+verificação de integridade de ciclo e definição usada no self-service. A
+apresentação cadastral não altera dados financeiros ou snapshots.

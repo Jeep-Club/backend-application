@@ -43,7 +43,7 @@ class BillingPaymentAndChargeServiceTest {
     final PaymentReceiptFile file = new PaymentReceiptFile("receipt.pdf", "application/pdf", new byte[]{1});
     @BeforeEach void setup() {
         adminPayments = new AdminMemberPaymentService(payments, charges, CLOCK, cycles, refunds);
-        adminCharges = new AdminMemberChargeService(charges, payments, CLOCK);
+        adminCharges = new AdminMemberChargeService(charges, payments, CLOCK, cycles);
         memberCharges = new MemberChargeService(charges, cycles, CLOCK);
         memberPayments = memberPayments(CLOCK);
     }
@@ -106,7 +106,7 @@ class BillingPaymentAndChargeServiceTest {
         assertThat(adminCharges.findAll(10L, null, pageable).getContent()).hasSize(1);
         assertThat(adminCharges.findAll(null, MemberChargeStatus.PENDING, pageable).getContent()).hasSize(1);
         assertThat(adminCharges.findAll(10L, MemberChargeStatus.PENDING, pageable).getContent()).hasSize(1);
-        assertThat(adminCharges.findById(2L).id()).isEqualTo(2L);
+        assertThat(adminCharges.findById(2L).charge().id()).isEqualTo(2L);
     }
     @Test void memberPageResolvesDistinctCyclesOnceAndPreservesPage() {
         var first = charge(); var second = charge();

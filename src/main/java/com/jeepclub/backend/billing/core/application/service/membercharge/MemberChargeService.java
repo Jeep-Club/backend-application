@@ -1,9 +1,9 @@
 package com.jeepclub.backend.billing.core.application.service.membercharge;
 
 import com.jeepclub.backend.billing.core.application.exception.charge.MemberChargeAccessDeniedException;
-import com.jeepclub.backend.billing.core.application.exception.charge.MemberChargeCycleIntegrityException;
 import com.jeepclub.backend.billing.core.application.exception.charge.MemberChargeNotFoundException;
 import com.jeepclub.backend.billing.core.application.result.charge.MemberChargeResult;
+import com.jeepclub.backend.billing.core.application.result.charge.MemberChargeCycleResult;
 import com.jeepclub.backend.billing.core.application.result.charge.MemberChargeSelfServiceResult;
 import com.jeepclub.backend.billing.core.domain.enums.charge.MemberChargeStatus;
 import com.jeepclub.backend.billing.core.domain.model.MemberCharge;
@@ -19,8 +19,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.util.Objects;
-import java.util.Map;
-import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -42,10 +40,8 @@ public class MemberChargeService {
         Page<MemberCharge> page = status != null
                 ? memberChargeRepository.findByUserIdAndStatus(authenticatedUserId, status, pageable)
                 : memberChargeRepository.findByUserId(authenticatedUserId, pageable);
-        var ids = page.getContent().stream().map(MemberCharge::getChargeCycleId).distinct().toList();
-        Map<Long, ChargeCycle> cycles = ids.isEmpty() ? Map.of() : chargeCycleRepository.findByIds(ids).stream()
-                .collect(Collectors.toMap(ChargeCycle::getId, cycle -> cycle));
-        return page.map(charge -> enrich(charge, cycles.get(charge.getChargeCycleId())));
+        return MemberChargeCyclePresentation.enrich(page.map(this::toResult), chargeCycleRepository)
+                .map(MemberChargeService::selfServiceResult);
     }
 
     @Transactional(readOnly = true)
@@ -64,14 +60,11 @@ public class MemberChargeService {
         }
 
         ChargeCycle cycle = chargeCycleRepository.findById(memberCharge.getChargeCycleId()).orElse(null);
-        return enrich(memberCharge, cycle);
+        return selfServiceResult(MemberChargeCyclePresentation.enrich(toResult(memberCharge), cycle));
     }
 
-    private MemberChargeSelfServiceResult enrich(MemberCharge charge, ChargeCycle cycle) {
-        if (cycle == null || !Objects.equals(cycle.getChargeDefinitionId(), charge.getChargeDefinitionId())) {
-            throw new MemberChargeCycleIntegrityException();
-        }
-        return new MemberChargeSelfServiceResult(toResult(charge), cycle.getChargeDefinitionNameSnapshot(), cycle.getCode());
+    private static MemberChargeSelfServiceResult selfServiceResult(MemberChargeCycleResult result) {
+        return new MemberChargeSelfServiceResult(result.charge(), result.chargeDefinitionNameSnapshot(), result.chargeCycleCode());
     }
 
     private MemberChargeResult toResult(MemberCharge memberCharge) {

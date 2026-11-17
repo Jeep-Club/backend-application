@@ -60,10 +60,27 @@ public record MemberChargeResponse(
         Instant paidAt,
 
         @Schema(description = "Data em que a cobrança foi cancelada.", nullable = true)
-        Instant canceledAt
+        Instant canceledAt,
+
+        @Schema(description = "Nome cadastral atual de usuário ativo, com IDENTITY_USER_READ.", nullable = true)
+        String userName,
+
+        @Schema(description = "Matrícula vigente, com MEMBERSHIP_MEMBER_READ.", nullable = true)
+        String membershipNumber,
+
+        @Schema(description = "Nome histórico da definição gravado no ciclo.", nullable = true)
+        String chargeDefinitionNameSnapshot,
+
+        @Schema(description = "Código gravado no ciclo.", nullable = true)
+        String chargeCycleCode
 ) {
 
     public static MemberChargeResponse from(MemberChargeResult result) {
+        return from(result, null, null, null, null);
+    }
+
+    public static MemberChargeResponse from(MemberChargeResult result, String userName, String membershipNumber,
+            String chargeDefinitionNameSnapshot, String chargeCycleCode) {
         Objects.requireNonNull(result, "result cannot be null");
 
         return new MemberChargeResponse(
@@ -82,7 +99,11 @@ public record MemberChargeResponse(
                 result.createdAt(),
                 result.updatedAt(),
                 result.paidAt(),
-                result.canceledAt()
+                result.canceledAt(),
+                userName,
+                membershipNumber,
+                chargeDefinitionNameSnapshot,
+                chargeCycleCode
         );
     }
 }
