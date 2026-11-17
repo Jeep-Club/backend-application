@@ -51,8 +51,6 @@ def init_test_repo(root, source=None):
          'package com.jeepclub.backend.tools; class ExistingTest { @Test void old() {} }')
     java(root, 'src/test/java/com/jeepclub/backend/platform/database/ProgressiveMySqlIT.java',
          'package com.jeepclub.backend.platform.database; class ProgressiveMySqlIT { @Test void mysql() {} }')
-    java(root, 'src/test/java/com/jeepclub/backend/platform/database/ProgressivePostgresIT.java',
-         'package com.jeepclub.backend.platform.database; class ProgressivePostgresIT { @Test void postgres() {} }')
     java(root, 'pom.xml', '<project/>')
     git_call(root, 'add', '.')
     git_call(root, 'commit', '-qm', 'baseline')
@@ -547,7 +545,7 @@ class ProgressiveTests(unittest.TestCase):
             spec.loader.exec_module(audit)
         argv = ['audit_reports.py', '--kind', 'unit', '--reports', str(reports),
                 '--out', str(output), '--selection', str(selection)]
-        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(sys, 'argv', argv), \
+        with mock.patch.dict(os.environ, {k: os.environ[k] for k in ('PATH', 'SYSTEMROOT') if k in os.environ}, clear=True), mock.patch.object(sys, 'argv', argv), \
              mock.patch.object(audit, 'ROOT', self.root), mock.patch.object(audit, 'validate_maven'), \
              redirect_stdout(io.StringIO()):
             self.assertEqual(0, audit.main())
@@ -649,15 +647,24 @@ class ProgressiveTests(unittest.TestCase):
         self.assertEqual([existing["name"]], [r["name"] for r in before])
         self.assertEqual({existing["name"], added["name"]}, {r["name"] for r in after})
 
-    def test_b_new_mysql_and_postgres_candidates_route_to_their_profiles(self):
-        rows = [record("com.jeepclub.backend.identity.NewMySqlIT", "iam.identity", "mysql"),
-                record("com.jeepclub.backend.identity.NewPostgresIT", "iam.identity", "postgres")]
-        selected = rows
-        cmds = progressive.commands(selected)
-        mysql = next(c for c in cmds if any("mysql-migrations" in arg for arg in c))
-        postgres = next(c for c in cmds if any("publications-postgresql" in arg for arg in c))
-        self.assertIn("-Dit.test=com.jeepclub.backend.identity.NewMySqlIT", mysql)
-        self.assertIn("-Dit.test=com.jeepclub.backend.identity.NewPostgresIT", postgres)
+    def test_f5_requires_both_unit_and_mysql_inventories(self):
+        unit = record("com.jeepclub.backend.identity.UserTest", "iam.identity")
+        mysql = record("com.jeepclub.backend.identity.UserMySqlIT", "iam.identity", "mysql")
+        for rows in ([], [unit], [mysql]):
+            with self.subTest(rows=rows), self.assertRaisesRegex(progressive.Invalid, "nonempty Surefire and MySQL"):
+                progressive.select(rows, "F5")
+        self.assertEqual(2, len(progressive.select([unit, mysql], "F5")))
+
+    def test_b_new_mysql_candidate_routes_to_its_profile(self):
+        rows = [record("com.jeepclub.backend.identity.NewMySqlIT", "iam.identity", "mysql")]
+        cmds = progressive.commands(rows)
+        self.assertIn("-Dit.test=com.jeepclub.backend.identity.NewMySqlIT", cmds[0])
+
+    def test_postgres_test_is_rejected_as_unsupported(self):
+        java(self.root, "src/test/java/com/jeepclub/backend/identity/NewPostgresIT.java",
+             "package com.jeepclub.backend.identity; class NewPostgresIT { @Test void test() {} }")
+        with self.assertRaisesRegex(progressive.Invalid, "Unsupported executable test naming"):
+            progressive.inventory(self.root)
 
     def test_c_new_module_is_known_and_selectable_from_inventory(self):
         java(self.root, "src/test/java/com/jeepclub/backend/tools/ToolsTest.java", """
@@ -719,9 +726,7 @@ class ProgressiveTests(unittest.TestCase):
           <profile><id>mysql-migrations</id><build><plugins><plugin><artifactId>maven-failsafe-plugin</artifactId>
           <configuration><includes><include>**/*MySqlIT.java</include><include>**/MySqlMigrationIT.java</include>
           </includes></configuration></plugin></plugins></build></profile>
-          <profile><id>publications-postgresql</id><build><plugins><plugin><artifactId>maven-failsafe-plugin</artifactId>
-          <configuration><includes><include>**/*PostgresIT.java</include></includes></configuration>
-          </plugin></plugins></build></profile></profiles></project>"""
+          </profiles></project>"""
         pom.write_text(good, encoding="utf-8")
         progressive.validate_maven(self.root)
         pom.write_text(good.replace("<artifactId>maven-surefire-plugin</artifactId>",
@@ -786,15 +791,13 @@ class ProgressiveTests(unittest.TestCase):
 
     def test_commands_map_unit_and_database_gates_and_full_archive(self):
         selected = [record("com.jeepclub.backend.identity.UserTest", "iam.identity"),
-                    record("com.jeepclub.backend.identity.UserMySqlIT", "iam.identity", "mysql"),
-                    record("com.jeepclub.backend.identity.UserPostgresIT", "iam.identity", "postgres")]
+                    record("com.jeepclub.backend.identity.UserMySqlIT", "iam.identity", "mysql")]
         cmds = progressive.commands(selected)
-        self.assertEqual(3, len(cmds))
+        self.assertEqual(2, len(cmds))
         self.assertIn("-Dtest=com.jeepclub.backend.identity.UserTest", cmds[0])
         self.assertIn("-Dit.test=com.jeepclub.backend.identity.UserMySqlIT", cmds[1])
-        self.assertIn("-Dit.test=com.jeepclub.backend.identity.UserPostgresIT", cmds[2])
         full = progressive.commands([], full=True)
-        self.assertEqual(4, len(full))
+        self.assertEqual(3, len(full))
         self.assertIn("verify", full[0])
         self.assertEqual(["bash", "deploy/test-future-migration.sh"], full[-1])
 

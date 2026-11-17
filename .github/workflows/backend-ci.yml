@@ -119,33 +119,6 @@ jobs:
             target/site/jacoco
             target/progressive-ci-*.json
 
-  publications-postgresql:
-    name: Publications PostgreSQL
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-          cache: maven
-      - run: chmod +x mvnw
-      - name: Validate PostgreSQL schema and transactional races
-        run: ./mvnw --batch-mode --no-transfer-progress -Ppublications-postgresql -DskipUnitTests=true verify
-      - name: Reconcile eligible PostgreSQL sources and execution
-        run: python3 scripts/testing/audit_reports.py --kind postgres --reports target/failsafe-reports --out target/progressive-ci-postgres.json
-      - name: Preserve PostgreSQL results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: publications-postgresql-evidence
-          path: |
-            target/failsafe-reports
-            target/progressive-ci-*.json
-
   deploy:
     name: Deploy to VPS
     needs: [verify, mysql-migrations]

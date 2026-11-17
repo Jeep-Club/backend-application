@@ -133,7 +133,6 @@ def inventory(root):
                 errors.append(f'Unclassified test package: {name}')
             continue
         kind = ('mysql' if path.stem.endswith('MySqlIT') or path.stem == 'MySqlMigrationIT'
-                else 'postgres' if path.stem.endswith('PostgresIT')
                 else 'unit' if re.fullmatch(r'Test.*|.*Tests?|.*TestCase', path.stem) else None)
         if not kind:
             if has_test:
@@ -211,8 +210,8 @@ def select(records, band, modules=(), focus=(), dependencies=(), edges=()):
     if band == 'F5':
         if modules or dependencies:
             raise Invalid('F5 cannot be narrowed')
-        if {r['kind'] for r in records} != {'unit', 'mysql', 'postgres'}:
-            raise Invalid('F5 requires nonempty Surefire, MySQL and PostgreSQL inventories')
+        if {r['kind'] for r in records} != {'unit', 'mysql'}:
+            raise Invalid('F5 requires nonempty Surefire and MySQL inventories')
         return [dict(r, selector=r['name']) for r in records]
     if not modules:
         raise Invalid(f'{band} requires --module')
@@ -286,17 +285,17 @@ def validate_maven(root):
                         'suiteXmlFiles', 'includeJUnit5Engines', 'excludeJUnit5Engines'):
                 if plugin.find('.//m:' + tag, ns) is not None:
                     raise Invalid(f'Failsafe filtering ({tag}) requires explicit discovery review')
-    for profile, expected in [('mysql-migrations', ['**/*MySqlIT.java', '**/MySqlMigrationIT.java']),
-                              ('publications-postgresql', ['**/*PostgresIT.java'])]:
-        node = next((p for p in pom.findall('m:profiles/m:profile', ns)
-                     if p.findtext('m:id', namespaces=ns) == profile), None)
-        if node is None:
-            raise Invalid(f'Missing integration profile: {profile}')
-        plugin = next((p for p in node.findall('.//m:plugin', ns)
-                       if p.findtext('m:artifactId', namespaces=ns) == 'maven-failsafe-plugin'), None)
-        actual = [] if plugin is None else [p.text for p in plugin.findall('.//m:include', ns)]
-        if actual != expected:
-            raise Invalid(f'Failsafe discovery changed for {profile}: {actual}; review discovery contract')
+    profile = 'mysql-migrations'
+    expected = ['**/*MySqlIT.java', '**/MySqlMigrationIT.java']
+    node = next((p for p in pom.findall('m:profiles/m:profile', ns)
+                  if p.findtext('m:id', namespaces=ns) == profile), None)
+    if node is None:
+        raise Invalid(f'Missing integration profile: {profile}')
+    plugin = next((p for p in node.findall('.//m:plugin', ns)
+                   if p.findtext('m:artifactId', namespaces=ns) == 'maven-failsafe-plugin'), None)
+    actual = [] if plugin is None else [p.text for p in plugin.findall('.//m:include', ns)]
+    if actual != expected:
+        raise Invalid(f'Failsafe discovery changed for {profile}: {actual}; review discovery contract')
 
 
 def executable_methods(text, with_scopes=False):
@@ -480,11 +479,9 @@ def commands(selected, full=False, migration=None):
     if full or migration == 'M4':
         gates = ([mvn + ['verify']] if full else [])
         gates += [mvn + ['-Pmysql-migrations', '-DskipUnitTests=true', 'verify']]
-        if full:
-            gates += [mvn + ['-Ppublications-postgresql', '-DskipUnitTests=true', 'verify']]
         return gates + [['bash', 'deploy/test-future-migration.sh']]
     result = []
-    for kind, profile in [('unit', None), ('mysql', 'mysql-migrations'), ('postgres', 'publications-postgresql')]:
+    for kind, profile in [('unit', None), ('mysql', 'mysql-migrations')]:
         selectors = sorted({r['selector'] for r in selected if r['kind'] == kind})
         if not selectors:
             continue
@@ -604,7 +601,7 @@ def run(root, plan, out):
         log = folder / 'execution.log'
         relevant = [r for r in plan['selected'] if r['kind'] == (
             'mysql' if '-Pmysql-migrations' in cmd or cmd[0] == 'bash' else
-            'postgres' if '-Ppublications-postgresql' in cmd else 'unit')]
+            'unit')]
         requested = next((a.split('=', 1)[1].split(',') for a in cmd if a.startswith(('-Dtest=', '-Dit.test='))), None)
         include_file = next((a.split('=', 1)[1] for a in cmd if a.startswith('-Dsurefire.includesFile=')), None)
         if include_file:
