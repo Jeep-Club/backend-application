@@ -20,11 +20,19 @@ public class BillingUserNamePresentation {
         if (!hasAuthority("IDENTITY_USER_READ")) return Map.of();
         var distinct = ids.stream().filter(Objects::nonNull).distinct().toList();
         if (distinct.isEmpty()) return Map.of();
-        return users.findByIds(distinct).stream()
+        return lookup(() -> users.findByIds(distinct)).stream()
                 .filter(UserDetails::administrativelyActive)
                 .filter(user -> user.status() == UserStatus.ACTIVE && user.archivedAt() == null)
                 .filter(user -> user.name() != null && !user.name().isBlank())
                 .collect(Collectors.toMap(UserDetails::id, UserDetails::name));
+    }
+
+    static <T> T lookup(java.util.function.Supplier<T> supplier) {
+        try {
+            return supplier.get();
+        } catch (RuntimeException exception) {
+            throw new RuntimeException("Billing presentation lookup failed.", exception);
+        }
     }
 
     static boolean hasAuthority(String authority) {

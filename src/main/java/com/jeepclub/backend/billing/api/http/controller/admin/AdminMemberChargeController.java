@@ -101,7 +101,7 @@ public class AdminMemberChargeController {
 
     private Map<Long, String> membershipNumbers(List<Long> ids) {
         return ids.isEmpty() || !BillingUserNamePresentation.hasAuthority("MEMBERSHIP_MEMBER_READ")
-                ? Map.of() : members.currentNumbers(ids);
+                ? Map.of() : BillingUserNamePresentation.lookup(() -> members.currentNumbers(ids));
     }
 
     @PatchMapping("/billing/member-charges/{memberChargeId}/final-amount")

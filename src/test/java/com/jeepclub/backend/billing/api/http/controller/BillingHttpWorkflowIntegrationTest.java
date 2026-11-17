@@ -217,7 +217,7 @@ class BillingHttpWorkflowIntegrationTest {
                 .andExpect(jsonPath("$.userName").value("Nome cadastral"));
         verify(identity, times(2)).findByIds(List.of(10L));
 
-        when(identity.findByIds(List.of(10L))).thenThrow(new RuntimeException("internal provider marker"));
+        when(identity.findByIds(List.of(10L))).thenThrow(new IllegalStateException("internal provider marker"));
         mvc.perform(token(get(detail))).andExpect(status().isInternalServerError())
                 .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
                 .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("internal provider marker"))));
