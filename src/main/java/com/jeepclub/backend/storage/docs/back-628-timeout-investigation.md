@@ -87,3 +87,32 @@ Uma falha de compensação conserva o permit para investigação; falha ao reser
 pode ter resultado desconhecido antes que o identificador retorne ao chamador.
 Os registros de intenção e permits não têm expiração automática: retenção e
 reconciliação permanecem manuais, sem purge autorizado.
+
+
+## Alternativas para F-02
+
+O semáforo limita a admissão por processo, mas não termina uma chamada já
+ativa. Um prazo entre etapas pode impedir iniciar trabalho posterior, sem
+interromper a etapa corrente. Timeout transacional ou JDBC não demonstra a
+interrupção de `ImageIO`, codec nativo, `force`, conexão ou commit. A perda
+de resposta no commit continua sendo resultado desconhecido.
+
+| Alternativa | Garantia e custo | Limite ou decisão necessária |
+| --- | --- | --- |
+| Pipeline síncrono atual, com limites SQL verificáveis | Mantém D07 e não adiciona infraestrutura; espera em banco pode ser limitada onde driver e banco comprovem suporte. | Codec, filesystem e commit podem permanecer em andamento; não comprova deadline integral. |
+| Processo descartável aguardado pela requisição | Um supervisor poderia confirmar o término do processo de codec antes de iniciar I/O, com capacidade e prazo delimitados. | Exige decidir isolamento, limites de memória, implantação, limpeza e monitoramento. Não resolve filesystem, commit incerto nem transporte; rever compatibilidade com D07 antes de adotar. |
+| Serviço ou fila de processamento | Pode prover isolamento e recuperação operacional. | Altera operação e possivelmente contrato de resposta; contraria o MVP síncrono sem decisão revisada. |
+
+Nenhuma opção torna hash do conteúdo chave de idempotência: uploads iguais de
+pessoas ou contextos distintos podem representar operações legítimas. Um futuro
+protocolo precisa vincular chave a ator, contexto, consumidor e identidade do
+payload, definir conflitos e estados em andamento, e devolver resultado já
+confirmado sem permitir consulta cruzada. A decisão sobre contrato, retenção e
+recuperação de tentativas incertas permanece necessária; não executar retry cego.
+
+A V25 conserva intents sem expiração automática e permite que permits anteriores
+tenham `catalog_asset_id` nulo. A associação é gravada na mesma transação da
+criação do asset, mas não tem FK física: não é prova de integridade caso dados
+sejam alterados fora desse fluxo. Uma FK nova exigiria validar todo o histórico,
+existência dos assets e política de retenção antes de uma migration aditiva; não
+se altera V25 nem se apagam intents para satisfazer uma constraint.
