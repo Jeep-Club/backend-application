@@ -130,3 +130,10 @@ O MySQL reverte somente o statement após lock timeout; a exceção deve sair
 da transação para que o gerenciador faça rollback. O timeout transacional
 pode limitar statements JDBC suportados, mas não comprova cancelamento de
 codec, I/O físico ou commit, nem um limite total de duração do upload.
+
+
+Quando um budget está ausente mas já existem permits para seu escopo,
+o bootstrap recusa novas reservas e exige reconciliação: não substitui
+a contabilidade de tentativas pela soma incompatível de blobs ou assets.
+Um permit aberto pode pertencer a requisição ativa ou a processo encerrado;
+sem lease e fencing, idade isolada não autoriza estorno ou liberação automática.
