@@ -240,7 +240,7 @@ obrigatórios nem contam como testes executados. Para compilar essa fonte use
 `storage-diagnostics` juntamente com `mysql-migrations` e selecione o método:
 
 ```powershell
-./mvnw.cmd -Pmysql-migrations,storage-diagnostics -DskipUnitTests=true '-Dstorage.socketBenchmark=true' '-Dit.test=StorageSocketBenchmarkMySqlIT#concurrentCompleteUploadsOverHttp' verify
+./mvnw.cmd '-Pmysql-migrations,storage-diagnostics' -DskipUnitTests=true '-Dstorage.socketBenchmark=true' '-Dit.test=StorageSocketBenchmarkMySqlIT#concurrentCompleteUploadsOverHttp' verify
 ```
 
 Os demais diagnósticos preservam suas propriedades `storage.*` e devem ser
