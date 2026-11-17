@@ -656,7 +656,7 @@ consulta de likedByMe por conjunto de IDs e leitura em lote das imagens.
 
 ## Interações sociais
 
-Membros autenticados com as permissões específicas podem usar `POST
+Membros autenticados autorizados pela política de Membership podem usar `POST
 /publications/{publicationId}/likes` (200 idempotente), `DELETE
 /publications/{publicationId}/likes/me` (204 idempotente), `POST
 /publications/{publicationId}/comments` (201) e `GET
