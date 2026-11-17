@@ -124,4 +124,3 @@ class StorageSocketBenchmarkMySqlIT {
         assertThat(p95).isLessThan(10_000);
     }
 }
-
