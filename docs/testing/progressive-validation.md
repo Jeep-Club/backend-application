@@ -232,3 +232,18 @@ de produção. Resuma comando, escopo, duração, counts e limitações no check
 Os três jobs originais e scripts de deploy permanecem obrigatórios; o CI também
 executa as regressões Python do runner. CI no SHA exato pode suprir gate local
 equivalente; uma execução em outro SHA não aprova a entrega.
+
+## Diagnósticos de Storage
+
+Ensaios opt-in ficam em `src/diagnostic/java` e não integram os gates
+obrigatórios nem contam como testes executados. Para compilar essa fonte use
+`storage-diagnostics` juntamente com `mysql-migrations` e selecione o método:
+
+```powershell
+./mvnw.cmd -Pmysql-migrations,storage-diagnostics -DskipUnitTests=true '-Dstorage.socketBenchmark=true' '-Dit.test=StorageSocketBenchmarkMySqlIT#concurrentCompleteUploadsOverHttp' verify
+```
+
+Os demais diagnósticos preservam suas propriedades `storage.*` e devem ser
+selecionados explicitamente por classe e método. O runner progressivo audita
+somente o inventário obrigatório em `src/test/java`; resultados diagnósticos
+são evidência separada, sem alterar a política de skips ou a seleção de CI.
