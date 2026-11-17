@@ -138,23 +138,81 @@ Arguments.of("/billing/admin/refunds/export","BILLING_EXPORT"));}
     }
     @Test @org.springframework.transaction.annotation.Transactional
     void dependentSelectionAndHistoryStaySeparateInBothFormats()throws Exception {
-        var u=user("Titular dependentes","52998224725");var other=user("Outro titular","11144477735");
-        Object disabled=null;
+        var u=user("Titular dependentes","52998224725");
+        var secondOwner=user("Segundo titular","22233344455");
+        var other=user("Outro titular","11144477735");
+        var emptyOwner=user("Titular sem dependentes","33344455566");
+        Object activeU=null, disabled=null;
         for(var state:com.jeepclub.backend.dependents.core.domain.enums.DependentStatus.values()) {
-            var dep=seed("dependents.infra.persistence.entity.DependentEntity","name","Dependente "+state,"cpf","123456789"+String.format("%02d",state.ordinal()+10),"birthDate",java.time.LocalDate.of(2010,1,1),"relationshipType",com.jeepclub.backend.dependents.core.domain.enums.RelationshipType.CHILD,"userId",id(u),"status",state,"createdAt",FIXTURE_TIME);
+            var dep=seed("dependents.infra.persistence.entity.DependentEntity","name","Dependente "+state,"cpf","123456789"+String.format("%02d",state.ordinal()+10),"birthDate",java.time.LocalDate.of(2010,1,1),"relationshipType",com.jeepclub.backend.dependents.core.domain.enums.RelationshipType.CHILD,"userId",id(u),"status",state,"createdAt",FIXTURE_TIME,"photoStorageKey","SECRET_STORAGE_SENTINEL");
             if(state==com.jeepclub.backend.dependents.core.domain.enums.DependentStatus.ARCHIVED) {
                 org.springframework.test.util.ReflectionTestUtils.setField(dep,"archivedAt",FIXTURE_TIME);em.flush();
             }
+            if(state.name().equals("ACTIVE"))activeU=dep;
             if(state.name().equals("INACTIVE"))disabled=dep;
         }
+        var secondActive=seed("dependents.infra.persistence.entity.DependentEntity","name","Dependente Familia B","cpf","12345678920","birthDate",java.time.LocalDate.of(2012,5,10),"relationshipType",com.jeepclub.backend.dependents.core.domain.enums.RelationshipType.SPOUSE,"userId",id(secondOwner),"status",com.jeepclub.backend.dependents.core.domain.enums.DependentStatus.ACTIVE,"createdAt",FIXTURE_TIME);
         seed("dependents.infra.persistence.entity.DependentEntity","name","Dependente alheio","cpf","12345678903","birthDate",java.time.LocalDate.of(2010,1,1),"relationshipType",com.jeepclub.backend.dependents.core.domain.enums.RelationshipType.CHILD,"userId",id(other),"status",com.jeepclub.backend.dependents.core.domain.enums.DependentStatus.ACTIVE,"createdAt",FIXTURE_TIME);
         seed("dependents.infra.persistence.entity.DependentHistoryEntity","dependentId",999999L,"name","Dependente removido","cpf","12345678904","birthDate",java.time.LocalDate.of(2010,1,1),"relationshipType",com.jeepclub.backend.dependents.core.domain.enums.RelationshipType.CHILD,"userId",id(u),"status",com.jeepclub.backend.dependents.core.domain.enums.DependentStatus.INACTIVE,"createdAt",FIXTURE_TIME,"deletedAt",FIXTURE_TIME,"deletedByUserId",999L);
+        seed("health.infra.persistence.entity.MedicalProfileEntity","ownerType",com.jeepclub.backend.health.core.domain.enums.MedicalProfileOwnerType.DEPENDENT,"ownerId",id(activeU),"bloodType",com.jeepclub.backend.health.core.domain.enums.BloodType.UNKNOWN,"allergies","CLINICAL_SENTINEL","createdAt",FIXTURE_TIME,"updatedAt",FIXTURE_TIME);
         for(String format:List.of("CSV","PDF")) {
-            assertThat(download("/admin/dependents/export","DEPENDENTS_DEPENDENT_EXPORT",format,"userId",id(u).toString())).contains("Titular dependentes","Dependente ACTIVE","Dependente INACTIVE","Dependente ARCHIVED").doesNotContain("Dependente alheio","Dependente removido");
-            assertThat(download("/admin/dependents/export","DEPENDENTS_DEPENDENT_EXPORT",format,"id",id(disabled).toString())).contains("Dependente INACTIVE").doesNotContain("Dependente ACTIVE");
+            assertThat(download("/admin/dependents/export","DEPENDENTS_DEPENDENT_EXPORT",format,"userId",id(u).toString())).contains("Titular dependentes","Dependente ACTIVE","Dependente INACTIVE","Dependente ARCHIVED").doesNotContain("Dependente alheio","Dependente removido","CLINICAL_SENTINEL","SECRET_STORAGE_SENTINEL");
+            assertThat(download("/admin/dependents/export","DEPENDENTS_DEPENDENT_EXPORT",format,"id",id(disabled).toString())).contains("Dependente INACTIVE").doesNotContain("Dependente ACTIVE","CLINICAL_SENTINEL","SECRET_STORAGE_SENTINEL");
             assertThat(download("/admin/dependents/history/export","DEPENDENTS_DEPENDENT_EXPORT",format)).contains("Dependente removido","Excluído em").doesNotContain("Dependente ACTIVE");
             assertThat(download("/admin/dependents/export","DEPENDENTS_DEPENDENT_EXPORT",format,"status","ARCHIVED"))
                 .contains("Dependente ARCHIVED").doesNotContain("Dependente ACTIVE","Dependente INACTIVE","Dependente removido");
+
+            // Multi-ID selection across 2 different owners with duplicate IDs
+            String byIds=download("/admin/dependents/export","DEPENDENTS_DEPENDENT_EXPORT",format,
+                "ids",id(activeU).toString(),"ids",id(secondActive).toString(),"ids",id(activeU).toString());
+            assertThat(byIds).contains("Dependente ACTIVE","Titular dependentes","Dependente Familia B","Segundo titular")
+                .doesNotContain("Dependente INACTIVE","Dependente ARCHIVED","Dependente alheio","Dependente removido","CLINICAL_SENTINEL","SECRET_STORAGE_SENTINEL");
+            if(format.equals("CSV"))assertThat(byIds.lines().count()).isEqualTo(3);
+
+            // Multi-owner selection with duplicate userIds combined with status and name (OR within list, AND across filters)
+            String byOwners=download("/admin/dependents/export","DEPENDENTS_DEPENDENT_EXPORT",format,
+                "userIds",id(u).toString(),"userIds",id(secondOwner).toString(),"userIds",id(u).toString(),
+                "status","ACTIVE","name","dependente");
+            assertThat(byOwners).contains("Dependente ACTIVE","Dependente Familia B","Titular dependentes","Segundo titular")
+                .doesNotContain("Dependente INACTIVE","Dependente ARCHIVED","Dependente alheio","Dependente removido","CLINICAL_SENTINEL","SECRET_STORAGE_SENTINEL");
+            if(format.equals("CSV"))assertThat(byOwners.lines().count()).isEqualTo(3);
+
+            // Valid combination with 0 matching rows returns 200 with empty export
+            String emptyCombo=download("/admin/dependents/export","DEPENDENTS_DEPENDENT_EXPORT",format,
+                "ids",id(disabled).toString(),"status","ACTIVE");
+            assertThat(emptyCombo).doesNotContain("Dependente INACTIVE","Dependente ACTIVE");
+            if(format.equals("CSV"))assertThat(emptyCombo.lines().count()).isEqualTo(1);
+
+            String emptyOwnerExport=download("/admin/dependents/export","DEPENDENTS_DEPENDENT_EXPORT",format,
+                "userIds",id(emptyOwner).toString());
+            if(format.equals("CSV"))assertThat(emptyOwnerExport.lines().count()).isEqualTo(1);
+        }
+
+        // 404 Not Found for nonexistent dependent IDs (including removed history ID 999999) or nonexistent owner IDs
+        auth("DEPENDENTS_DEPENDENT_EXPORT");
+        mvc.perform(get("/admin/dependents/export").param("ids","987654321").header("Authorization","Bearer export-test"))
+            .andExpect(status().isNotFound()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+        mvc.perform(get("/admin/dependents/export").param("ids",id(activeU).toString(),"987654321").header("Authorization","Bearer export-test"))
+            .andExpect(status().isNotFound()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+        mvc.perform(get("/admin/dependents/export").param("ids","999999").header("Authorization","Bearer export-test"))
+            .andExpect(status().isNotFound()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+        mvc.perform(get("/admin/dependents/export").param("userIds","987654321").header("Authorization","Bearer export-test"))
+            .andExpect(status().isNotFound()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+        mvc.perform(get("/admin/dependents/export").param("userIds",id(u).toString(),"987654321").header("Authorization","Bearer export-test"))
+            .andExpect(status().isNotFound()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+
+        // 400 Bad Request for ambiguous (id+ids, userId+userIds), non-positive, empty, or oversized selections
+        mvc.perform(get("/admin/dependents/export").param("id",id(activeU).toString()).param("ids",id(activeU).toString()).header("Authorization","Bearer export-test"))
+            .andExpect(status().isBadRequest()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+        mvc.perform(get("/admin/dependents/export").param("userId",id(u).toString()).param("userIds",id(u).toString()).header("Authorization","Bearer export-test"))
+            .andExpect(status().isBadRequest()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+        String[] oversized=java.util.stream.LongStream.rangeClosed(1,201).mapToObj(Long::toString).toArray(String[]::new);
+        for(String param:List.of("ids","userIds")) {
+            for(String bad:List.of("","0","-1","abc"))
+                mvc.perform(get("/admin/dependents/export").param(param,bad).header("Authorization","Bearer export-test"))
+                    .andExpect(status().isBadRequest()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+            mvc.perform(get("/admin/dependents/export").param(param,oversized).header("Authorization","Bearer export-test"))
+                .andExpect(status().isBadRequest()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
         }
     }
     @Test @org.springframework.transaction.annotation.Transactional

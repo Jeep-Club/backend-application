@@ -2,6 +2,7 @@ package com.jeepclub.backend.billing.api.http.dto;
 
 import com.jeepclub.backend.billing.api.http.dto.assignment.ChargeAssignmentResponse;
 import com.jeepclub.backend.billing.api.http.dto.charge.MemberChargeSummaryResponse;
+import com.jeepclub.backend.billing.api.http.dto.charge.SelfServiceMemberChargeSummaryResponse;
 import com.jeepclub.backend.billing.api.http.dto.cycle.ChargeCycleSummaryResponse;
 import com.jeepclub.backend.billing.api.http.dto.definition.ChargeDefinitionSummaryResponse;
 import com.jeepclub.backend.billing.api.http.dto.payment.MemberPaymentSummaryResponse;
@@ -36,6 +37,12 @@ public final class BillingPageSchemas {
 
     @Schema(name = "PageResponseMemberChargeSummaryResponse")
     public record MemberCharges(List<MemberChargeSummaryResponse> content, int number, int size,
+                                long totalElements, int totalPages, int numberOfElements,
+                                boolean first, boolean last, boolean empty) {
+    }
+
+    @Schema(name = "PageResponseSelfServiceMemberChargeSummaryResponse")
+    public record SelfServiceMemberCharges(List<SelfServiceMemberChargeSummaryResponse> content, int number, int size,
                                 long totalElements, int totalPages, int numberOfElements,
                                 boolean first, boolean last, boolean empty) {
     }
