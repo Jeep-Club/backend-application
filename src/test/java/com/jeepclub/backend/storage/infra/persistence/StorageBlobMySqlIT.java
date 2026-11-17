@@ -56,8 +56,12 @@ class StorageBlobMySqlIT extends StorageUploadFlowTest {
                 query.setLong(1,blockerId);long deadline=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(4);
                 while(System.nanoTime()<deadline && !observed){try(var rows=query.executeQuery()){rows.next();observed=rows.getLong(1)>0;}if(!observed) Thread.sleep(50);}
                 org.assertj.core.api.Assertions.assertThat(observed).as("MySQL must report real lock contention").isTrue();
-                org.assertj.core.api.Assertions.assertThatThrownBy(() -> pending.get(12,java.util.concurrent.TimeUnit.SECONDS))
-                    .isInstanceOf(java.util.concurrent.ExecutionException.class);
+                var failed=org.assertj.core.api.Assertions.catchThrowable(() -> pending.get(12,java.util.concurrent.TimeUnit.SECONDS));
+                org.assertj.core.api.Assertions.assertThat(failed).isInstanceOf(java.util.concurrent.ExecutionException.class);
+                var causes=new java.util.ArrayList<String>();
+                for(Throwable cause=failed;cause!=null;cause=cause.getCause()) causes.add(cause.getClass().getName());
+                System.out.println("BACK639_LOCK_TIMEOUT_CAUSES="+causes);
+                org.assertj.core.api.Assertions.assertThat(causes).anyMatch(name -> name.contains("Timeout") || name.contains("QueryInterrupted"));
                 org.assertj.core.api.Assertions.assertThat(java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-started)).isLessThan(12000);
             } finally {blocker.rollback();}
             org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=?",Long.class,actor)).isEqualTo(before);
