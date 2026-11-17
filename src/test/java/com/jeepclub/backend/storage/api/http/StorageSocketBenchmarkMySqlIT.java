@@ -102,6 +102,8 @@ class StorageSocketBenchmarkMySqlIT {
         System.out.println("STORAGE_SOCKET_BENCHMARK samples="+results.size()+" warmup=2 concurrency=2 image=1024x768-random-png input_bytes_min="+minBytes+" input_bytes_max="+maxBytes
             +" mysql=8.0.46 p50_ms="+p50+" p95_ms="+p95+" max_ms="+times.get(times.size()-1)+" statuses="+statuses
             +" errors="+results.stream().filter(r -> !r.error().isEmpty()).map(Result::error).toList()+" os="+System.getProperty("os.name")+" java="+System.getProperty("java.version")+" cpus="+Runtime.getRuntime().availableProcessors());
+        System.out.println("STORAGE_SOCKET_BUDGETS "+jdbc.queryForList("select scope_id,used_bytes,in_flight,window_attempts,charged_uploads from storage_upload_budgets order by scope_id")
+            +" permits="+jdbc.queryForList("select completed,charged,count(*) as quantity from storage_upload_permits group by completed,charged"));
         assertThat(results).allSatisfy(r -> {assertThat(r.status()).isEqualTo(201);assertThat(r.mediaId()).isPositive();});
         assertThat(new HashSet<>(results.stream().map(Result::mediaId).toList())).hasSize(20);
         for(var result:results) {
