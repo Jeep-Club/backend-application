@@ -59,11 +59,35 @@ public class SqlUploadAdmission implements UploadAdmission {
             user.setChargedUploads(user.getChargedUploads()+1);row.setAccountedBytes(bytes);row.setCharged(true);em.flush();
         });
     }
+    @Override public void recordPlannedBlobs(Permit permit,java.util.List<PlannedBlob> blobs) {
+        if(blobs==null || blobs.isEmpty()) throw new IllegalArgumentException("Missing planned blobs");
+        tx.executeWithoutResult(status -> {
+            var row=em.find(UploadPermitEntity.class,permit.id(),LockModeType.PESSIMISTIC_WRITE);
+            if(row==null || row.getActorUserId()!=permit.actor() || row.isCompleted() || !row.isCharged()) throw new IllegalArgumentException("Invalid upload permit");
+            long total=0;
+            for(var blob:blobs) {
+                if(blob==null || blob.sha256()==null || !blob.sha256().matches("[0-9a-f]{64}") || blob.sizeBytes()<=0) throw new IllegalArgumentException("Invalid planned blob");
+                total=Math.addExact(total,blob.sizeBytes());
+            }
+            if(total!=row.getAccountedBytes()) throw new IllegalArgumentException("Representation budget mismatch");
+            for(int index=0;index<blobs.size();index++) {
+                var blob=blobs.get(index);var planned=new UploadPlannedBlobEntity();
+                planned.setPermitId(permit.id());planned.setPosition(index);planned.setSha256(blob.sha256());planned.setSizeBytes(blob.sizeBytes());em.persist(planned);
+            }
+            em.flush();
+        });
+    }
     @Override public void finish(Permit permit) {
         tx.executeWithoutResult(status -> finishLocked(permit));
     }
     @Override @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.MANDATORY)
-    public void finishInCatalogTransaction(Permit permit) { finishLocked(permit); }
+    public void finishInCatalogTransaction(Permit permit,long mediaId) {
+        if(mediaId<=0) throw new IllegalArgumentException("Invalid media asset");
+        finishLocked(permit);
+        var row=em.find(UploadPermitEntity.class,permit.id());
+        if(row.getCatalogAssetId()!=null && row.getCatalogAssetId()!=mediaId) throw new IllegalArgumentException("Permit already bound");
+        row.setCatalogAssetId(mediaId);em.flush();
+    }
     private void finishLocked(Permit permit) {
             var global=lock(0);var user=lock(permit.actor());var row=em.find(UploadPermitEntity.class,permit.id(),LockModeType.PESSIMISTIC_WRITE);
             if(row==null || row.getActorUserId()!=permit.actor()) throw new IllegalArgumentException("Invalid upload permit");

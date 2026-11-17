@@ -59,3 +59,17 @@ equivale necessariamente a bytes fÃ­sicos Ãºnicos. A semÃ¢ntica de cobranÃ§a par
 falhas apÃ³s entrar no port e a reconciliaÃ§Ã£o desses contadores permanecem uma
 decisÃ£o em aberto; nÃ£o se deve interpretar a exceÃ§Ã£o do port como prova de
 ausÃªncia de custÃ³dia.
+
+
+## Rastreabilidade da tentativa
+
+Antes do primeiro `store`, a tentativa confirma em transação independente a lista
+ordenada de SHA-256 e tamanhos das representações planejadas. O registro é intenção,
+não prova de existência ou integridade física; pode incluir representações cuja
+escrita ainda não começou. A conclusão associa o permit ao asset na mesma transação
+do catálogo. Uma falha posterior mantém a cobrança conservadora e os registros para
+reconciliação manual, inclusive com `storage_blobs` e arquivos `.pending`. Permits
+históricos não possuem este vínculo. A ausência do vínculo após falha não autoriza
+retry cego enquanto a transação possa ainda estar em curso; nenhum identificador
+de idempotência é entregue ao cliente. Isto não limita codec, filesystem, lock ou
+commit e não resolve a decisão F-02 nem a política de reconciliação de quota.

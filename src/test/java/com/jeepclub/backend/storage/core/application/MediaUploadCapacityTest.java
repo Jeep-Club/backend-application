@@ -16,6 +16,27 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.*;
 
 class MediaUploadCapacityTest {
+    @Test void planFailurePreventsPhysicalWritesAndFinishesPermit() {
+        var admission=mock(UploadAdmission.class);
+        var permit=new UploadAdmission.Permit("fixture",1);
+        when(admission.reserve(1)).thenReturn(permit);
+        doThrow(new IllegalStateException("plan failed")).when(admission).recordPlannedBlobs(eq(permit),anyList());
+        var processor=mock(MediaImageProcessor.class);
+        when(processor.process(any(),eq(MediaContext.IDENTITY_PROFILE),any())).thenReturn(
+            new MediaImageProcessor.Processed("source",List.of(new MediaImageProcessor.Representation("MASTER",new byte[]{1,2,3},"image/png",1,1))));
+        var blobs=mock(BlobCatalog.class);
+        var policy=new StorageConsumerPolicy() {
+            public Context context() { return Context.IDENTITY_PROFILE; }
+            public boolean mayUpload(long actor,String consumerId) { return true; }
+            public boolean mayRead(long actor,Reference reference,boolean master) { return false; }
+        };
+        var service=new MediaUploadService(mock(MediaCatalogRepository.class),blobs,processor,mock(MediaGovernance.class),
+            List.of(policy),mock(PlatformTransactionManager.class),new SimpleMeterRegistry(),admission);
+        assertThatThrownBy(() -> service.upload(1,MediaContext.IDENTITY_PROFILE,"1",new byte[]{1}))
+            .isInstanceOf(IllegalStateException.class).hasMessage("plan failed");
+        verify(blobs,never()).store(any());
+        verify(admission).finish(permit);
+    }
     @Test void boundsPayloadReadsAcrossUsersAndReleasesCapacityAfterFailure() throws Exception {
         var admission=mock(UploadAdmission.class);
         when(admission.reserve(anyLong())).thenAnswer(invocation -> new UploadAdmission.Permit("fixture",invocation.getArgument(0)));

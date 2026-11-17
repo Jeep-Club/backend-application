@@ -43,6 +43,14 @@ public class MediaUploadService {
         try {
         var processed=images.process(content.get(),context,options);
         admission.charge(permit,processed.images().stream().mapToLong(i -> i.bytes().length).sum());
+        var planned=processed.images().stream().map(i -> {
+            byte[] representation=i.bytes();
+            try {
+                String digest=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(representation));
+                return new UploadAdmission.PlannedBlob(digest,representation.length);
+            } catch (java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
+        }).toList();
+        admission.recordPlannedBlobs(permit,planned);
         var stored=processed.images().stream().map(i -> blobs.store(i.bytes())).toList();
         return transaction.execute(status -> {
             Instant now=Instant.now(); var audit=new MediaAuditContext(MediaActorKind.USER,actor,now,null);
@@ -55,7 +63,7 @@ public class MediaUploadService {
                 blobs.bind(variant.variantId(),blob);
             }
             governance.initialize(asset.mediaId(),processed.receivedSha256(),java.util.Set.of(MediaContext.DEPENDENT_PHOTO,MediaContext.MEDICAL_IMAGE,MediaContext.IDENTIFICATION_PHOTO).contains(context),audit);
-            admission.finishInCatalogTransaction(permit);
+            admission.finishInCatalogTransaction(permit,asset.mediaId());
             return new Uploaded(asset.mediaId(),null);
         });
         } catch (RuntimeException | Error failure) {

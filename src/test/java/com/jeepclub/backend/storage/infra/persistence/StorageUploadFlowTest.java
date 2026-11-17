@@ -136,6 +136,7 @@ class StorageUploadFlowTest {
         assertThatThrownBy(() -> service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),image(413)))
             .isInstanceOf(IllegalStateException.class).hasMessage("provider fixture");
         assertThat(jdbc.queryForObject("select count(*) from storage_blobs where ready=false",Long.class)).isEqualTo(before+1);
+        assertThat(jdbc.queryForObject("select count(*) from storage_upload_planned_blobs p join storage_upload_permits u on u.id=p.permit_id join storage_blobs b on b.sha256=p.sha256 where u.actor_user_id=? and b.ready=false",Long.class,actor)).isEqualTo(1);
         assertThat(jdbc.queryForObject("select count(*) from storage_media_assets where uploaded_by_user_id=?",Long.class,actor)).isZero();
         assertThat(jdbc.queryForObject("select count(*) from storage_upload_permits where actor_user_id=? and charged=true and completed=true and accounted_bytes>0",Long.class,actor)).isEqualTo(1);
     }
@@ -144,7 +145,8 @@ class StorageUploadFlowTest {
         UploadAdmission failing=new UploadAdmission() {
             public Permit reserve(long id) { return admission.reserve(id); }
             public void charge(Permit permit,long size) { admission.charge(permit,size); }
-            public void finishInCatalogTransaction(Permit permit) { admission.finishInCatalogTransaction(permit); throw new IllegalStateException("finish fixture"); }
+            public void recordPlannedBlobs(Permit permit,java.util.List<PlannedBlob> blobs) { admission.recordPlannedBlobs(permit,blobs); }
+            public void finishInCatalogTransaction(Permit permit,long mediaId) { admission.finishInCatalogTransaction(permit,mediaId); throw new IllegalStateException("finish fixture"); }
             public void finish(Permit permit) { admission.finish(permit); }
         };
         var service=new MediaUploadService(catalog,blobs,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,
@@ -170,7 +172,8 @@ class StorageUploadFlowTest {
         UploadAdmission observed=new UploadAdmission() {
             public Permit reserve(long id) { return admission.reserve(id); }
             public void charge(Permit permit,long size) { admission.charge(permit,size); }
-            public void finishInCatalogTransaction(Permit permit) { admission.finishInCatalogTransaction(permit); }
+            public void recordPlannedBlobs(Permit permit,java.util.List<PlannedBlob> blobs) { admission.recordPlannedBlobs(permit,blobs); }
+            public void finishInCatalogTransaction(Permit permit,long mediaId) { admission.finishInCatalogTransaction(permit,mediaId); }
             public void finish(Permit permit) { finishCalls.incrementAndGet(); throw new IllegalStateException("post commit fixture"); }
         };
         var service=new MediaUploadService(catalog,blobs,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,
@@ -179,6 +182,7 @@ class StorageUploadFlowTest {
         assertThat(catalog.findAsset(result.mediaId())).isPresent();
         assertThat(catalog.findVariant(result.mediaId(),"MASTER")).isPresent();
         assertThat(jdbc.queryForObject("select count(*) from storage_upload_permits where actor_user_id=? and charged=true and completed=true",Long.class,actor)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select catalog_asset_id from storage_upload_permits where actor_user_id=?",Long.class,actor)).isEqualTo(result.mediaId());
         assertThat(finishCalls.get()).isZero();
     }
     @Test void concurrentUploadsCompleteTheirOwnPermitsWhileSharingBytes() throws Exception {
@@ -199,7 +203,8 @@ class StorageUploadFlowTest {
         UploadAdmission failing=new UploadAdmission() {
             public Permit reserve(long id) { var permit=admission.reserve(id);permitRef.set(permit);return permit; }
             public void charge(Permit permit,long size) { admission.charge(permit,size); }
-            public void finishInCatalogTransaction(Permit permit) { admission.finishInCatalogTransaction(permit); }
+            public void recordPlannedBlobs(Permit permit,java.util.List<PlannedBlob> blobs) { admission.recordPlannedBlobs(permit,blobs); }
+            public void finishInCatalogTransaction(Permit permit,long mediaId) { admission.finishInCatalogTransaction(permit,mediaId); }
             public void finish(Permit permit) { throw new IllegalStateException("cleanup fixture"); }
         };
         var service=new MediaUploadService(catalog,blobs,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,

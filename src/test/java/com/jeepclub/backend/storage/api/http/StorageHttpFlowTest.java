@@ -184,6 +184,7 @@ class StorageHttpFlowTest {
             .header("Authorization","Bearer "+owner.accessToken())).andExpect(status().isCreated())
             .andExpect(jsonPath("$.storageKey").doesNotExist()).andExpect(jsonPath("$.sha256").doesNotExist()).andReturn().getResponse().getContentAsString();
         long media=((Number)JsonPath.read(response,"$.mediaId")).longValue();
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject("select count(*) from storage_upload_permits u join storage_upload_planned_blobs p on p.permit_id=u.id where u.catalog_asset_id=?",Long.class,media)).isGreaterThan(0);
         org.assertj.core.api.Assertions.assertThat((Object)JsonPath.read(response,"$.referenceId")).isNull();
         long actor=query.findByCpf("52998224725").orElseThrow().id();
         mvc.perform(post("/storage/media/"+media+"/references").header("Authorization","Bearer "+owner.accessToken())
