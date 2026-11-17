@@ -118,6 +118,27 @@ class StorageUploadFlowTest {
         assertThat(jdbc.queryForObject("select charged_uploads from storage_upload_budgets where scope_id=?",Long.class,actor)).isZero();
         assertThat(jdbc.queryForObject("select in_flight from storage_upload_budgets where scope_id=?",Integer.class,actor)).isZero();
     }
+    @Test void failureAfterCommittedPlanPreservesIntentButReleasesQuota() throws Exception {
+        long actor=987719L;
+        UploadAdmission failing=new UploadAdmission() {
+            public Permit reserve(long id) { return admission.reserve(id); }
+            public void charge(Permit p,long size) { admission.charge(p,size); }
+            public void recordPlannedBlobs(Permit p,java.util.List<PlannedBlob> b) { admission.recordPlannedBlobs(p,b);throw new IllegalStateException("plan response lost"); }
+            public void finishInCatalogTransaction(Permit p,long id) { admission.finishInCatalogTransaction(p,id); }
+            public void abortBeforeStore(Permit p) { admission.abortBeforeStore(p); }
+            public void finish(Permit p) { admission.finish(p); }
+        };
+        var noStore=org.mockito.Mockito.mock(BlobCatalog.class);
+        var service=new MediaUploadService(catalog,noStore,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,
+            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),failing);
+        assertThatThrownBy(() -> service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),image(415)))
+            .isInstanceOf(IllegalStateException.class).hasMessage("plan response lost");
+        org.mockito.Mockito.verifyNoInteractions(noStore);
+        assertThat(jdbc.queryForObject("select count(*) from storage_upload_planned_blobs p join storage_upload_permits u on u.id=p.permit_id where u.actor_user_id=? and u.completed=true and u.accounted_bytes=0",Long.class,actor)).isPositive();
+        assertThat(jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=?",Long.class,actor)).isZero();
+        assertThat(jdbc.queryForObject("select charged_uploads from storage_upload_budgets where scope_id=?",Long.class,actor)).isZero();
+        assertThat(jdbc.queryForObject("select in_flight from storage_upload_budgets where scope_id=?",Integer.class,actor)).isZero();
+    }
     @Test void retainedLimitIsRecheckedAfterMultipleReservations() {
         long actor=987717L;
         var limited=new SqlUploadAdmission(emForQuota(),manager,64L*1024*1024,100L*1024*1024,30,2,1);
