@@ -116,3 +116,17 @@ criação do asset, mas não tem FK física: não é prova de integridade caso d
 sejam alterados fora desse fluxo. Uma FK nova exigiria validar todo o histórico,
 existência dos assets e política de retenção antes de uma migration aditiva; não
 se altera V25 nem se apagam intents para satisfazer uma constraint.
+
+
+## Limite de transações de admissão
+
+As transações independentes de admissão possuem timeout Spring de cinco
+segundos. Em MySQL 8.0.46 e Connector/J, a regressão de contenção observou
+a espera real por lock no `performance_schema`, uma `QueryTimeoutException`
+e rollback da tentativa sem reserva aberta. O teste estabelece esse caminho,
+não um timeout universal de lock para outros adapters ou dialetos.
+
+O MySQL reverte somente o statement após lock timeout; a exceção deve sair
+da transação para que o gerenciador faça rollback. O timeout transacional
+pode limitar statements JDBC suportados, mas não comprova cancelamento de
+codec, I/O físico ou commit, nem um limite total de duração do upload.
