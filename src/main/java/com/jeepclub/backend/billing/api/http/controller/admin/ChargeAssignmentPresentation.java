@@ -17,6 +17,7 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class ChargeAssignmentPresentation {
     private final RolePresentationQuery roles;
+    private final BillingUserNamePresentation users;
 
     public static boolean canReadRoles() {
         var authentication = SecurityContextHolder.getContext().getAuthentication();
@@ -27,12 +28,24 @@ public class ChargeAssignmentPresentation {
     public Page<ChargeAssignmentResponse> present(Page<ChargeAssignmentResult> results) {
         boolean allowed = canReadRoles();
         Map<Long, String> names = names(results.getContent(), allowed);
-        return results.map(result -> response(result, allowed, names));
+        var userNames = userNames(results.getContent());
+        return results.map(result -> response(result, allowed, names, userNames));
     }
 
     public ChargeAssignmentResponse present(ChargeAssignmentResult result) {
         boolean allowed = canReadRoles();
-        return response(result, allowed, names(List.of(result), allowed));
+        return response(result, allowed, names(List.of(result), allowed), Map.of());
+    }
+
+    public ChargeAssignmentResponse presentRead(ChargeAssignmentResult result) {
+        boolean allowed = canReadRoles();
+        var results = List.of(result);
+        return response(result, allowed, names(results, allowed), userNames(results));
+    }
+
+    private Map<Long, String> userNames(List<ChargeAssignmentResult> results) {
+        return users.names(results.stream().filter(r -> r.audienceType() == ChargeAudienceType.USER)
+                .map(ChargeAssignmentResult::userId).toList());
     }
 
     private Map<Long, String> names(List<ChargeAssignmentResult> results, boolean allowed) {
@@ -44,7 +57,8 @@ public class ChargeAssignmentPresentation {
                 .collect(Collectors.toMap(RolePresentationQuery.Details::id, RolePresentationQuery.Details::name, (a, b) -> a));
     }
 
-    private ChargeAssignmentResponse response(ChargeAssignmentResult result, boolean allowed, Map<Long, String> names) {
-        return ChargeAssignmentResponse.from(result, allowed, result.roleId() == null ? null : names.get(result.roleId()));
+    private ChargeAssignmentResponse response(ChargeAssignmentResult result, boolean allowed, Map<Long, String> names, Map<Long, String> userNames) {
+        return ChargeAssignmentResponse.from(result, allowed, result.roleId() == null ? null : names.get(result.roleId()),
+                result.userId() == null ? null : userNames.get(result.userId()));
     }
 }

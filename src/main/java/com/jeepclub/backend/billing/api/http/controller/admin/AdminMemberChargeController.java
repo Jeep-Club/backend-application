@@ -18,9 +18,11 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Positive;
+import com.jeepclub.backend.memberships.api.module.MemberRegistrationQuery;
+import java.util.List;
+import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springdoc.core.annotations.ParameterObject;
-import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.MediaType;
@@ -47,6 +49,8 @@ import org.springframework.web.bind.annotation.RestController;
 public class AdminMemberChargeController {
 
     private final AdminMemberChargeService adminMemberChargeService;
+    private final BillingUserNamePresentation userNames;
+    private final MemberRegistrationQuery members;
 
     @GetMapping("/billing/member-charges")
     @PreAuthorize("hasAuthority('BILLING_MEMBER_CHARGE_READ')")
@@ -62,13 +66,18 @@ public class AdminMemberChargeController {
             @RequestParam(required = false) MemberChargeStatus status,
             @ParameterObject Pageable pageable
     ) {
-        Page<MemberChargeResult> results = adminMemberChargeService.findAll(
+        var results = adminMemberChargeService.findAll(
                 userId,
                 status,
                 pageable
         );
 
-        return ResponseEntity.ok(PageResponse.from(results.map(MemberChargeSummaryResponse::from)));
+        var ids = results.getContent().stream().map(result -> result.charge().userId()).distinct().toList();
+        var names = userNames.names(ids);
+        var numbers = membershipNumbers(ids);
+        return ResponseEntity.ok(PageResponse.from(results.map(result -> MemberChargeSummaryResponse.from(
+                result.charge(), names.get(result.charge().userId()), numbers.get(result.charge().userId()),
+                result.chargeDefinitionNameSnapshot(), result.chargeCycleCode()))));
     }
 
     @GetMapping("/billing/member-charges/{memberChargeId}")
@@ -82,9 +91,16 @@ public class AdminMemberChargeController {
     public ResponseEntity<MemberChargeResponse> findById(
             @PathVariable @Positive(message = "ID da cobrança deve ser maior que zero.") Long memberChargeId
     ) {
-        MemberChargeResult result = adminMemberChargeService.findById(memberChargeId);
+        var result = adminMemberChargeService.findById(memberChargeId);
+        var userId = result.charge().userId();
+        var ids = List.of(userId);
+        return ResponseEntity.ok(MemberChargeResponse.from(result.charge(), userNames.names(ids).get(userId),
+                membershipNumbers(ids).get(userId), result.chargeDefinitionNameSnapshot(), result.chargeCycleCode()));
+    }
 
-        return ResponseEntity.ok(MemberChargeResponse.from(result));
+    private Map<Long, String> membershipNumbers(List<Long> ids) {
+        return ids.isEmpty() || !BillingUserNamePresentation.hasAuthority("MEMBERSHIP_MEMBER_READ")
+                ? Map.of() : members.currentNumbers(ids);
     }
 
     @PatchMapping("/billing/member-charges/{memberChargeId}/final-amount")
