@@ -2,7 +2,7 @@
 
 Use Python 3.10+, Git e o Maven wrapper existentes. Java 17 é a referência do CI.
 No Windows, configure `JAVA_HOME` e acrescente seu `bin` ao `PATH` da sessão.
-MySQL/PostgreSQL exigem Docker disponível: os próprios testes criam containers
+Os testes MySQL 8 exigem Docker disponível e criam containers
 descartáveis; o runner não recebe URL, senha ou conexão de banco externo.
 
 ```powershell
@@ -45,7 +45,7 @@ não quantidade de classes. F1–F4 e M1–M3 sempre são **validações parciai
 O projeto tem um artefato Maven; módulo aqui significa contexto/pacote, não reactor.
 O inventário percorre `src/test/java` a cada execução, inspeciona a declaração da
 classe do arquivo e usa os defaults Surefire (`Test*`, `*Test`, `*Tests`, `*TestCase`)
-e os includes Failsafe dos perfis atuais (`*MySqlIT`, `MySqlMigrationIT`, `*PostgresIT`).
+e os includes Failsafe do perfil `mysql-migrations` (`*MySqlIT`, `MySqlMigrationIT`).
 Classes abstratas/interfaces e helpers sem convenção executável ficam separados.
 Um arquivo com anotação JUnit conhecida e nome incompatível provoca erro explícito.
 Candidates com nome elegível e testes herdados/composed continuam no inventário;
@@ -65,8 +65,8 @@ Isso é análise de fonte conservadora, **não implementação do discovery JUni
 Os gates Maven integrais são o oráculo independente; confronte seus XMLs com o
 inventário e investigue qualquer diferença antes do aceite.
 
-F2 seleciona os testes Surefire do contexto; F4 seleciona seus ITs e separa cada
-dialeto no próprio perfil. F1 também aceita IT explícito e escolhe o perfil correto.
+F2 seleciona os testes Surefire do contexto. F4 seleciona seus ITs MySQL.
+F1 também aceita IT explícito e escolhe o perfil correto.
 As classes completas são resolvidas; são aceitos nome simples inequívoco ou FQCN,
 e opcionalmente um método. Não se aceitam wildcards, exclusões ou expressões Maven
 arbitrárias na interface: o objetivo é auditar uma seleção concreta.
@@ -114,7 +114,7 @@ M3 escolhe conservadoramente a classe histórica inteira, evitando manter uma li
 frágil de métodos de upgrades. Novos métodos dessa classe entram automaticamente.
 M2 mantém somente dois seletores específicos; remoção/renomeação falha na resolução.
 M4 preserva o ensaio V+1 em `git archive HEAD`; F5 inclui, nesta ordem, `verify`,
-MySQL, PostgreSQL e V+1. Exige HEAD limpo e versionado para não testar código antigo.
+MySQL e V+1. Exige HEAD limpo e versionado para não testar código antigo.
 
 M1 compara scripts/fixtures com uma base Git verificável. Nas faixas parciais F1–F4
 e M1–M3, o padrão local é `merge-base(HEAD, origin/develop)`: isso permite branch
@@ -229,6 +229,6 @@ Não há promessa de cobertura JaCoCo pela seleção, nem soma de rodadas como s
 Logs são locais e ignorados pelo Git. Os testes existentes usam dados sintéticos;
 mesmo assim revise/sanitize antes de publicar. Não copie env, credenciais ou dados
 de produção. Resuma comando, escopo, duração, counts e limitações no checkpoint.
-Os três jobs originais e scripts de deploy permanecem obrigatórios; o CI também
-executa as regressões Python do runner. CI no SHA exato pode suprir gate local
-equivalente; uma execução em outro SHA não aprova a entrega.
+O CI executa Maven verify, MySQL migrations e as regressões Python do runner.
+As condições e dependências de deploy são definidas no workflow. CI no SHA
+exato pode suprir gate local equivalente; uma execução em outro SHA não aprova a entrega.

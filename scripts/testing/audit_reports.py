@@ -11,7 +11,7 @@ from ci_base import from_environment
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--kind', choices=['unit', 'mysql', 'postgres'], required=True)
+    parser.add_argument('--kind', choices=['unit', 'mysql'], required=True)
     parser.add_argument('--reports', type=Path, required=True)
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--selection', type=Path, help='Reconcile a saved partial selection instead of the full inventory')
