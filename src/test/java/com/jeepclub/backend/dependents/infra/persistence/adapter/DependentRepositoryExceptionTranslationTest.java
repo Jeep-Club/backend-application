@@ -22,9 +22,14 @@ class DependentRepositoryExceptionTranslationTest {
     @ValueSource(strings = {"unrelated_constraint", "no_hibernate_cause"})
     void unrelatedIntegrityFailuresAreNotMisreportedAsCpfConflicts(String constraint) {
         DependentJpaRepository jpa = mock(DependentJpaRepository.class);
-        DependentRepositoryAdapter repository = new DependentRepositoryAdapter(mock(jakarta.persistence.EntityManager.class), jpa,
-                mock(DependentHistoryJpaRepository.class), mock(DependentMapper.class),
-                mock(DependentHistoryMapper.class));
+        DependentRepositoryAdapter repository = new DependentRepositoryAdapter(
+                mock(jakarta.persistence.EntityManager.class),
+                mock(com.jeepclub.backend.iam.identity.api.module.UserNameCriteria.class),
+                jpa,
+                mock(DependentHistoryJpaRepository.class),
+                mock(DependentMapper.class),
+                mock(DependentHistoryMapper.class)
+        );
         Throwable cause = "no_hibernate_cause".equals(constraint)
                 ? new SQLException("unrelated")
                 : new ConstraintViolationException("unrelated", new SQLException(), constraint);

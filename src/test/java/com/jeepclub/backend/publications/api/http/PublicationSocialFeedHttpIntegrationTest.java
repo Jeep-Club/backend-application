@@ -112,7 +112,7 @@ class PublicationSocialFeedHttpIntegrationTest {
                 .andExpect(status().isNotFound()).andExpect(jsonPath("$.code").value("PUBLICATION_COMMENT_IMAGE_NOT_FOUND"));
     }
 
-    @Test @Transactional void memberWithoutPublicationPermissionsCanReadButCannotWrite() throws Exception {
+    @Test @Transactional void memberWithoutPublicationPermissionsCanReadAndInteract() throws Exception {
         var notice = Notice.create(7L, "Published", "Body", List.of(new PublicationImage(KEY, 0, true)), NOW);
         notice.publish(NOW.plusSeconds(1));
         long id = publications.save(notice).getId();
@@ -137,7 +137,24 @@ class PublicationSocialFeedHttpIntegrationTest {
         mvc.perform(get("/publications/{id}/comments", draftId).header(AUTHORIZATION, "Bearer social-token")).andExpect(status().isNotFound());
         mvc.perform(get("/publications/{id}", archivedId).header(AUTHORIZATION, "Bearer social-token")).andExpect(status().isNotFound());
         mvc.perform(get("/publications/{id}/comments", archivedId).header(AUTHORIZATION, "Bearer social-token")).andExpect(status().isNotFound());
-        mvc.perform(post("/publications/{id}/likes", id).header(AUTHORIZATION, "Bearer social-token")).andExpect(status().isForbidden());
+        mvc.perform(post("/publications/{id}/likes", id).header(AUTHORIZATION, "Bearer social-token")).andExpect(status().isOk());
+        mvc.perform(post("/publications/{id}/likes", id).header(AUTHORIZATION, "Bearer social-token")).andExpect(status().isOk());
+        mvc.perform(post("/publications/{id}/comments", id).header(AUTHORIZATION, "Bearer social-token")
+                .contentType(MediaType.APPLICATION_JSON).content("{\"text\":\"Member comment\"}"))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.authorUserId").value(9));
+        authenticate(10L);
+        when(authorities.findAuthorityCodesByUserId(10L)).thenReturn(List.of());
+        mvc.perform(post("/publications/{id}/likes", id).header(AUTHORIZATION, "Bearer social-token")).andExpect(status().isOk());
+        authenticate(9L);
+        when(authorities.findAuthorityCodesByUserId(9L)).thenReturn(List.of());
+        for (int i = 0; i < 2; i++) {
+            mvc.perform(delete("/publications/{id}/likes/me", id).header(AUTHORIZATION, "Bearer social-token")).andExpect(status().isNoContent());
+        }
+        mvc.perform(get("/publications/{id}", id).header(AUTHORIZATION, "Bearer social-token"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.likeCount").value(1)).andExpect(jsonPath("$.likedByMe").value(false));
+        mvc.perform(post("/publications/{id}/likes", id)).andExpect(status().isUnauthorized());
+        mvc.perform(delete("/publications/{id}/likes/me", id)).andExpect(status().isUnauthorized());
+        mvc.perform(post("/publications/{id}/comments", id).contentType(MediaType.APPLICATION_JSON).content("{\"text\":\"x\"}")).andExpect(status().isUnauthorized());
         var archivedEvent = publications.findById(eventId).orElseThrow();
         archivedEvent.archive(NOW.plusSeconds(2)); publications.save(archivedEvent);
         var archivedService = publications.findById(serviceId).orElseThrow();
@@ -149,6 +166,48 @@ class PublicationSocialFeedHttpIntegrationTest {
                 "/publications/" + id + "/comments", "/events/" + eventId, "/services/" + serviceId)) {
             mvc.perform(get(path).header(AUTHORIZATION, "Bearer social-token")).andExpect(status().isPaymentRequired());
         }
+    }
+
+    @Test @Transactional void socialWritesHonorMembershipAndPublicationVisibility() throws Exception {
+        var notice = Notice.create(7L, "Published", "Body", List.of(new PublicationImage(KEY, 0, true)), NOW);
+        notice.publish(NOW.plusSeconds(1));
+        long id = publications.save(notice).getId();
+        long draftId = publications.save(Notice.create(7L, "Draft", "Body", List.of(new PublicationImage(KEY, 0, true)), NOW)).getId();
+        var archived = Notice.create(7L, "Archived", "Body", List.of(new PublicationImage(KEY, 0, true)), NOW);
+        archived.publish(NOW.plusSeconds(1)); archived.archive(NOW.plusSeconds(2));
+        long archivedId = publications.save(archived).getId();
+        authenticate(9L);
+        when(authorities.findAuthorityCodesByUserId(9L)).thenReturn(List.of());
+        when(membership.evaluate(anyLong())).thenReturn(MembershipAccessResult.ALLOWED);
+        long requestId;
+        do {
+            requestId = requests.save(ServicePublicationRequest.create(7L, "Pending", "Body", new BigDecimal("12.00"),
+                    "123456789", List.of(new PublicationImage(KEY, 0, true)), NOW)).getId();
+        } while (publications.findById(requestId).isPresent());
+        mvc.perform(post("/admin/notices").header(AUTHORIZATION, "Bearer social-token")
+                .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isForbidden());
+        for (long inaccessible : List.of(draftId, archivedId, Long.MAX_VALUE, requestId)) {
+            mvc.perform(post("/publications/{id}/likes", inaccessible).header(AUTHORIZATION, "Bearer social-token")).andExpect(status().isNotFound());
+            mvc.perform(delete("/publications/{id}/likes/me", inaccessible).header(AUTHORIZATION, "Bearer social-token")).andExpect(status().isNotFound());
+            mvc.perform(post("/publications/{id}/comments", inaccessible).header(AUTHORIZATION, "Bearer social-token")
+                    .contentType(MediaType.APPLICATION_JSON).content("{\"text\":\"x\"}")).andExpect(status().isNotFound());
+        }
+        for (var blocked : List.of(MembershipAccessResult.PAYMENT_REQUIRED, MembershipAccessResult.CHARGE_NOT_FOUND)) {
+            when(membership.evaluate(anyLong())).thenReturn(blocked);
+            int expected = blocked == MembershipAccessResult.PAYMENT_REQUIRED ? 402 : 503;
+            String code = blocked == MembershipAccessResult.PAYMENT_REQUIRED ? "MEMBERSHIP_PAYMENT_REQUIRED" : "MEMBERSHIP_CHARGE_UNAVAILABLE";
+            mvc.perform(post("/publications/{id}/likes", id).header(AUTHORIZATION, "Bearer social-token"))
+                    .andExpect(status().is(expected)).andExpect(jsonPath("$.code").value(code));
+            mvc.perform(delete("/publications/{id}/likes/me", id).header(AUTHORIZATION, "Bearer social-token"))
+                    .andExpect(status().is(expected)).andExpect(jsonPath("$.code").value(code));
+            mvc.perform(post("/publications/{id}/comments", id).header(AUTHORIZATION, "Bearer social-token")
+                    .contentType(MediaType.APPLICATION_JSON).content("{\"text\":\"x\"}"))
+                    .andExpect(status().is(expected)).andExpect(jsonPath("$.code").value(code));
+        }
+        when(membership.evaluate(anyLong())).thenReturn(MembershipAccessResult.ALLOWED);
+        mvc.perform(get("/publications/{id}", id).header(AUTHORIZATION, "Bearer social-token"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.likeCount").value(0)).andExpect(jsonPath("$.commentCount").value(0));
     }
 
     private void authenticate(long userId) {

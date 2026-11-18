@@ -1,9 +1,9 @@
 package com.jeepclub.backend.billing.api.http.controller;
 
-import com.jeepclub.backend.billing.api.http.dto.charge.MemberChargeResponse;
+import com.jeepclub.backend.billing.api.http.dto.charge.SelfServiceMemberChargeResponse;
 import com.jeepclub.backend.billing.api.http.dto.BillingPageSchemas;
-import com.jeepclub.backend.billing.api.http.dto.charge.MemberChargeSummaryResponse;
-import com.jeepclub.backend.billing.core.application.result.charge.MemberChargeResult;
+import com.jeepclub.backend.billing.api.http.dto.charge.SelfServiceMemberChargeSummaryResponse;
+import com.jeepclub.backend.billing.core.application.result.charge.MemberChargeSelfServiceResult;
 import com.jeepclub.backend.billing.core.application.service.membercharge.MemberChargeService;
 import com.jeepclub.backend.billing.core.domain.enums.charge.MemberChargeStatus;
 import com.jeepclub.backend.platform.security.principal.UserPrincipal;
@@ -45,22 +45,22 @@ public class MemberChargeController {
     @Operation(
             summary = "Listar minhas cobranças",
             description = "Lista somente as cobranças do usuário autenticado, com filtro opcional pelo status persistido. A paginação usa page zero-based, size 20 por padrão e limite global de 50.",
-            responses = @ApiResponse(responseCode = "200", description = "Página de cobranças retornada.", content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = BillingPageSchemas.MemberCharges.class)))
+            responses = @ApiResponse(responseCode = "200", description = "Página de cobranças retornada.", content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = BillingPageSchemas.SelfServiceMemberCharges.class)))
     )
-    public ResponseEntity<PageResponse<MemberChargeSummaryResponse>> findMine(
+    public ResponseEntity<PageResponse<SelfServiceMemberChargeSummaryResponse>> findMine(
             @RequestParam(required = false) MemberChargeStatus status,
             @ParameterObject Pageable pageable,
             Authentication authentication
     ) {
         Long authenticatedUserId = extractUserId(authentication);
 
-        Page<MemberChargeResult> results = memberChargeService.findMine(
+        Page<MemberChargeSelfServiceResult> results = memberChargeService.findMine(
                 authenticatedUserId,
                 status,
                 pageable
         );
 
-        return ResponseEntity.ok(PageResponse.from(results.map(MemberChargeSummaryResponse::from)));
+        return ResponseEntity.ok(PageResponse.from(results.map(SelfServiceMemberChargeSummaryResponse::from)));
     }
 
     @GetMapping("/billing/me/member-charges/{memberChargeId}")
@@ -68,23 +68,23 @@ public class MemberChargeController {
             summary = "Buscar minha cobrança por ID",
             description = "Consulta uma cobrança do usuário autenticado, garantindo que ela pertence ao próprio usuário.",
             responses = {
-                    @ApiResponse(responseCode = "200", description = "Cobrança retornada.", content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = MemberChargeResponse.class))),
+                    @ApiResponse(responseCode = "200", description = "Cobrança retornada.", content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = SelfServiceMemberChargeResponse.class))),
                     @ApiResponse(responseCode = "403", description = "Cobrança pertence a outro usuário.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class))),
                     @ApiResponse(responseCode = "404", description = "Cobrança não encontrada.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class)))
             }
     )
-    public ResponseEntity<MemberChargeResponse> findMineById(
+    public ResponseEntity<SelfServiceMemberChargeResponse> findMineById(
             @PathVariable @Positive(message = "ID da cobrança deve ser maior que zero.") Long memberChargeId,
             Authentication authentication
     ) {
         Long authenticatedUserId = extractUserId(authentication);
 
-        MemberChargeResult result = memberChargeService.findMineById(
+        MemberChargeSelfServiceResult result = memberChargeService.findMineById(
                 authenticatedUserId,
                 memberChargeId
         );
 
-        return ResponseEntity.ok(MemberChargeResponse.from(result));
+        return ResponseEntity.ok(SelfServiceMemberChargeResponse.from(result));
     }
 
     private Long extractUserId(Authentication authentication) {

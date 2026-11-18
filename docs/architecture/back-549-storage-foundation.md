@@ -48,7 +48,7 @@ FKs são internas e restritivas, sem cascata destrutiva. Auditoria usa FKs compo
 
 A localização e o código semântico usam `utf8mb4_0900_bin` (MySQL 8), comparação sensível a caixa e NO PAD. Não normalizamos storageKey nem impomos regex de caminhos do provider atual. A key permanece interna, opaca e nunca autoriza acesso. Nenhuma migration aplicada foi editada. Nenhuma tabela legada recebe FK para Storage. O helper de fixtures históricas exclui mappings Storage antes da V13; o gate de equivalência descreve separadamente as propriedades físicas específicas de MySQL.
 
-Flyway de produção é MySQL no repositório. `MediaCatalogMySqlIT` migra V1–V13 e inicializa Hibernate validate. `MySqlMigrationIT` cobre schema completo, baseline histórico, preservação e evolução. O suporte PostgreSQL existente usa DDL Hibernate, sem cadeia Flyway PostgreSQL: `MediaCatalogPostgresIT` mantém essa estratégia e exercita as mesmas invariantes e transações no PostgreSQL real. Não se declara portabilidade das migrations MySQL V1–V13 para PostgreSQL.
+MySQL 8 é o único banco-alvo (BACK-707). O perfil `mysql-migrations` executa `MediaCatalogMySqlIT` com Flyway e Hibernate validate. `MySqlMigrationIT` cobre schema completo, baseline histórico, preservação e evolução.
 
 Records sobrescrevem toString para não imprimir localização, dados pessoais ou metadados. Nenhum logger foi adicionado; proteção já existente de JDBC errors/bind parameters permanece. Futuras APIs não devem serializar domínio ou entidades JPA diretamente, nem propagar exceções de banco com valores internos.
 
@@ -62,9 +62,9 @@ D13: comuns exigem revalidação de ACL/moderação em cada request, inclusive 3
 
 Sem merge, deploy, operação em VPS, backup operacional, frontend ou dados reais. Resultado de teste local/CI é evidência técnica, sem aceitação operacional.
 
-## Registro de validação
+## Registro histórico de validação da BACK-549
 
-Os comandos e resultados finais do SHA publicado ficam na descrição do PR, com link para a execução de CI. O perfil `mysql-migrations` inclui MediaCatalogMySqlIT; `publications-postgresql` inclui MediaCatalogPostgresIT por convenção de sufixo. A execução normal inclui MediaDomainTest e MediaCatalogPersistenceTest.
+Os comandos e resultados finais do SHA publicado ficam na descrição do PR, com link para a execução de CI. Na BACK-549, os perfis `mysql-migrations` e `publications-postgresql` incluíam os wrappers do catálogo por sufixo. O segundo usava DDL Hibernate e foi retirado na BACK-707. A execução normal inclui MediaDomainTest e MediaCatalogPersistenceTest.
 
 Durante a implementação foram corrigidos: isolamento do slice JPA (não carregar repositories de outros módulos), nomes duplicados de checks e enums VARCHAR com checks nomeados/converters explícitos. O teste H2 usa datasource com pool para não depender de sessão de DDL fechada na avaliação de checks. Não se alterou versão do H2 nem configuração operacional.
 

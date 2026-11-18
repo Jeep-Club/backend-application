@@ -12,15 +12,12 @@ Event aceita conflito de lock e apenas constraints nomeadas conhecidas como 409;
 social reconhece exclusivamente uk_publication_like_member para conflito de like.
 Integridade de comentário não recebe código de like.
 
-A aplicação e suas migrations continuam em MySQL. A validação adicional PostgreSQL 17
-usa containers descartáveis, schema Hibernate com halt-on-error e nenhum banco externo:
-`./mvnw -Ppublications-postgresql -DskipUnitTests=true verify`.
-O contexto de teste completo exclui somente a proteção de DDL de produção; essa proteção
-não foi relaxada. As mesmas rotinas Event/Billing, likes, Service e histórico são
-executadas em transações reais. PostgreSQL exige default boolean false para
-legacy_deleted; o override de dialeto preserva MySQL e dispensa migration.
-O perfil mysql-migrations continua cobrindo o banco de produção separadamente.
-Matriz, resultados e limitações: `docs/testing/admin-hardening.md` na raiz.
+MySQL 8 é o único banco-alvo (BACK-707). O perfil `mysql-migrations` executa
+`EventOperationsMySqlIT`, `EventParticipantHttpMySqlIT`,
+`PublicationPersistenceMySqlIT` e `ServiceChangePersistenceMySqlIT` em containers
+descartáveis com Flyway e Hibernate validate. As duas suítes de persistência
+reutilizam os testes de likes, locks, aprovações concorrentes, rollback e histórico.
+O relatório histórico de hardening está em `docs/testing/admin-hardening.md`.
 
 ## Cancelamentos de Event e inscrição — BACK-460
 
@@ -656,7 +653,7 @@ consulta de likedByMe por conjunto de IDs e leitura em lote das imagens.
 
 ## Interações sociais
 
-Membros autenticados com as permissões específicas podem usar `POST
+Membros autenticados autorizados pela política de Membership podem usar `POST
 /publications/{publicationId}/likes` (200 idempotente), `DELETE
 /publications/{publicationId}/likes/me` (204 idempotente), `POST
 /publications/{publicationId}/comments` (201) e `GET

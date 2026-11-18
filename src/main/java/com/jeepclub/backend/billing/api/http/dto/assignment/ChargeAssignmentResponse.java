@@ -39,7 +39,10 @@ public record ChargeAssignmentResponse(
         Instant createdAt,
 
         @Schema(description = "Data da última atualização da atribuição.", nullable = true)
-        Instant updatedAt
+        Instant updatedAt,
+
+        @Schema(description = "Nome cadastral atual de usuário ativo em atribuição USER, visível nos GETs com IDENTITY_USER_READ.", nullable = true)
+        String userName
 ) {
 
     public static ChargeAssignmentResponse from(ChargeAssignmentResult result) {
@@ -47,6 +50,10 @@ public record ChargeAssignmentResponse(
     }
 
     public static ChargeAssignmentResponse from(ChargeAssignmentResult result, boolean canReadRole, String roleName) {
+        return from(result, canReadRole, roleName, null);
+    }
+
+    public static ChargeAssignmentResponse from(ChargeAssignmentResult result, boolean canReadRole, String roleName, String userName) {
         Objects.requireNonNull(result, "result cannot be null");
 
         return new ChargeAssignmentResponse(
@@ -59,7 +66,8 @@ public record ChargeAssignmentResponse(
                 result.eventId(),
                 result.active(),
                 result.createdAt(),
-                result.updatedAt()
+                result.updatedAt(),
+                result.audienceType() == ChargeAudienceType.USER ? userName : null
         );
     }
 

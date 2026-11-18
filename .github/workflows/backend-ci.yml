@@ -10,6 +10,11 @@ on:
       - develop
       - master
   workflow_dispatch:
+    inputs:
+      migration_base:
+        description: Full commit SHA, ancestor of the selected ref, to compare migrations against
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -27,6 +32,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -47,12 +54,17 @@ jobs:
           for script in deploy/*.sh; do bash -n "$script"; done
           python3 deploy/test-deploy.py
           python3 deploy/test-snapshot.py
+          python3 -m unittest discover -s scripts/testing -p 'test_*.py'
+          bash scripts/test.sh --band F2 --module tools --inspect
           python3 -m py_compile deploy/snapshot-vps.py
           docker compose config --quiet
           docker compose -f compose.local.yaml config --quiet
 
       - name: Verify
         run: ./mvnw --batch-mode --no-transfer-progress verify
+
+      - name: Reconcile eligible Surefire sources and execution
+        run: python3 scripts/testing/audit_reports.py --kind unit --reports target/surefire-reports --out target/progressive-ci-unit.json
 
       - name: Preserve unit and coverage evidence
         if: always()
@@ -63,6 +75,7 @@ jobs:
             target/surefire-reports
             target/jacoco.exec
             target/site/jacoco
+            target/progressive-ci-*.json
 
   mysql-migrations:
     name: MySQL migrations
@@ -71,6 +84,8 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -79,10 +94,18 @@ jobs:
       - run: chmod +x mvnw
       - name: Verify frozen historical fixture hashes
         run: cd src/test/resources/database/historical && sha256sum -c SHA256SUMS
+      - name: Record MySQL gate provenance
+        run: python3 scripts/testing/audit_migrations.py --start
       - name: Validate empty and historical MySQL schemas
         run: ./mvnw --batch-mode --no-transfer-progress -Pmysql-migrations -DskipUnitTests=true verify
+      - name: Reconcile eligible MySQL sources and execution
+        run: python3 scripts/testing/audit_reports.py --kind mysql --reports target/failsafe-reports --out target/progressive-ci-mysql.json
       - name: Verify next migration without fixed-version test edits
         run: bash deploy/test-future-migration.sh
+      - name: Reconcile forward compatibility execution
+        run: python3 scripts/testing/audit_reports.py --kind mysql --reports target/forward-migration-evidence/failsafe-reports --out target/progressive-ci-forward.json
+      - name: Audit new migration risk against full MySQL evidence
+        run: python3 scripts/testing/audit_migrations.py --reports target/failsafe-reports --out target/progressive-ci-migration-risk.json
       - name: Preserve migration test results
         if: always()
         uses: actions/upload-artifact@v4
@@ -94,27 +117,7 @@ jobs:
             target/forward-migration-evidence
             target/jacoco.exec
             target/site/jacoco
-
-  publications-postgresql:
-    name: Publications PostgreSQL
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-          cache: maven
-      - run: chmod +x mvnw
-      - name: Validate PostgreSQL schema and transactional races
-        run: ./mvnw --batch-mode --no-transfer-progress -Ppublications-postgresql -DskipUnitTests=true verify
-      - name: Preserve PostgreSQL results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: publications-postgresql-evidence
-          path: target/failsafe-reports
+            target/progressive-ci-*.json
 
   deploy:
     name: Deploy to VPS

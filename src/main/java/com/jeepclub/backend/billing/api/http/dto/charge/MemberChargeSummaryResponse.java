@@ -41,10 +41,27 @@ public record MemberChargeSummaryResponse(
         MemberChargeStatus status,
 
         @Schema(description = "Status calculado da cobrança na data da consulta.", example = "OVERDUE")
-        MemberChargeEffectiveStatus effectiveStatus
+        MemberChargeEffectiveStatus effectiveStatus,
+
+        @Schema(description = "Nome cadastral atual de usuário ativo, com IDENTITY_USER_READ.", nullable = true)
+        String userName,
+
+        @Schema(description = "Matrícula vigente, com MEMBERSHIP_MEMBER_READ.", nullable = true)
+        String membershipNumber,
+
+        @Schema(description = "Nome histórico da definição gravado no ciclo.", nullable = true)
+        String chargeDefinitionNameSnapshot,
+
+        @Schema(description = "Código gravado no ciclo.", nullable = true)
+        String chargeCycleCode
 ) {
 
     public static MemberChargeSummaryResponse from(MemberChargeResult result) {
+        return from(result, null, null, null, null);
+    }
+
+    public static MemberChargeSummaryResponse from(MemberChargeResult result, String userName, String membershipNumber,
+            String chargeDefinitionNameSnapshot, String chargeCycleCode) {
         Objects.requireNonNull(result, "result cannot be null");
 
         return new MemberChargeSummaryResponse(
@@ -57,7 +74,11 @@ public record MemberChargeSummaryResponse(
                 result.paymentAcceptancePolicy(),
                 result.paymentAllowedUntil(),
                 result.status(),
-                result.effectiveStatus()
+                result.effectiveStatus(),
+                userName,
+                membershipNumber,
+                chargeDefinitionNameSnapshot,
+                chargeCycleCode
         );
     }
 }

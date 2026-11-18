@@ -3,8 +3,12 @@ package com.jeepclub.backend.billing.core.application.service.membercharge;
 import com.jeepclub.backend.billing.core.application.exception.charge.MemberChargeAccessDeniedException;
 import com.jeepclub.backend.billing.core.application.exception.charge.MemberChargeNotFoundException;
 import com.jeepclub.backend.billing.core.application.result.charge.MemberChargeResult;
+import com.jeepclub.backend.billing.core.application.result.charge.MemberChargeCycleResult;
+import com.jeepclub.backend.billing.core.application.result.charge.MemberChargeSelfServiceResult;
 import com.jeepclub.backend.billing.core.domain.enums.charge.MemberChargeStatus;
 import com.jeepclub.backend.billing.core.domain.model.MemberCharge;
+import com.jeepclub.backend.billing.core.domain.model.ChargeCycle;
+import com.jeepclub.backend.billing.core.repository.ChargeCycleRepository;
 import com.jeepclub.backend.billing.core.repository.MemberChargeRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -21,10 +25,11 @@ import java.util.Objects;
 public class MemberChargeService {
 
     private final MemberChargeRepository memberChargeRepository;
+    private final ChargeCycleRepository chargeCycleRepository;
     private final Clock clock;
 
     @Transactional(readOnly = true)
-    public Page<MemberChargeResult> findMine(
+    public Page<MemberChargeSelfServiceResult> findMine(
             Long authenticatedUserId,
             MemberChargeStatus status,
             Pageable pageable
@@ -32,21 +37,15 @@ public class MemberChargeService {
         Objects.requireNonNull(authenticatedUserId, "authenticatedUserId cannot be null");
         Objects.requireNonNull(pageable, "pageable cannot be null");
 
-        if (status != null) {
-            return memberChargeRepository.findByUserIdAndStatus(
-                            authenticatedUserId,
-                            status,
-                            pageable
-                    )
-                    .map(this::toResult);
-        }
-
-        return memberChargeRepository.findByUserId(authenticatedUserId, pageable)
-                .map(this::toResult);
+        Page<MemberCharge> page = status != null
+                ? memberChargeRepository.findByUserIdAndStatus(authenticatedUserId, status, pageable)
+                : memberChargeRepository.findByUserId(authenticatedUserId, pageable);
+        return MemberChargeCyclePresentation.enrich(page.map(this::toResult), chargeCycleRepository)
+                .map(MemberChargeService::selfServiceResult);
     }
 
     @Transactional(readOnly = true)
-    public MemberChargeResult findMineById(
+    public MemberChargeSelfServiceResult findMineById(
             Long authenticatedUserId,
             Long memberChargeId
     ) {
@@ -60,7 +59,12 @@ public class MemberChargeService {
             );
         }
 
-        return toResult(memberCharge);
+        ChargeCycle cycle = chargeCycleRepository.findById(memberCharge.getChargeCycleId()).orElse(null);
+        return selfServiceResult(MemberChargeCyclePresentation.enrich(toResult(memberCharge), cycle));
+    }
+
+    private static MemberChargeSelfServiceResult selfServiceResult(MemberChargeCycleResult result) {
+        return new MemberChargeSelfServiceResult(result.charge(), result.chargeDefinitionNameSnapshot(), result.chargeCycleCode());
     }
 
     private MemberChargeResult toResult(MemberCharge memberCharge) {

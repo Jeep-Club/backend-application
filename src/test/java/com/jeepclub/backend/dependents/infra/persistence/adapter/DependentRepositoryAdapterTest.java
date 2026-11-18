@@ -42,6 +42,8 @@ class DependentRepositoryAdapterTest {
 
     @Autowired
     private DependentRepositoryAdapter repository;
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    private com.jeepclub.backend.iam.identity.api.module.UserNameCriteria ownerNames;
     @Autowired
     private DependentJpaRepository dependentJpaRepository;
     @Autowired

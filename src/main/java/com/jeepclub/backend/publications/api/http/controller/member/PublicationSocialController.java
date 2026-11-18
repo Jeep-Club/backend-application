@@ -1,7 +1,6 @@
 package com.jeepclub.backend.publications.api.http.controller.member;
 
 import com.jeepclub.backend.memberships.api.security.RequiresMembership;
-import com.jeepclub.backend.platform.openapi.security.RequiredPermission;
 import com.jeepclub.backend.platform.security.principal.UserPrincipal;
 import com.jeepclub.backend.platform.web.pagination.PageResponse;
 import com.jeepclub.backend.publications.core.application.service.PublicationCommentService;
@@ -19,7 +18,6 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import java.time.Instant;
@@ -33,7 +31,7 @@ import java.util.List;
 @ApiResponses({
         @ApiResponse(responseCode = "400", description = "Invalid comment or image key", content = @Content(mediaType = "application/problem+json", schema = @Schema(implementation = ApiErrorResponse.class))),
         @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content(mediaType = "application/problem+json", schema = @Schema(implementation = ApiErrorResponse.class))),
-        @ApiResponse(responseCode = "403", description = "Membership or permission required", content = @Content(mediaType = "application/problem+json", schema = @Schema(implementation = ApiErrorResponse.class))),
+        @ApiResponse(responseCode = "403", description = "Frontend access denied when frontend access protection is enabled", content = @Content(mediaType = "application/problem+json", schema = @Schema(implementation = ApiErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "Publication inaccessible or image missing", content = @Content(mediaType = "application/problem+json", schema = @Schema(implementation = ApiErrorResponse.class))),
         @ApiResponse(responseCode = "409", description = "Concurrent interaction conflict", content = @Content(mediaType = "application/problem+json", schema = @Schema(implementation = ApiErrorResponse.class)))
 })
@@ -61,8 +59,6 @@ public class PublicationSocialController {
     }
 
     @PostMapping("/likes")
-    @PreAuthorize("hasAuthority('PUBLICATIONS_INTERACTION_LIKE')")
-    @RequiredPermission("PUBLICATIONS_INTERACTION_LIKE")
     @Operation(summary = "Like a published publication", description = "Idempotent for the authenticated member. Event FINISHED remains available when its Publication is PUBLISHED.")
     @ApiResponse(responseCode = "200", description = "Like exists, newly created or previously present")
     public LikeResponse like(@PathVariable Long publicationId, @AuthenticationPrincipal UserPrincipal principal) {
@@ -70,8 +66,6 @@ public class PublicationSocialController {
     }
 
     @DeleteMapping("/likes/me")
-    @PreAuthorize("hasAuthority('PUBLICATIONS_INTERACTION_LIKE')")
-    @RequiredPermission("PUBLICATIONS_INTERACTION_LIKE")
     @Operation(summary = "Remove my like", description = "Idempotent; only the authenticated member's like is removed.")
     @ApiResponse(responseCode = "204", description = "My like is absent")
     @ResponseStatus(HttpStatus.NO_CONTENT)
@@ -80,8 +74,6 @@ public class PublicationSocialController {
     }
 
     @PostMapping("/comments")
-    @PreAuthorize("hasAuthority('PUBLICATIONS_COMMENT_CREATE')")
-    @RequiredPermission("PUBLICATIONS_COMMENT_CREATE")
     @Operation(summary = "Comment on a published publication", description = "Text (up to 10000 UTF-16 units before trim), up to 10 global image keys, or both. Empty or oversized input returns RFC 9457 400 before storage/persistence work. These are technical comment limits, independent of the publication gallery.")
     @ApiResponse(responseCode = "201", description = "Comment created")
     @ResponseStatus(HttpStatus.CREATED)

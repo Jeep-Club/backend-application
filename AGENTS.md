@@ -48,10 +48,50 @@ Se não houver suporte a subagentes ou o modelo configurado não estiver dispon�
 - Evite logs gigantes, cópias integrais de documentação, polling verboso e reexecuções sem alteração relevante. Guarde evidências completas em artefatos e reporte resumos com referências.
 - Use checkpoints compactos por marco: issues, branch/SHA, arquivos/contratos, decisões, comandos/testes, falhas, skips e pendências para retomada.
 - Execute testes focais durante a implementação. No encerramento, valide os gates pertinentes ao escopo e informe o que não foi executado; não substitua testes reais de DB/concorrência por H2 ou mocks quando o risco exigir mais.
-- Consulte `.github/workflows/backend-ci.yml` vigente; avalie Maven `verify`, `mysql-migrations`, `publications-postgresql` quando aplicáveis. Relate CI no SHA efetivo, não num commit antigo.
+- Consulte `.github/workflows/backend-ci.yml` vigente; avalie Maven `verify` e `mysql-migrations` quando aplicáveis. Relate CI no SHA efetivo, não num commit antigo.
 - Comando longo não consome necessariamente tokens só por estar em execução. Otimize número de chamadas e volume de saída, sem cortar validações essenciais.
 
 ## 5. Arquitetura e preservação de contratos
+
+### Validação progressiva de testes e migrations
+
+Use a [interface progressiva](docs/testing/progressive-validation.md) em Windows
+(`./scripts/test.ps1`) ou Linux (`bash scripts/test.sh`), com `--inspect` antes de
+executar uma seleção nova. F1: classe/método focal; F2: conclusão no módulo; F3:
+contratos/consumidores com revisão explícita de impacto; F4: persistência/locks em
+MySQL 8 real; F5: gates completos ao encerrar o PR ou CI equivalente no SHA
+final. F3 e F4 são complementares. Documentação/nomenclatura exige verificação
+proporcional, sem suite desnecessária. Justifique a escolha pelo risco.
+
+Para migrations, use M1 estático, M2 smoke de schema real, M3 upgrade histórico e
+M4 integral + V+1 conforme o risco. M2 não comprova compatibilidade de dados legados.
+Uma migration nova exige revisão vinculada ao hash e regressão de upgrade adequada;
+se faltar cenário, registre bloqueio. Não altere fixtures/hashes históricos nem
+use repair/clean/baseline automática para contornar falhas.
+
+F5 e M4 também exigem a revisão e evidência dos métodos MySQL declarados no mesmo
+HEAD, aproveitando os XMLs do gate integral. Método novo de teste precisa de caso
+executado nos XMLs; skipped, discovery ausente ou identificação incerta bloqueia a
+comprovação. O CI busca a base Git completa e valida a proveniência do gate MySQL.
+Os auditores usam a base assinada pelo evento: PR valida o merge ref e os SHAs
+base/head, push usa `before` (incluindo todos os commits), e dispatch requer o input
+`migration_base` ancestral. Não substitua esses dados por `origin/develop` no CI.
+
+**Obrigatório em toda funcionalidade futura:** ao adicionar/modificar testes,
+módulos, dependências ou migrations, demonstre sua descoberta na faixa apropriada
+por manifesto e execução real. Um seletor antigo não pode excluir silenciosamente
+elementos novos. F3 exige revisar dependências semânticas que imports não revelam,
+declarando módulos adicionais quando necessário. Guarde evidência de descoberta,
+seleção, casos executados, falhas, erros, skips e não executados. Não confunda classes
+com casos JUnit, seleção com cobertura, faixa parcial com gate integral ou outro SHA
+com o HEAD entregue. Leia o primeiro erro relevante no log antes de repetir.
+
+MySQL 8 é o único banco-alvo (BACK-707). Preserve os gates Maven verify e MySQL
+migrations do CI e as condições do deploy. O ensaio V+1 usa
+`git archive HEAD`: só o execute como prova final após commit das alterações.
+Os relatórios de cada rodada ficam isolados em `target/progressive/`; revise e
+sanitize logs antes de compartilhar. Execute regressões Python do runner quando
+alterar a infraestrutura, sem repetir suites integrais após cada microedição.
 
 - Respeite Hexagonal/DDD: `api.http` cuida de HTTP/DTO, `api.module` expõe contratos entre módulos, `core` contém domínio/aplicação/ports, `infra` contém persistência e adapters.
 - Serviços são organizados por recurso, conforme o padrão documentado. Não crie uma classe para cada operação CRUD.

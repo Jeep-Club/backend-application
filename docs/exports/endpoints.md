@@ -9,7 +9,7 @@ Todas as rotas são GET e administrativas. `format=CSV` (padrão) ou `PDF`, tamb
 | billing | `/billing/admin/member-charges/export` | `BILLING_EXPORT` | format, BillingExportFilter: ver tabela abaixo |
 | billing | `/billing/admin/payments/export` | `BILLING_EXPORT` | format, BillingExportFilter: ver tabela abaixo |
 | billing | `/billing/admin/refunds/export` | `BILLING_EXPORT` | format, BillingExportFilter: ver tabela abaixo |
-| dependents | `/admin/dependents/export` | `DEPENDENTS_DEPENDENT_EXPORT` | format, id, userId, name, status |
+| dependents | `/admin/dependents/export` | `DEPENDENTS_DEPENDENT_EXPORT` | format, id, ids, userId, userIds, name, status |
 | dependents | `/admin/dependents/history/export` | `DEPENDENTS_DEPENDENT_EXPORT` | format |
 | health | `/admin/medical-profiles/export` | `HEALTH_MEDICAL_PROFILE_EXPORT` | format, profileId, userId, dependentId, household |
 | health | `/admin/medical-profiles/history/export` | `HEALTH_MEDICAL_PROFILE_EXPORT` | format |
