@@ -22,7 +22,7 @@ e abra o aplicativo. Aguarde o engine ficar disponível. No PowerShell:
 ```powershell
 docker version
 docker compose version
-Set-Location C:\Users\joao.beserra\Documents\jeep-club-backend
+Set-Location "C:\caminho\backend-application"
 ```
 
 Se `docker` não for reconhecido, reabra o terminal após instalar. Se aparecer
@@ -81,7 +81,7 @@ Se ela já estiver ocupada, altere `MYSQL_LOCAL_PORT` e também a URL JDBC abaix
 
 ## Migrations e banco local existente
 
-Em banco vazio, o backend executa Flyway V1–V3 antes de Hibernate `validate`.
+Em banco vazio, o Flyway aplica as migrations de `src/main/resources/db/migration` antes de o Hibernate executar apenas `validate`.
 Não configure `ddl-auto=update` nem `spring.flyway.enabled=false` no arquivo local.
 Se o volume já contém tabelas criadas pelo Hibernate, o startup será bloqueado até
 comparar a estrutura com uma referência e registrar a baseline correspondente.
@@ -102,6 +102,10 @@ if (!(Test-Path src/main/resources/application-dev.properties)) {
     Copy-Item src/main/resources/application-dev.properties.example src/main/resources/application-dev.properties
 }
 ```
+
+A cópia local usa o perfil `dev` e não deve ser commitada. O arquivo
+`.env.example` da raiz serve à stack de deploy, não a esse fluxo de IntelliJ;
+não crie um segundo template de propriedades.
 
 Em `src/main/resources/application-dev.properties`, configure:
 
@@ -133,8 +137,9 @@ defina `-Dspring.profiles.active=dev` (ou selecione `dev` em Active profiles,
 se a configuração oferecer esse campo). Confira que a configuração de execução
 não sobrescreve a URL ou as credenciais com valores antigos.
 
-O MySQL cria o banco; as tabelas são criadas/atualizadas pelo backend com a
-configuração JPA de desenvolvimento. No banco vazio, o bootstrap cadastra o
+O MySQL cria o banco; o Flyway cria/evolui as tabelas pelas migrations
+versionadas e o Hibernate apenas valida o schema (`ddl-auto=validate`), sem
+gerar DDL. No banco vazio, o bootstrap cadastra o
 administrador com CPF `12345678909` e a senha local escolhida. Alterar a senha
 do bootstrap depois não é um procedimento de troca de senha de uma conta já
 criada.
@@ -183,7 +188,7 @@ ACCESS=CHANGE_ME
 Depois execute:
 
 ```powershell
-Set-Location C:\Users\joao.beserra\Documents\front-end-web-application
+Set-Location "C:\caminho\front-end-web-application"
 npm.cmd ci
 npm.cmd run dev
 ```

@@ -1,7 +1,9 @@
 # Desenvolvimento recomendado: MySQL no Docker; Spring Boot no IntelliJ; Next.js com npm run dev.
 # Copie este arquivo para application-dev.properties e configure os valores da sua máquina.
 # Ative o perfil dev. O arquivo copiado é ignorado pelo Git.
-# Passo a passo: deploy/LOCAL.md. O Docker lê .env.local; Spring lê este arquivo.
+# Passo a passo: deploy/LOCAL.md. O Docker local lê .env.local; o Spring lê a
+# cópia application-dev.properties no perfil dev (não este .example diretamente).
+# O .env.example da raiz pertence à stack Docker de deploy, não ao IntelliJ.
 
 # Schema: Flyway enabled + Hibernate validate are inherited. Do not override them.
 # Existing Hibernate-created databases need verified explicit baseline; see docs/database.
