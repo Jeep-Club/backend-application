@@ -62,62 +62,37 @@ atualizar um banco existente.
 ```bash
 git clone https://github.com/Jeep-Club/backend-application.git
 
-cd jeep-club-backend
+cd backend-application
 ```
 
 ---
 
-## 2. Configure o banco
+## 2. Configure o ambiente local
 
-Crie um banco MySQL.
+O fluxo recomendado usa **MySQL no Docker** e **Spring Boot no IntelliJ**.
+Siga [o tutorial local](deploy/LOCAL.md) para criar os arquivos privados
+a partir dos exemplos já versionados:
 
-Exemplo:
+- `deploy/mysql-local.env.example` → `.env.local`: porta e credenciais do MySQL
+  consumidas pelo `compose.local.yaml`.
+- `src/main/resources/application-dev.properties.example` →
+  `src/main/resources/application-dev.properties`: datasource, segredo JWT e
+  bootstrap do Spring Boot no perfil `dev`.
 
-```sql
-CREATE DATABASE jeepclub;
-```
+O `.env.example` da raiz atende à **stack Docker de deploy** (`compose.yaml`),
+não substitui o exemplo de propriedades do Spring para desenvolvimento local.
+Os arquivos reais são ignorados pelo Git; não versione senhas, tokens, chaves
+ou dados pessoais de configuração.
 
----
-
-## 3. Configure o application.properties
-
-Edite:
-
-```
-src/main/resources/application.properties
-```
-
-Configure:
-
-```properties
-spring.datasource.url=jdbc:mysql://localhost:3306/jeepclub
-
-spring.datasource.username=root
-
-spring.datasource.password=senha
-```
+O `src/main/resources/application.properties` contém configurações comuns,
+defaults e proteções de Flyway/Hibernate (`validate`); **não edite esse arquivo
+para definir credenciais locais**. Gere uma chave JWT exclusivamente local com
+pelo menos 32 bytes e configure `security.jwt.secret` na cópia privada do
+template. Não reutilize segredos da VPS.
 
 ---
 
-## 4. Configure o JWT
-
-Copie
-
-```
-jwt-secrets.properties.sample
-```
-
-para
-
-```
-jwt-secrets.properties
-```
-
-e preencha as chaves necessárias.
-
----
-
-## 5. Execute
+## 3. Execute
 
 O CORS pode ser configurado no deploy por variáveis de ambiente, sem alterar o
 `application.properties` ou gerar outro build:
