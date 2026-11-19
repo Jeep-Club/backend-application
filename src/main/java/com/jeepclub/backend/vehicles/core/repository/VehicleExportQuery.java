@@ -1,7 +1,24 @@
 package com.jeepclub.backend.vehicles.core.repository;
-import java.util.List;
+
 import com.jeepclub.backend.shared.export.ExportRow;
+
+import java.time.Instant;
+import java.util.List;
+
 public interface VehicleExportQuery {
+
     record Entry(Long ownerId, ExportRow row) {}
-    List<Entry> read(Long id, Long ownerId, String name, String status, java.time.Instant from, java.time.Instant to, int offset);
+
+    long countByIds(List<Long> ids);
+
+    List<Entry> read(
+            List<Long> vehicleIds,
+            List<Long> ownerIds,
+            Boolean towing,
+            String name,
+            String status,
+            Instant from,
+            Instant to,
+            int offset
+    );
 }

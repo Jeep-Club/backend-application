@@ -507,14 +507,116 @@ Arguments.of("/billing/admin/refunds/export","BILLING_EXPORT"));}
     @Test @org.springframework.transaction.annotation.Transactional
     void vehiclesExcludeLegacyDeletedAndPreserveFunctionalFields()throws Exception {
         var u=user("Proprietário","52998224725");
-        var active=vehicle(id(u),"ABC1D23","12345678901",com.jeepclub.backend.vehicles.core.domain.enums.VehicleStatus.ACTIVE);
-        vehicle(id(u),"DEF4G56","12345678902",com.jeepclub.backend.vehicles.core.domain.enums.VehicleStatus.INACTIVE);
+        var secondOwner=user("Segundo Proprietário","22233344455");
+        var emptyOwner=user("Proprietário Sem Veículos","33344455566");
+        var active=vehicle(id(u),"ABC1D23","12345678901",com.jeepclub.backend.vehicles.core.domain.enums.VehicleStatus.ACTIVE,true);
+        var activeNoTowing=vehicle(id(u),"GHI7J89","12345678903",com.jeepclub.backend.vehicles.core.domain.enums.VehicleStatus.ACTIVE,false);
+        var secondOwnerVehicle=vehicle(id(secondOwner),"JKL0M12","12345678904",com.jeepclub.backend.vehicles.core.domain.enums.VehicleStatus.ACTIVE,true);
+        var inactive=vehicle(id(u),"DEF4G56","12345678902",com.jeepclub.backend.vehicles.core.domain.enums.VehicleStatus.INACTIVE,true);
+        var legacyDeleted=vehicle(id(u),"MNO3P45","12345678905",com.jeepclub.backend.vehicles.core.domain.enums.VehicleStatus.ACTIVE,true);
+        org.springframework.test.util.ReflectionTestUtils.setField(legacyDeleted,"legacyDeleted",true);em.flush();
+
         String result=csv("/vehicles/admin/export","VEHICLES_VEHICLE_EXPORT","ownerId",id(u).toString());
-        assertThat(result.lines().count()).isEqualTo(2);assertThat(result).contains("ABC1D23","Renegade","12345678901","Proprietário").doesNotContain("DEF4G56","PHOTO_SENTINEL");
-        assertThat(csv("/vehicles/admin/export","VEHICLES_VEHICLE_EXPORT","id",id(active).toString())).contains("ABC1D23");
+        assertThat(result.lines().count()).isEqualTo(3);
+        assertThat(result).contains("ABC1D23","GHI7J89","Renegade","12345678901","Proprietário").doesNotContain("DEF4G56","MNO3P45","JKL0M12","PHOTO_SENTINEL");
+        assertThat(csv("/vehicles/admin/export","VEHICLES_VEHICLE_EXPORT","id",id(active).toString())).contains("ABC1D23").doesNotContain("GHI7J89");
+
+        for(String format:List.of("CSV","PDF")) {
+            // Multi-vehicle selection across 2 different owners with duplicate IDs (OR inside list)
+            String byVehicleIds=download("/vehicles/admin/export","VEHICLES_VEHICLE_EXPORT",format,
+                "vehicleIds",id(active).toString(),"vehicleIds",id(secondOwnerVehicle).toString(),"vehicleIds",id(active).toString());
+            assertThat(byVehicleIds).contains("ABC1D23","JKL0M12","Proprietário","Segundo Proprietário")
+                .doesNotContain("GHI7J89","DEF4G56","MNO3P45","PHOTO_SENTINEL");
+            if(format.equals("CSV"))assertThat(byVehicleIds.lines().count()).isEqualTo(3);
+
+            // Multi-owner selection with duplicate ownerIds combined with towing=true (AND across filters)
+            String byOwnersAndTowing=download("/vehicles/admin/export","VEHICLES_VEHICLE_EXPORT",format,
+                "ownerIds",id(u).toString(),"ownerIds",id(secondOwner).toString(),"ownerIds",id(u).toString(),
+                "towing","true");
+            assertThat(byOwnersAndTowing).contains("ABC1D23","JKL0M12","Proprietário","Segundo Proprietário")
+                .doesNotContain("GHI7J89","DEF4G56","MNO3P45","PHOTO_SENTINEL");
+            if(format.equals("CSV"))assertThat(byOwnersAndTowing.lines().count()).isEqualTo(3);
+
+            // Single owner via ownerIds keeps PDF grouping and towing=false filters only without towing
+            String towingFalse=download("/vehicles/admin/export","VEHICLES_VEHICLE_EXPORT",format,
+                "ownerIds",id(u).toString(),"towing","false");
+            assertThat(towingFalse).contains("GHI7J89","Proprietário")
+                .doesNotContain("ABC1D23","JKL0M12","DEF4G56","MNO3P45","PHOTO_SENTINEL");
+            if(format.equals("CSV"))assertThat(towingFalse.lines().count()).isEqualTo(2);
+
+            // Combined vehicleIds + ownerIds + towing=false (AND intersection)
+            String combined=download("/vehicles/admin/export","VEHICLES_VEHICLE_EXPORT",format,
+                "vehicleIds",id(active).toString(),"vehicleIds",id(activeNoTowing).toString(),
+                "ownerIds",id(u).toString(),"towing","false");
+            assertThat(combined).contains("GHI7J89").doesNotContain("ABC1D23","JKL0M12");
+            if(format.equals("CSV"))assertThat(combined.lines().count()).isEqualTo(2);
+
+            // Valid filter combination with 0 matching rows returns 200 empty export (headers only)
+            String emptyIntersection=download("/vehicles/admin/export","VEHICLES_VEHICLE_EXPORT",format,
+                "vehicleIds",id(activeNoTowing).toString(),"towing","true");
+            assertThat(emptyIntersection).doesNotContain("GHI7J89","ABC1D23");
+            if(format.equals("CSV"))assertThat(emptyIntersection.lines().count()).isEqualTo(1);
+
+            String emptyOwnerExport=download("/vehicles/admin/export","VEHICLES_VEHICLE_EXPORT",format,
+                "ownerIds",id(emptyOwner).toString());
+            if(format.equals("CSV"))assertThat(emptyOwnerExport.lines().count()).isEqualTo(1);
+        }
+
+        // 404 Not Found for nonexistent/inactive/legacy-deleted vehicle IDs or nonexistent owner IDs
+        auth("VEHICLES_VEHICLE_EXPORT");
+        mvc.perform(get("/vehicles/admin/export").param("vehicleIds","987654321").header("Authorization","Bearer export-test"))
+            .andExpect(status().isNotFound()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+        mvc.perform(get("/vehicles/admin/export").param("vehicleIds",id(active).toString(),"987654321").header("Authorization","Bearer export-test"))
+            .andExpect(status().isNotFound()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+        mvc.perform(get("/vehicles/admin/export").param("vehicleIds",id(inactive).toString()).header("Authorization","Bearer export-test"))
+            .andExpect(status().isNotFound()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+        mvc.perform(get("/vehicles/admin/export").param("vehicleIds",id(legacyDeleted).toString()).header("Authorization","Bearer export-test"))
+            .andExpect(status().isNotFound()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+        mvc.perform(get("/vehicles/admin/export").param("ownerIds","987654321").header("Authorization","Bearer export-test"))
+            .andExpect(status().isNotFound()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+        mvc.perform(get("/vehicles/admin/export").param("ownerIds",id(u).toString(),"987654321").header("Authorization","Bearer export-test"))
+            .andExpect(status().isNotFound()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+
+        // 400 Bad Request for ambiguous (id+vehicleIds, ownerId+ownerIds), invalid/empty/oversized lists or invalid towing
+        mvc.perform(get("/vehicles/admin/export").param("id",id(active).toString()).param("vehicleIds",id(active).toString()).header("Authorization","Bearer export-test"))
+            .andExpect(status().isBadRequest()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+        mvc.perform(get("/vehicles/admin/export").param("ownerId",id(u).toString()).param("ownerIds",id(u).toString()).header("Authorization","Bearer export-test"))
+            .andExpect(status().isBadRequest()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+        mvc.perform(get("/vehicles/admin/export").param("towing","invalid").header("Authorization","Bearer export-test"))
+            .andExpect(status().isBadRequest()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+        String[] oversized=java.util.stream.LongStream.rangeClosed(1,201).mapToObj(Long::toString).toArray(String[]::new);
+        for(String param:List.of("vehicleIds","ownerIds")) {
+            for(String bad:List.of("","0","-1","abc"))
+                mvc.perform(get("/vehicles/admin/export").param(param,bad).header("Authorization","Bearer export-test"))
+                    .andExpect(status().isBadRequest()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+            mvc.perform(get("/vehicles/admin/export").param(param,oversized).header("Authorization","Bearer export-test"))
+                .andExpect(status().isBadRequest()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+        }
+    }
+    @Test @org.springframework.transaction.annotation.Transactional
+    void vehiclesExportExecutesBoundedSqlAcrossChunksWithoutNPlusOne()throws Exception {
+        var u=user("Titular Frota","52998224725");
+        for(int i=0;i<205;i++) {
+            String plate=String.format("EXP%04d",i);
+            String renavam=String.format("90000000%03d",i);
+            vehicle(id(u),plate,renavam,com.jeepclub.backend.vehicles.core.domain.enums.VehicleStatus.ACTIVE,i%2==0);
+        }
+        em.flush();em.clear();
+        var stats=em.getEntityManagerFactory().unwrap(org.hibernate.SessionFactory.class).getStatistics();
+        stats.setStatisticsEnabled(true);stats.clear();
+        try {
+            String result=csv("/vehicles/admin/export","VEHICLES_VEHICLE_EXPORT","ownerIds",id(u).toString(),"towing","true");
+            assertThat(result.lines().count()).isEqualTo(104); // 1 header + 103 towing=true rows (0..204 step 2)
+            assertThat(stats.getPrepareStatementCount()).isLessThanOrEqualTo(6);
+        } finally {
+            stats.setStatisticsEnabled(false);
+        }
     }
     private Object vehicle(Long owner,String plate,String renavam,com.jeepclub.backend.vehicles.core.domain.enums.VehicleStatus state)throws Exception {
-        return seed("vehicles.infra.persistence.entity.VehicleEntity","ownerId",owner,"plate",plate,"renavam",renavam,"brand","Jeep","model","Renegade","manufacturingYear",2020,"modelYear",2021,"seatingCapacity",5,"fuelType",com.jeepclub.backend.vehicles.core.domain.enums.FuelType.FLEX,"engineDisplacement",1.8,"towing",false,"status",state,"photo","PHOTO_SENTINEL");
+        return vehicle(owner,plate,renavam,state,false);
+    }
+    private Object vehicle(Long owner,String plate,String renavam,com.jeepclub.backend.vehicles.core.domain.enums.VehicleStatus state,boolean towing)throws Exception {
+        return seed("vehicles.infra.persistence.entity.VehicleEntity","ownerId",owner,"plate",plate,"renavam",renavam,"brand","Jeep","model","Renegade","manufacturingYear",2020,"modelYear",2021,"seatingCapacity",5,"fuelType",com.jeepclub.backend.vehicles.core.domain.enums.FuelType.FLEX,"engineDisplacement",1.8,"towing",towing,"status",state,"photo","PHOTO_SENTINEL");
     }
     @Test @org.springframework.transaction.annotation.Transactional
     void eventReportsAndIndividualEmergencyExecuteRealContracts()throws Exception {

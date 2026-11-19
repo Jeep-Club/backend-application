@@ -16,6 +16,30 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 class VehiclesOpenApiIntegrationTest {
+    @Test void administrativeExportDocumentsMultiSelectAndTowingFilters() throws Exception {
+        mockMvc.perform(get("/v3/api-docs")).andExpect(status().isOk())
+                .andExpect(jsonPath("$['paths']['/vehicles/admin/export']['get']['x-required-permissions'][0]")
+                        .value("VEHICLES_VEHICLE_EXPORT"))
+                .andExpect(jsonPath("$['paths']['/vehicles/admin/export']['get']['parameters'][*].name")
+                        .value(org.hamcrest.Matchers.hasItems("format", "id", "vehicleIds", "ownerId", "ownerIds", "towing")))
+                .andExpect(jsonPath("$['paths']['/vehicles/admin/export']['get']['parameters'][?(@.name == 'id')].schema.type")
+                        .value(hasItem("integer")))
+                .andExpect(jsonPath("$['paths']['/vehicles/admin/export']['get']['parameters'][?(@.name == 'vehicleIds')].schema.type")
+                        .value(hasItem("array")))
+                .andExpect(jsonPath("$['paths']['/vehicles/admin/export']['get']['parameters'][?(@.name == 'ownerId')].schema.type")
+                        .value(hasItem("integer")))
+                .andExpect(jsonPath("$['paths']['/vehicles/admin/export']['get']['parameters'][?(@.name == 'ownerIds')].schema.type")
+                        .value(hasItem("array")))
+                .andExpect(jsonPath("$['paths']['/vehicles/admin/export']['get']['parameters'][?(@.name == 'towing')].schema.type")
+                        .value(hasItem("boolean")))
+                .andExpect(jsonPath("$['paths']['/vehicles/admin/export']['get']['responses']['400']['content']['application/problem+json']['schema']['$ref']")
+                        .value("#/components/schemas/ApiErrorResponse"))
+                .andExpect(jsonPath("$['paths']['/vehicles/admin/export']['get']['responses']['404']['content']['application/problem+json']['schema']['$ref']")
+                        .value("#/components/schemas/ApiErrorResponse"))
+                .andExpect(jsonPath("$['paths']['/vehicles/admin/history/export']['get']['x-required-permissions'][0]")
+                        .value("VEHICLES_VEHICLE_EXPORT"));
+    }
+
     @Test void administrativeSearchDocumentsAllFiltersAndProjection() throws Exception {
         mockMvc.perform(get("/v3/api-docs")).andExpect(status().isOk())
                 .andExpect(jsonPath("$['paths']['/vehicles/list/admin']['get']['parameters'][*].name")
