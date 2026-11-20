@@ -14,6 +14,7 @@ import java.io.IOException;
 @RestController @RequestMapping("/storage/media")
 @ConditionalOnProperty(name="storage.media.enabled",havingValue="true")
 public class StorageMediaController {
+    private static final int MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
     private final MediaUploadService upload;private final MediaResolutionService resolution;private final MediaReferenceService references;
     public StorageMediaController(MediaUploadService upload,MediaResolutionService resolution,MediaReferenceService references) { this.upload=upload;this.resolution=resolution;this.references=references; }
     @PostMapping(value="/profile",consumes=MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -21,15 +22,17 @@ public class StorageMediaController {
     @io.swagger.v3.oas.annotations.responses.ApiResponses({
         @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400",description="Arquivo ou requisição inválida",content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/problem+json",schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.jeepclub.backend.platform.web.exception.ApiErrorResponse.class))),
         @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="413",description="Limite multipart excedido; a conexão pode ser encerrada durante o envio",content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/problem+json",schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.jeepclub.backend.platform.web.exception.ApiErrorResponse.class))),
-        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="503",description="Capacidade de upload ou armazenamento indisponível",content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/problem+json",schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.jeepclub.backend.platform.web.exception.ApiErrorResponse.class)))
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="503",description="Prazo de processamento excedido ou capacidade de upload ou armazenamento indisponível",content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/problem+json",schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.jeepclub.backend.platform.web.exception.ApiErrorResponse.class)))
     })
     public ResponseEntity<MediaUploadService.Uploaded> upload(@AuthenticationPrincipal UserPrincipal user,@RequestPart("file") MultipartFile file,
         @RequestPart(value="options",required=false) com.jeepclub.backend.storage.core.repository.MediaImageProcessor.Options options) throws IOException {
         if(user==null) throw new AccessDeniedException("Media unavailable");
-        if(file.getSize()<=0 || file.getSize()>10*1024*1024) throw new IllegalArgumentException("Invalid upload size");
+        long expectedSize = file.getSize();
+        if(expectedSize<=0 || expectedSize>MAX_UPLOAD_BYTES) throw new IllegalArgumentException("Invalid upload size");
         return ResponseEntity.status(201).cacheControl(CacheControl.noStore()).body(upload.upload(user.getUserId(),MediaContext.IDENTITY_PROFILE,user.getUserId().toString(),() -> {
             try(var input=file.getInputStream()) {
-                byte[] bytes=input.readNBytes(10*1024*1024+1);
+                byte[] bytes = input.readNBytes((int) expectedSize + 1);
+                if (bytes.length != expectedSize) throw new IllegalArgumentException("Incomplete or inconsistent upload");
                 validateDeclaredType(file.getContentType(),bytes);
                 return bytes;
             }

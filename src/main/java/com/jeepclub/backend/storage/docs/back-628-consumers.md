@@ -12,6 +12,13 @@ Os tamanhos abaixo são medidas de layout ou coordenadas SVG, não os pixels
 efetivos do arquivo. O DPR e o tamanho final de exportação precisam de validação
 na integração. O cliente ainda usa contratos legados.
 
+A referência remota do repositório indicado no Jira,
+`Jeep-Club/front-end-web-application`, foi reconfirmada nesta rodada.
+`master` está ausente. O HEAD remoto aponta para `develop` em
+`badbe6bc8d781d92ac484b8942d148f98884aa99`; `main` permanece em
+`0080f504216bdba55a3e14f1f96d8a1c06228d73`. As medidas históricas abaixo
+continuam vinculadas aos SHAs acima do inventário original.
+
 | Superfície | Evidência frontend e contrato conhecido | Uso e recomendação técnica | Acesso e pendência |
 | --- | --- | --- | --- |
 | Navbar, comentários e perfil | `common/avatar/index.tsx:10`; `PublicationCommentAuthor.tsx`; Identity `CurrentUserResponseDTO.profilePhotoStorageKey` | Avatar padrão 36×36 CSS, `object-cover`; `AVATAR_SMALL` até 144×144 atende 3x; cartão de perfil 96×96 pode usar `PROFILE_PREVIEW` até 320×320. Sem upscale. | URL legada; ACL depende do endpoint. O payload de comentários tem somente `authorUserId`; nome e foto exigem integração de Publications com Identity por consulta em lote, evitando N+1. |
@@ -22,6 +29,24 @@ na integração. O cliente ainda usa contratos legados.
 | Veículos | `VehiclesTabContent.tsx`, `VehiclePhotoCarousel.tsx`, `ViewVehicleModal.tsx`; `DetailResponseDTO.images` | Lista em 16:9, edição exibe 192×128 CSS, inscrição em evento 80×64; `object-cover`. Não há um único crop adequado a todas as caixas. | Até cinco imagens no contrato legado; `photo` é alias da principal. Permissões e integração por contexto permanecem próprias de Vehicles. |
 | Ferramentas | `IncludeToolModal.tsx`, `ToolDetailModal.tsx`; `ToolResponseDTO.photoStorageKey` | Preview 16:9, `object-cover`; editor usa crop paisagem. Largura responsiva precisa ser medida. | `/tools` e `/admin/tools` mantêm chave legada; não inferir acesso público. |
 | Eventos e participantes | `feed/index.tsx`, `FeedSidebar.tsx`, `EventParticipants.tsx`; `EventResponseDTO`, `EventParticipantResponseDTO` | Capa do feed 16:9 `object-cover`; sidebar 64×56 CSS; avatares da sidebar 28×28 CSS. Detalhe compartilha galeria `object-contain`. | `/events` aplica membritude quando pertinente. Contratos ainda não selecionam variantes; integração e ACL por contexto pendentes. |
+
+### Contratos e limites por owner
+
+| Owner | Superfície HTTP legada confirmada | Categoria e integração futura |
+| --- | --- | --- |
+| Identity | `GET /identity/me` e `GET /identity/admin/users/{userId}` expõem `profilePhotoStorageKey` nos DTOs de usuário. | MASTER de até 2 MiB. Cliente deve enviar fonte e crops independentes para perfil e carteirinha. |
+| Publications | `GET /publications/feed` e `GET /publications/{publicationId}/comments`. | MASTER de até 5 MiB para imagens da publicação. Nome e avatar de autor dependem de projeção futura em lote de Identity, autorizada no contexto de leitura do comentário. |
+| Publications (Events) | `GET /events/{id}/participants` retorna `EventParticipantResponseDTO` com `name` e `profilePhotoStorageKey`. | MASTER de até 5 MiB para galeria do evento. A foto de participante é de Identity e usa a categoria de perfil. |
+| Vehicles | `GET /vehicles/detail/member/{vehicleId}` e `PUT /vehicles/gallery/member/{vehicleId}`. | MASTER de até 5 MiB. Seleção de variante e eventual crop por superfície ficam para a integração. |
+| Tools | `/tools` e `/admin/tools` usam `ToolResponseDTO.photoStorageKey`. | MASTER de até 5 MiB. O cliente deve indicar enquadramento específico caso o contrato futuro exija crop paisagem. |
+| Dependents | `GET /dependents/{id}/photo` e `PATCH /dependents/{id}/photo`. | MASTER de até 2 MiB. Preservar titularidade, estado e `no-store` ao migrar. |
+
+Os tetos da tabela são do pipeline novo. A entrada recebe JPEG, PNG ou WebP
+até 10 MiB. Derivados usam WebP preferencialmente e JPEG/PNG como fallback.
+Na integração, ler variantes via referência vigente, policy do contexto e
+moderação. Validar cache privado e as regras de privacidade por superfície.
+Para históricos, preservar referências encerradas e trilha sem reutilizar
+a referência como autorização operacional. Billing permanece fora do MVP.
 
 O editor `common/input/file/image-crop-dialog.tsx` exporta largura de 1024 px
 (quadrado ou 16:9), mas este é um crop cliente que descarta pixels e não é uma

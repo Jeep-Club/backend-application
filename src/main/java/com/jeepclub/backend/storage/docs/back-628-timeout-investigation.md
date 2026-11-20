@@ -1,5 +1,29 @@
 # BACK-628 — limites do timeout síncrono
 
+## Prazo cooperativo após admissão
+
+`MediaUploadService` mede 10 s com relógio monotônico a partir da aquisição
+do permit em memória. Verifica o prazo após a reserva SQL, a leitura e o
+processamento da imagem, antes de gravar as intenções e cada blob, e no início
+e no fim do callback da transação do catálogo. Prazo vencido produz 503
+sanitizado. Antes do primeiro `store`, a compensação libera a reserva e a
+cobrança. Após iniciar um `store`, as intenções, a custódia e a cobrança
+conservadora permanecem. Se o prazo vencer no callback, asset, variantes,
+vínculos e conclusão SQL do permit sofrem rollback juntos. A finalização do
+permit é tentada separadamente após a falha.
+
+O permit em memória acompanha a execução síncrona até o fim da finalização.
+Uma chamada em voo pode ultrapassar o prazo. A checagem final precede o
+commit, que ainda pode demorar ou ter resultado desconhecido. Um commit
+confirmado pode responder 201 após o prazo. Multipart, limpeza e resposta
+HTTP também ficam fora do limite de processamento. F-02 permanece aberto.
+Na validação posterior, injetar atraso antes do primeiro `store`, durante
+uma gravação e dentro do callback SQL, verificando 503, contadores, intents,
+custódia, rollback e reutilização do slot. Validar separadamente erro de
+conexão no commit em banco real.
+
+## Diagnóstico anterior à checagem cooperativa
+
 No commit-base `ebb3e7d5b6a46c854cedd703e42cdde7d1a2c9d6`, a recepção
 multipart ocorre no servlet antes do controller. O serviço admite até dois
 uploads por processo com `tryAcquire` e reserva quota SQL antes de ler o arquivo.

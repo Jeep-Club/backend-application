@@ -1,7 +1,9 @@
 # BACK-637 — limites HTTP verificados
 
-O controller do Storage limita a leitura a 10 MiB + 1 byte e rejeita arquivo
-declarado maior que 10 MiB. O servlet possui limite global de 10 MiB por arquivo
+O controller do Storage rejeita parte vazia ou maior que 10 MiB e lê até o
+tamanho informado pelo multipart mais um byte. Leitura curta ou excedente
+recebe 400 antes de validar MIME ou decodificar; exceção de I/O recebe 503
+sanitizado. O servlet possui limite global de 10 MiB por arquivo
 e 30 MiB por requisição, compartilhado com endpoints legados. O teste
 `StorageMultipartSocketTest` usa servidor real, multipart enviado por socket e
 PNG válido de exatamente 10.485.760 bytes: recebe 201. Um arquivo com um byte
