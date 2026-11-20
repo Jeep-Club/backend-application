@@ -22,6 +22,9 @@ public class MediaResolutionService {
         var asset=catalog.findAsset(mediaId).orElseThrow(MediaResolutionService::unavailable);
         var ref=catalog.findReference(referenceId).orElseThrow(MediaResolutionService::unavailable);
         var variant=catalog.findVariant(mediaId,code).orElseThrow(MediaResolutionService::unavailable);
+        // The common and administrative preview paths only serve derived representations.
+        // A future private editing operation must explicitly authorize access to the source.
+        if (variant.isPrivateSource()) throw unavailable();
         boolean allowed=governance.allows(mediaId,referenceId);
         var state=allowed ? ContextualMediaAccess.Moderation.ALLOWED : ContextualMediaAccess.Moderation.DENIED;
         if(!access.decide(actor,asset,ref,variant,state,state,true).allowed()) throw unavailable();

@@ -221,7 +221,8 @@ public final class SynchronousImageProcessor {
                 int width = reader.getWidth(0), height = reader.getHeight(0);
                 validateDimensions(width,height);
                 BufferedImage image = reader.read(0);
-                if (image == null || warning[0]) throw new IllegalArgumentException("Invalid image");
+                if (image == null || warning[0] || image.getWidth() != width || image.getHeight() != height)
+                    throw new IllegalArgumentException("Invalid image");
                 return image;
             } finally { reader.dispose(); }
         }

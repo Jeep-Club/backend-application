@@ -14,17 +14,44 @@ import java.io.IOException;
 @RestController @RequestMapping("/storage/media")
 @ConditionalOnProperty(name="storage.media.enabled",havingValue="true")
 public class StorageMediaController {
+    private static final int MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
     private final MediaUploadService upload;private final MediaResolutionService resolution;private final MediaReferenceService references;
     public StorageMediaController(MediaUploadService upload,MediaResolutionService resolution,MediaReferenceService references) { this.upload=upload;this.resolution=resolution;this.references=references; }
     @PostMapping(value="/profile",consumes=MediaType.MULTIPART_FORM_DATA_VALUE)
+    @io.swagger.v3.oas.annotations.Operation(summary="Upload de imagem de perfil", description="A parte file deve declarar image/jpeg, image/png ou image/webp coerente com o conteúdo. Limite de entrada: 10 MiB.")
+    @io.swagger.v3.oas.annotations.responses.ApiResponses({
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400",description="Arquivo ou requisição inválida",content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/problem+json",schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.jeepclub.backend.platform.web.exception.ApiErrorResponse.class))),
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="413",description="Limite multipart excedido; a conexão pode ser encerrada durante o envio",content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/problem+json",schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.jeepclub.backend.platform.web.exception.ApiErrorResponse.class))),
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="503",description="Prazo de processamento excedido ou capacidade de upload ou armazenamento indisponível",content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/problem+json",schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.jeepclub.backend.platform.web.exception.ApiErrorResponse.class)))
+    })
     public ResponseEntity<MediaUploadService.Uploaded> upload(@AuthenticationPrincipal UserPrincipal user,@RequestPart("file") MultipartFile file,
         @RequestPart(value="options",required=false) com.jeepclub.backend.storage.core.repository.MediaImageProcessor.Options options) throws IOException {
         if(user==null) throw new AccessDeniedException("Media unavailable");
-        if(file.getSize()<=0 || file.getSize()>10*1024*1024) throw new IllegalArgumentException("Invalid upload size");
+        long expectedSize = file.getSize();
+        if(expectedSize<=0 || expectedSize>MAX_UPLOAD_BYTES) throw new IllegalArgumentException("Invalid upload size");
         return ResponseEntity.status(201).cacheControl(CacheControl.noStore()).body(upload.upload(user.getUserId(),MediaContext.IDENTITY_PROFILE,user.getUserId().toString(),() -> {
-            try(var input=file.getInputStream()) {return input.readNBytes(10*1024*1024+1);}
+            try(var input=file.getInputStream()) {
+                byte[] bytes = input.readNBytes((int) expectedSize + 1);
+                if (bytes.length != expectedSize) throw new IllegalArgumentException("Incomplete or inconsistent upload");
+                validateDeclaredType(file.getContentType(),bytes);
+                return bytes;
+            }
             catch(IOException failure) {throw new java.io.UncheckedIOException(failure);}
         },options == null ? com.jeepclub.backend.storage.core.repository.MediaImageProcessor.Options.defaults() : options));
+    }
+    private static void validateDeclaredType(String declared,byte[] bytes) {
+        String actual;
+        if(bytes.length>=8 && java.util.Arrays.equals(java.util.Arrays.copyOf(bytes,8),new byte[]{(byte)137,80,78,71,13,10,26,10})) actual="image/png";
+        else if(bytes.length>=2 && (bytes[0]&255)==255 && (bytes[1]&255)==216) actual="image/jpeg";
+        else if(bytes.length>=12 && bytes[0]=='R' && bytes[1]=='I' && bytes[2]=='F' && bytes[3]=='F' && bytes[8]=='W' && bytes[9]=='E' && bytes[10]=='B' && bytes[11]=='P') actual="image/webp";
+        else throw new IllegalArgumentException("Unsupported image");
+        try {
+            var type=MediaType.parseMediaType(declared);
+            if(!type.getType().equalsIgnoreCase("image") || !type.getSubtype().equalsIgnoreCase(actual.substring(6)))
+                throw new IllegalArgumentException("Image type mismatch");
+        } catch (org.springframework.http.InvalidMediaTypeException | NullPointerException failure) {
+            throw new IllegalArgumentException("Invalid image type",failure);
+        }
     }
     public record Association(MediaContext context,String consumerId,String role) {}
     @PostMapping("/{mediaId}/references") public long associate(@AuthenticationPrincipal UserPrincipal user,@PathVariable long mediaId,@RequestBody Association association) {
@@ -36,6 +63,7 @@ public class StorageMediaController {
         throw new AccessDeniedException("Media unavailable");
     }
     @GetMapping("/{mediaId}/references/{referenceId}/variants/{code}")
+    @io.swagger.v3.oas.annotations.Operation(summary="Consultar variante derivada",description="A fonte MASTER é privada e não é disponibilizada por esta operação.")
     public ResponseEntity<byte[]> read(@AuthenticationPrincipal UserPrincipal user,@PathVariable long mediaId,@PathVariable long referenceId,@PathVariable String code) {
         if(user==null) throw new AccessDeniedException("Media unavailable");
         var content=resolution.resolve(user.getUserId(),mediaId,referenceId,code);

@@ -25,10 +25,18 @@ public class SqlUploadAdmission implements UploadAdmission {
         if(userBytes<MAX_RESERVATION || globalBytes<MAX_RESERVATION || hourly<1 || concurrent<1 || concurrent>10 || maxUploads<1) throw new IllegalArgumentException("Invalid upload budget");
         this.em=em;this.userBytes=userBytes;this.globalBytes=globalBytes;this.hourly=hourly;this.concurrent=concurrent;this.maxUploads=maxUploads;
         tx=new TransactionTemplate(manager);tx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        tx.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        tx.setTimeout(5);
     }
     private void ensure(long scope) {
         try {tx.executeWithoutResult(status -> {
             if(em.find(UploadBudgetEntity.class,scope)!=null) return;
+            // Existing permits are a different accounting ledger from blobs/assets.
+            // Reconstructing a missing budget from those sources could undercount custody.
+            Long permits=scope==0 ? em.createQuery("select count(p) from UploadPermitEntity p",Long.class).getSingleResult()
+                : em.createQuery("select count(p) from UploadPermitEntity p where p.actorUserId=:actor",Long.class)
+                    .setParameter("actor",scope).getSingleResult();
+            if(permits>0) throw new IllegalStateException("Upload budget requires reconciliation");
             var row=new UploadBudgetEntity();row.setScopeId(scope);row.setWindowStart(Instant.now());
             Long existing=scope==0?em.createQuery("select coalesce(sum(b.sizeBytes),0) from StoredBlobEntity b",Long.class).getSingleResult():
                 em.createQuery("select coalesce(sum(v.sizeBytes),0) from MediaVariantEntity v,MediaAssetEntity a where v.mediaId=a.mediaId and a.uploadedByUserId=:actor",Long.class).setParameter("actor",scope).getSingleResult();
@@ -36,7 +44,18 @@ public class SqlUploadAdmission implements UploadAdmission {
             em.persist(row);em.flush();
         });} catch(RuntimeException collision) {if(!Boolean.TRUE.equals(tx.execute(s -> em.find(UploadBudgetEntity.class,scope)!=null))) throw collision;}
     }
-    private UploadBudgetEntity lock(long scope) {return em.find(UploadBudgetEntity.class,scope,LockModeType.PESSIMISTIC_WRITE);}
+    private UploadBudgetEntity lock(long scope) {
+        var row=em.find(UploadBudgetEntity.class,scope,LockModeType.PESSIMISTIC_WRITE);
+        // A request-scoped persistence context can already contain an older version.
+        // Locking alone need not refresh managed state after another transaction commits.
+        if(row!=null) em.refresh(row,LockModeType.PESSIMISTIC_WRITE);
+        return row;
+    }
+    private UploadPermitEntity lockPermit(String id) {
+        var row=em.find(UploadPermitEntity.class,id,LockModeType.PESSIMISTIC_WRITE);
+        if(row!=null) em.refresh(row,LockModeType.PESSIMISTIC_WRITE);
+        return row;
+    }
     @Override public Permit reserve(long actor) {
         if(actor<=0) throw new IllegalArgumentException("Invalid actor");ensure(0);ensure(actor);
         return tx.execute(status -> {
@@ -53,19 +72,58 @@ public class SqlUploadAdmission implements UploadAdmission {
     @Override public void charge(Permit permit,long bytes) {
         if(bytes<=0 || bytes>MAX_RESERVATION) throw new IllegalArgumentException("Invalid representation budget");
         tx.executeWithoutResult(status -> {
-            var global=lock(0);var user=lock(permit.actor());var row=em.find(UploadPermitEntity.class,permit.id(),LockModeType.PESSIMISTIC_WRITE);
+            var global=lock(0);var user=lock(permit.actor());var row=lockPermit(permit.id());
             if(row==null || row.getActorUserId()!=permit.actor() || row.isCompleted() || row.isCharged()) throw new IllegalArgumentException("Invalid upload permit");
+            if(user.getChargedUploads()>=maxUploads) throw new LimitExceeded();
             long difference=bytes-row.getAccountedBytes();global.setUsedBytes(global.getUsedBytes()+difference);user.setUsedBytes(user.getUsedBytes()+difference);
             user.setChargedUploads(user.getChargedUploads()+1);row.setAccountedBytes(bytes);row.setCharged(true);em.flush();
         });
     }
-    @Override public void finish(Permit permit) {
+    @Override public void recordPlannedBlobs(Permit permit,java.util.List<PlannedBlob> blobs) {
+        if(blobs==null || blobs.isEmpty()) throw new IllegalArgumentException("Missing planned blobs");
         tx.executeWithoutResult(status -> {
-            var global=lock(0);var user=lock(permit.actor());var row=em.find(UploadPermitEntity.class,permit.id(),LockModeType.PESSIMISTIC_WRITE);
+            var row=lockPermit(permit.id());
+            if(row==null || row.getActorUserId()!=permit.actor() || row.isCompleted() || !row.isCharged()) throw new IllegalArgumentException("Invalid upload permit");
+            long total=0;
+            for(var blob:blobs) {
+                if(blob==null || blob.sha256()==null || !blob.sha256().matches("[0-9a-f]{64}") || blob.sizeBytes()<=0) throw new IllegalArgumentException("Invalid planned blob");
+                total=Math.addExact(total,blob.sizeBytes());
+            }
+            if(total!=row.getAccountedBytes()) throw new IllegalArgumentException("Representation budget mismatch");
+            for(int index=0;index<blobs.size();index++) {
+                var blob=blobs.get(index);var planned=new UploadPlannedBlobEntity();
+                planned.setPermitId(permit.id());planned.setPosition(index);planned.setSha256(blob.sha256());planned.setSizeBytes(blob.sizeBytes());em.persist(planned);
+            }
+            em.flush();
+        });
+    }
+    @Override public void abortBeforeStore(Permit permit) {
+        tx.executeWithoutResult(status -> {
+            var global=lock(0);var user=lock(permit.actor());var row=lockPermit(permit.id());
+            if(row==null || row.getActorUserId()!=permit.actor()) throw new IllegalArgumentException("Invalid upload permit");
+            if(row.isCompleted()) return;
+            global.setUsedBytes(global.getUsedBytes()-row.getAccountedBytes());
+            user.setUsedBytes(user.getUsedBytes()-row.getAccountedBytes());
+            if(row.isCharged()) user.setChargedUploads(user.getChargedUploads()-1);
+            user.setInFlight(user.getInFlight()-1);row.setAccountedBytes(0);row.setCompleted(true);em.flush();
+        });
+    }
+    @Override public void finish(Permit permit) {
+        tx.executeWithoutResult(status -> finishLocked(permit));
+    }
+    @Override @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public void finishInCatalogTransaction(Permit permit,long mediaId) {
+        if(mediaId<=0) throw new IllegalArgumentException("Invalid media asset");
+        finishLocked(permit);
+        var row=em.find(UploadPermitEntity.class,permit.id());
+        if(row.getCatalogAssetId()!=null && row.getCatalogAssetId()!=mediaId) throw new IllegalArgumentException("Permit already bound");
+        row.setCatalogAssetId(mediaId);em.flush();
+    }
+    private void finishLocked(Permit permit) {
+            var global=lock(0);var user=lock(permit.actor());var row=lockPermit(permit.id());
             if(row==null || row.getActorUserId()!=permit.actor()) throw new IllegalArgumentException("Invalid upload permit");
             if(row.isCompleted()) return;
             if(!row.isCharged()){global.setUsedBytes(global.getUsedBytes()-row.getAccountedBytes());user.setUsedBytes(user.getUsedBytes()-row.getAccountedBytes());row.setAccountedBytes(0);}
             user.setInFlight(user.getInFlight()-1);row.setCompleted(true);em.flush();
-        });
     }
 }

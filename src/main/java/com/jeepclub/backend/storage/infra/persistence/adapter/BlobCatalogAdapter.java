@@ -23,6 +23,8 @@ public class BlobCatalogAdapter implements BlobCatalog {
     public BlobCatalogAdapter(EntityManager em, PhysicalBlobStore physical, PlatformTransactionManager manager) {
         this.em=em; this.physical=physical; isolated=new TransactionTemplate(manager);
         isolated.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        // JDBC statement deadline; physical IO and commit are not interruptible by this setting.
+        isolated.setTimeout(5);
     }
     public static String digest(byte[] bytes) {
         try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)); }
@@ -39,7 +41,12 @@ public class BlobCatalogAdapter implements BlobCatalog {
             });
         } catch (RuntimeException collision) {
             // The losing insert transaction has ended. Verify the winning reservation in a fresh transaction.
-            if (!Boolean.TRUE.equals(isolated.execute(status -> em.find(StoredBlobEntity.class, hash) != null))) throw collision;
+            try {
+                if (!Boolean.TRUE.equals(isolated.execute(status -> em.find(StoredBlobEntity.class, hash) != null))) throw collision;
+            } catch (RuntimeException verification) {
+                if (verification != collision) collision.addSuppressed(verification);
+                throw collision;
+            }
         }
         return isolated.execute(status -> {
             var row=em.find(StoredBlobEntity.class, hash, LockModeType.PESSIMISTIC_WRITE);

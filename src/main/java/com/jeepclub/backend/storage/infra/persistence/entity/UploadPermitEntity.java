@@ -12,6 +12,7 @@ public class UploadPermitEntity {
     @Column(name="accounted_bytes",nullable=false) private long accountedBytes;
     @Column(name="charged",nullable=false) private boolean charged;
     @Column(name="completed",nullable=false) private boolean completed;
+    @Column(name="catalog_asset_id") private Long catalogAssetId;
     @org.hibernate.annotations.JdbcTypeCode(org.hibernate.type.SqlTypes.TIMESTAMP)
     @Column(name="created_at",nullable=false) private Instant createdAt;
 }
