@@ -62,8 +62,8 @@ public class MediaUploadService {
         requireTimeRemaining(admittedAt);
         var processed=images.process(input,context,options);
         requireTimeRemaining(admittedAt);
-        admission.charge(permit,processed.images().stream().mapToLong(i -> i.bytes().length).sum());
         var planned=processed.images().stream().map(i -> {
+            requireTimeRemaining(admittedAt);
             byte[] representation=i.bytes();
             try {
                 String digest=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(representation));
@@ -71,12 +71,16 @@ public class MediaUploadService {
             } catch (java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
         }).toList();
         requireTimeRemaining(admittedAt);
+        admission.charge(permit, planned.stream().mapToLong(UploadAdmission.PlannedBlob::sizeBytes).sum());
+        requireTimeRemaining(admittedAt);
         admission.recordPlannedBlobs(permit,planned);
         var stored = new ArrayList<BlobCatalog.Blob>(processed.images().size());
         for (var image : processed.images()) {
             requireTimeRemaining(admittedAt);
+            byte[] representation = image.bytes();
+            requireTimeRemaining(admittedAt);
             storeStarted = true; // The provider may write even if it throws.
-            stored.add(blobs.store(image.bytes()));
+            stored.add(blobs.store(representation));
         }
         requireTimeRemaining(admittedAt);
         return transaction.execute(status -> {
@@ -85,12 +89,16 @@ public class MediaUploadService {
             var asset=catalog.registerAsset(new MediaAsset(null,MediaOrigin.UPLOAD,context,consumerId,actor,identity.ownerUserId(),MediaSubjectType.valueOf(identity.subjectType().name()),identity.subjectId(),
                 "PHOTO",MediaClassification.CLASSIFIED,MediaPhysicalState.PRESENT,now,now,null),audit);
             for(int i=0;i<processed.images().size();i++) {
+                requireTimeRemaining(admittedAt);
                 var image=processed.images().get(i);var blob=stored.get(i);
                 var variant=catalog.registerVariant(new MediaVariant(null,asset.mediaId(),image.code(),image.code().equals("MASTER") ? MediaVariantRole.MASTER : MediaVariantRole.DERIVED,
                     "LOCAL","storage-blobs",blob.storageKey(),image.mimeType(),blob.sizeBytes(),image.width(),image.height(),"SHA-256",blob.sha256(),image.code(),image.code().equals("AVATAR_SMALL") ? "V2" : "V1",null,now),audit);
+                requireTimeRemaining(admittedAt);
                 blobs.bind(variant.variantId(),blob);
             }
+            requireTimeRemaining(admittedAt);
             governance.initialize(asset.mediaId(),processed.receivedSha256(),java.util.Set.of(MediaContext.DEPENDENT_PHOTO,MediaContext.MEDICAL_IMAGE,MediaContext.IDENTIFICATION_PHOTO).contains(context),audit);
+            requireTimeRemaining(admittedAt);
             admission.finishInCatalogTransaction(permit,asset.mediaId());
             requireTimeRemaining(admittedAt);
             return new Uploaded(asset.mediaId(),null);

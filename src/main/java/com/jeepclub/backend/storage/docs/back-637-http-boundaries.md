@@ -11,6 +11,11 @@ adicional recebe 413 com `application/problem+json` e não cria asset, blob ou
 permit adicional. Payload com assinatura inválida recebe 400 e não deixa asset,
 blob ou permit aberto. `StorageMultipartMySqlIT` repete esses cenários em MySQL.
 
+No pipeline, JPEG e PNG também são rejeitados se as dimensões retornadas pelo
+decoder divergirem das dimensões verificadas antes da decodificação. Essa
+checagem já existia para WebP. Validar a regressão com imagens válidas,
+corrompidas e no limite de pixels antes da homologação.
+
 O limite total é exercitado com quatro partes de 7,5 MiB, cada uma abaixo do
 teto individual; o overhead multipart ultrapassa 30 MiB. Em execução local com
 HttpClient/Tomcat, o servidor registrou 413 mas o cliente recebeu IOException

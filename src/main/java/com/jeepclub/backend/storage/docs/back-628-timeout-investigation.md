@@ -17,6 +17,19 @@ Uma chamada em voo pode ultrapassar o prazo. A checagem final precede o
 commit, que ainda pode demorar ou ter resultado desconhecido. Um commit
 confirmado pode responder 201 após o prazo. Multipart, limpeza e resposta
 HTTP também ficam fora do limite de processamento. F-02 permanece aberto.
+
+Na rodada 2, a cobrança passou a usar os tamanhos das intenções calculadas
+antes da chamada SQL. Há checagens entre representações e antes de vincular
+cada variante, inicializar governança e concluir o permit. A fase de custódia
+começa imediatamente antes de chamar `store`. Mesmo com erro na primeira
+chamada, a compensação mantém a cobrança, pois o port não comprova ausência
+de escrita. Se a reserva SQL falhar com resultado incerto antes de devolver
+o identificador, a aplicação fica sem referência para finalizá-la e depende
+de reconciliação. Se o commit do catálogo perder a confirmação, a conclusão
+do permit e seu vínculo podem já estar persistidos. A finalização separada
+é idempotente e não estorna cobrança nessa fase. O cliente continua sem
+chave de idempotência para repetir a operação com segurança.
+
 Na validação posterior, injetar atraso antes do primeiro `store`, durante
 uma gravação e dentro do callback SQL, verificando 503, contadores, intents,
 custódia, rollback e reutilização do slot. Validar separadamente erro de

@@ -48,6 +48,16 @@ moderação. Validar cache privado e as regras de privacidade por superfície.
 Para históricos, preservar referências encerradas e trilha sem reutilizar
 a referência como autorização operacional. Billing permanece fora do MVP.
 
+Para Identity e Dependents, os candidatos existentes são `AVATAR_SMALL` e
+`PROFILE_PREVIEW`. Validar crop quadrado explícito, densidade e acesso
+contextual nas duas superfícies. Na carteirinha, validar separadamente o
+crop vertical de `CARD_PORTRAIT` e a exportação. Para Publications, Events,
+Vehicles e Tools, `THUMBNAIL` e `GALLERY` são os presets atuais da categoria
+geral. A seleção por superfície, os crops e os testes de cache, autorização
+e compatibilidade com os campos legados dependem da integração. No feed,
+verificar a preservação do enquadramento completo; nos comentários,
+verificar a consulta em lote do autor e a autorização do avatar.
+
 O editor `common/input/file/image-crop-dialog.tsx` exporta largura de 1024 px
 (quadrado ou 16:9), mas este é um crop cliente que descarta pixels e não é uma
 resolução aprovada para a MASTER. O novo pipeline preserva a fonte visual e
