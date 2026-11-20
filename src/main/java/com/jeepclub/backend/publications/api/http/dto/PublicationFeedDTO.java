@@ -18,7 +18,7 @@ public final class PublicationFeedDTO {
             description = "Subtype details selected by the type field. Service includes its advertised amount; no Billing debt, payment, guest or Health data is included.")
     public sealed interface Details permits NoticeDetails, EventDetails, ServiceDetails {}
     public record NoticeDetails() implements Details {}
-    public record EventDetails(Instant startsAt, Instant endsAt, String status, long registrationCount) implements Details {}
+    public record EventDetails(Instant startsAt, Instant endsAt, String status, long registrationCount, @Schema(description="Address; null for legacy events") String location, @Schema(description="Informational limit in people, unrelated to vehicle seats", nullable=true) Integer participantLimit) implements Details {}
     public record ServiceDetails(BigDecimal amount, String contactPhone) implements Details {}
 
     public record Item(Long id, String type, Long authorUserId, String title, String content,
@@ -54,7 +54,7 @@ public final class PublicationFeedDTO {
     }
     private static Details details(Publication publication, Instant now, long registrationCount) {
         if (publication instanceof Notice) return new NoticeDetails();
-        if (publication instanceof Event event) return new EventDetails(event.getStartsAt(), event.getEndsAt(), event.effectiveStatus(now).name(), registrationCount);
+        if (publication instanceof Event event) return new EventDetails(event.getStartsAt(), event.getEndsAt(), event.effectiveStatus(now).name(), registrationCount, event.getLocation(), event.getParticipantLimit());
         if (publication instanceof ServicePublication service) return new ServiceDetails(service.getAmount(), service.getContactPhone());
         throw new IllegalStateException("Unsupported publication subtype.");
     }

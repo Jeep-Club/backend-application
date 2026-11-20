@@ -130,7 +130,7 @@ class EventParticipantLifecycleIntegrationTest {
     }
     Event event() {
         var start=Instant.now(clock).plusSeconds(3600);
-        return admin.publish(admin.create(owner,"Trail","Route",List.of(new PublicationImage("images/2026/10/30/550e8400-e29b-41d4-a716-446655440000.jpg",0,true)),start,start.plusSeconds(3600),List.of()).getId());
+        return admin.publish(admin.create(owner,"Trail","Route",List.of(new PublicationImage("images/2026/10/30/550e8400-e29b-41d4-a716-446655440000.jpg",0,true)),start,start.plusSeconds(3600),List.of(),"Local de encontro",null).getId());
     }
     List<EventRegistration.Allocation> allocation() { return List.of(new EventRegistration.Allocation(vehicle,true,List.of())); }
     void transition(boolean administrative,boolean archive) {

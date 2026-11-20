@@ -14,6 +14,8 @@ public class PublicationHistoryMapper {
             eventHistory.setStartsAt(event.getStartsAt());
             eventHistory.setEndsAt(event.getEndsAt());
             eventHistory.setEventStatus(event.getEventStatus());
+            eventHistory.setLocation(event.getLocation());
+            eventHistory.setParticipantLimit(event.getParticipantLimit());
             history = eventHistory;
         } else if (source instanceof ServicePublicationEntity service) {
             var serviceHistory = new ServicePublicationHistoryEntity();

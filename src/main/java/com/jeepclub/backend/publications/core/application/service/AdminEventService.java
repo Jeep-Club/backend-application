@@ -41,10 +41,12 @@ public class AdminEventService {
         }
     }
     public Event create(Long actor, String title, String content, List<PublicationImage> images,
-                        Instant startsAt, Instant endsAt, List<ChargeConfiguration> charges) {
+                        Instant startsAt, Instant endsAt, List<ChargeConfiguration> charges, String location, Integer participantLimit) {
+        if (location == null || location.isBlank()) throw new IllegalArgumentException("Location required.");
         if (startsAt == null || !startsAt.isAfter(events.now())) throw new IllegalArgumentException("Future startsAt required.");
         var event = Event.create(actor, title, content, images, startsAt, events.now());
         event.schedule(startsAt, endsAt, events.now());
+        event.setEditorialDetails(location, participantLimit);
         images.forEach(i -> media.requireExisting(i.storageKey()));
         event = (Event) publications.save(event);
         configure(event, charges == null ? List.of() : charges);
@@ -56,7 +58,7 @@ public class AdminEventService {
     public List<EventChargeRule> rules(Long id) { events.locked(id); return operations.rules(id); }
     public Page<EventChargeCatalogQuery.Entry> catalog(Pageable pageable) { return catalog.findEligible(pageable); }
     public Event update(Long id, String title, String content, List<PublicationImage> images, Instant startsAt,
-            boolean endsPresent, Instant endsAt, List<ChargeConfiguration> charges) {
+            boolean endsPresent, Instant endsAt, List<ChargeConfiguration> charges, String location, boolean limitPresent, Integer participantLimit) {
         var event = events.locked(id);
         if (charges != null || startsAt != null || endsPresent) {
             events.requireOpen(event);
@@ -68,6 +70,11 @@ public class AdminEventService {
         if (images != null) {
             images.forEach(i -> media.requireExisting(i.storageKey()));
             event.replaceImages(images, events.now());
+        }
+        if (location != null || limitPresent) {
+            if (event.getStatus() == PublicationStatus.ARCHIVED) throw new IllegalStateException("Archived publication cannot be edited.");
+            event.setEditorialDetails(location == null ? event.getLocation() : location, limitPresent ? participantLimit : event.getParticipantLimit());
+            event.updateContent(event.getTitle(), event.getContent(), events.now());
         }
         if (charges != null) configure(event, charges);
         return (Event) publications.save(event);

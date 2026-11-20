@@ -41,7 +41,7 @@ class EventHttpIntegrationTest {
         when(vehicleLocks.activeById(anyLong())).thenAnswer(a -> vehicles.findActive(a.getArgument(0)));
     }
     static final String CREATE = """
-        {"title":"Trail","content":"Route","startsAt":"%s","images":[{"storageKey":"images/2026/09/27/550e8400-e29b-41d4-a716-446655440000.jpg","position":0,"primary":true}]}
+        {"title":"Trail","content":"Route","location":"Meeting point","startsAt":"%s","images":[{"storageKey":"images/2026/09/27/550e8400-e29b-41d4-a716-446655440000.jpg","position":0,"primary":true}]}
         """;
     void auth(long user, String... permissions) {
         when(jwtTokenParser.parseAndValidate("event-token")).thenReturn(new JwtAuthenticatedUser(user, user + 1000, "Event user", Instant.now(clock).plusSeconds(3600)));
@@ -327,6 +327,58 @@ class EventHttpIntegrationTest {
             .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("EVENT_ALREADY_REGISTERED"));
         auth(11L, "PUBLICATIONS_EVENT_REGISTRATION_READ");
         mvc.perform(token(get("/events/{id}/registrations/me", id))).andExpect(status().isNotFound()).andExpect(jsonPath("$.code").value("EVENT_REGISTRATION_NOT_FOUND"));
+    }
+    @Test @Transactional void editorialLocationAndParticipantLimitReachEveryReadAndValidateInputs() throws Exception {
+        auth(99L, "PUBLICATIONS_EVENT_CREATE", "PUBLICATIONS_EVENT_UPDATE", "PUBLICATIONS_EVENT_READ_ADMIN", "PUBLICATIONS_EVENT_PUBLISH");
+        String body = CREATE.formatted(Instant.now(clock).plusSeconds(86400));
+        for (String invalid : List.of(body.replace("\"location\":\"Meeting point\",", ""),
+                body.replace("Meeting point", "   "), body.replace("Meeting point", "x".repeat(501)),
+                body.replace("\"location\":\"Meeting point\"", "\"location\":3"),
+                body.replace("\"location\":\"Meeting point\"", "\"location\":\"Meeting point\",\"participantLimit\":0"))) {
+            mvc.perform(token(post("/admin/events").contentType("application/json").content(invalid))).andExpect(status().isBadRequest());
+        }
+        var result = mvc.perform(token(post("/admin/events").contentType("application/json")
+                .content(body.replace("\"location\":\"Meeting point\"", "\"location\":\"Meeting point\",\"participantLimit\":25"))))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.location").value("Meeting point"))
+                .andExpect(jsonPath("$.participantLimit").value(25)).andReturn();
+        long id = json.readTree(result.getResponse().getContentAsString()).get("id").asLong();
+        mvc.perform(token(patch("/admin/events/{id}", id).contentType("application/json")
+                .content("{\"location\":\"New address\",\"participantLimit\":30}")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.location").value("New address"))
+                .andExpect(jsonPath("$.participantLimit").value(30));
+        mvc.perform(token(get("/admin/events/{id}", id))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.location").value("New address")).andExpect(jsonPath("$.participantLimit").value(30));
+        mvc.perform(token(post("/admin/events/{id}/publish", id))).andExpect(status().isOk());
+        auth(10L);
+        mvc.perform(token(get("/events/{id}", id))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.location").value("New address")).andExpect(jsonPath("$.participantLimit").value(30));
+        mvc.perform(token(get("/publications/{id}", id))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.details.location").value("New address")).andExpect(jsonPath("$.details.participantLimit").value(30));
+        mvc.perform(token(get("/publications/feed").param("type", "EVENT"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].details.location").value("New address"))
+                .andExpect(jsonPath("$.content[0].details.participantLimit").value(30));
+        auth(99L, "PUBLICATIONS_EVENT_UPDATE");
+        mvc.perform(token(patch("/admin/events/{id}", id).contentType("application/json").content("{\"participantLimit\":1}"))).andExpect(status().isOk());
+        auth(10L, "PUBLICATIONS_EVENT_REGISTER");
+        mvc.perform(token(post("/events/{id}/registrations", id).contentType("application/json").content("{\"allocations\":[]}")))
+                .andExpect(status().isCreated());
+        auth(11L, "PUBLICATIONS_EVENT_REGISTER");
+        mvc.perform(token(post("/events/{id}/registrations", id).contentType("application/json").content("{\"allocations\":[]}")))
+                .andExpect(status().isCreated());
+        auth(99L, "PUBLICATIONS_EVENT_UPDATE");
+        mvc.perform(token(patch("/admin/events/{id}", id).contentType("application/json").content("{\"participantLimit\":null}")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.location").value("New address"))
+                .andExpect(jsonPath("$.participantLimit").doesNotExist());
+        jdbc.update("update publication_events set location=null, participant_limit=null where publication_id=?", id);
+        auth(99L, "PUBLICATIONS_EVENT_READ_ADMIN", "PUBLICATIONS_EVENT_UPDATE");
+        mvc.perform(token(get("/admin/events/{id}", id))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.location").doesNotExist()).andExpect(jsonPath("$.participantLimit").doesNotExist());
+        mvc.perform(token(patch("/admin/events/{id}", id).contentType("application/json").content("{\"title\":\"Legacy edited\"}")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.location").doesNotExist());
+        auth(10L);
+        mvc.perform(token(patch("/admin/events/{id}", id).contentType("application/json").content("{\"location\":\"No\"}")))
+                .andExpect(status().isForbidden());
+        mvc.perform(token(post("/admin/events").contentType("application/json").content(body))).andExpect(status().isForbidden());
     }
     @Test void endpointPermissionsAreEnforcedIncludingEmergencyHealth() throws Exception {
         var actions = List.of(get("/admin/events/1"), post("/admin/events/1/publish"), post("/admin/events/1/cancel"),

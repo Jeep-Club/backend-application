@@ -7,4 +7,4 @@ import java.util.List;
 @Schema(description="Creates an OPEN event and DRAFT publication. Author is the authenticated user. Charge definitions may be selected or created inline atomically.")
 public record CreateEventRequestDTO(@NotBlank @Size(max=200) String title, @NotBlank String content,
         @NotNull @Size(min=1,max=5) List<@Valid PublicationImageRequestDTO> images,
-        @NotNull Instant startsAt, Instant endsAt, List<EventRequestDTO.Charge> charges) {}
+        @NotNull Instant startsAt, Instant endsAt, List<EventRequestDTO.Charge> charges, @NotBlank @Size(max=500) @Schema(description="Required address text; no coordinates required") String location, @Positive @Schema(description="Optional informational limit in people; does not restrict registrations", nullable=true) Integer participantLimit) {}

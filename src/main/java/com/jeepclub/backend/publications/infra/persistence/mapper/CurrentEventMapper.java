@@ -12,9 +12,11 @@ public class CurrentEventMapper {
     public Event toDomain(Object[] row,List<Object[]> images) {
         var gallery=images.stream().map(i -> new PublicationImage((String)i[0],((Number)i[1]).intValue(),
             Boolean.TRUE.equals(i[2]) || i[2] instanceof Number n && n.intValue()!=0)).toList();
-        return Event.reconstitute(((Number)row[0]).longValue(),((Number)row[1]).longValue(),(String)row[2],(String)row[3],
+        var result = Event.reconstitute(((Number)row[0]).longValue(),((Number)row[1]).longValue(),(String)row[2],(String)row[3],
             PublicationStatus.valueOf(row[4].toString()),instant(row[5]),instant(row[6]),instant(row[7]),instant(row[8]),
             gallery,instant(row[9]),instant(row[10]),EventStatus.valueOf(row[11].toString()));
+        result.setEditorialDetails((String)row[12], row[13] == null ? null : ((Number)row[13]).intValue());
+        return result;
     }
     private static Instant instant(Object value) {
         if(value==null)return null;

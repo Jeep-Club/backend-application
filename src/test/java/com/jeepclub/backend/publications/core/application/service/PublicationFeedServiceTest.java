@@ -77,6 +77,7 @@ class PublicationFeedServiceTest {
                 NOW.minusSeconds(100), NOW.minusSeconds(90), NOW.minusSeconds(90), null, gallery(),
                 NOW.minusSeconds(80), NOW.minusSeconds(10),
                 com.jeepclub.backend.publications.core.domain.enums.EventStatus.OPEN);
+        event.setEditorialDetails("Meeting point", 42);
         when(publications.findById(2L)).thenReturn(Optional.of(event));
         when(social.get(List.of(2L), 9L)).thenReturn(Map.of(2L, new PublicationSocialSummaryQuery.Summary(0, 0, false)));
         var participants = mock(com.jeepclub.backend.publications.core.repository.EventParticipantRepository.class);
@@ -84,7 +85,7 @@ class PublicationFeedServiceTest {
         var dto = PublicationFeedDTO.Detail.from(new PublicationFeedService(publications, social, participants).detail(2L, 9L), NOW);
         verify(participants).confirmedCounts(List.of(2L));
         assertThat(dto.type()).isEqualTo("EVENT");
-        assertThat(dto.details()).isEqualTo(new PublicationFeedDTO.EventDetails(event.getStartsAt(), event.getEndsAt(), "FINISHED", 3L));
+        assertThat(dto.details()).isEqualTo(new PublicationFeedDTO.EventDetails(event.getStartsAt(), event.getEndsAt(), "FINISHED", 3L, "Meeting point", 42));
     }
 
     private static List<PublicationImage> gallery() { return List.of(new PublicationImage(KEY, 0, true)); }

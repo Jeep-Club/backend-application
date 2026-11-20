@@ -17,6 +17,9 @@ public class EventEntity extends PublicationEntity {
     @Column(name = "starts_at", nullable = false)
     private Instant startsAt;
     private Instant endsAt;
+    @Column(length = 500)
+    private String location;
+    private Integer participantLimit;
     @jakarta.persistence.Enumerated(jakarta.persistence.EnumType.STRING)
     @Column(nullable = false)
     @org.hibernate.annotations.ColumnDefault("'OPEN'")
