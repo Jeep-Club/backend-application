@@ -89,11 +89,11 @@ class EventOperationsIntegrationTest {
     }
     Event event(boolean required) {
         var rule = new AdminEventService.ChargeConfiguration(null, "Event " + UUID.randomUUID(), null, AMOUNT, false, required, null);
-        var event = admin.create(99L, "Trail", "Route", List.of(new PublicationImage("images/2026/09/27/550e8400-e29b-41d4-a716-446655440000.jpg", 0, true)), START, START.plusSeconds(3600), List.of(rule));
+        var event = admin.create(99L, "Trail", "Route", List.of(new PublicationImage("images/2026/09/27/550e8400-e29b-41d4-a716-446655440000.jpg", 0, true)), START, START.plusSeconds(3600), List.of(rule), "Local de encontro", null);
         return admin.publish(event.getId());
     }
     Event freeEvent() {
-        var event = admin.create(99L, "Trail", "Route", List.of(new PublicationImage("images/2026/09/27/550e8400-e29b-41d4-a716-446655440000.jpg", 0, true)), START, START.plusSeconds(3600), List.of());
+        var event = admin.create(99L, "Trail", "Route", List.of(new PublicationImage("images/2026/09/27/550e8400-e29b-41d4-a716-446655440000.jpg", 0, true)), START, START.plusSeconds(3600), List.of(), "Local de encontro", null);
         return admin.publish(event.getId());
     }
     Event eventWithFinancialDueDate(boolean required, LocalDate financialDueDate) {
@@ -101,13 +101,13 @@ class EventOperationsIntegrationTest {
             AMOUNT, false, required, START.minusSeconds(3600), financialDueDate);
         var event = admin.create(99L, "Trail", "Route",
             List.of(new PublicationImage("images/2026/09/27/550e8400-e29b-41d4-a716-446655440000.jpg", 0, true)),
-            START, START.plusSeconds(3600), List.of(rule));
+            START, START.plusSeconds(3600), List.of(rule), "Local de encontro", null);
         return admin.publish(event.getId());
     }
     List<EventRegistration.Allocation> allocation() { return List.of(new EventRegistration.Allocation(101L, true, List.of(201L))); }
     @Test void memberCannotReadAnUnpublishedEvent() {
         var draft=admin.create(99L,"Unpublished","Route",List.of(new PublicationImage(
-                "images/2026/09/27/550e8400-e29b-41d4-a716-446655440000.jpg",0,true)),START,null,List.of());
+                "images/2026/09/27/550e8400-e29b-41d4-a716-446655440000.jpg",0,true)),START,null,List.of(), "Local de encontro", null);
         assertThatThrownBy(() -> member.findById(draft.getId())).isInstanceOf(EventOperationException.class)
                 .extracting("code").isEqualTo("EVENT_NOT_FOUND");
         assertThat(admin.findById(draft.getId()).getStatus()).isEqualTo(
@@ -296,7 +296,7 @@ class EventOperationsIntegrationTest {
         var original = tx(() -> operations.rules(e.getId()).get(0));
         var replacement = new AdminEventService.ChargeConfiguration(original.chargeDefinitionId(), null, null,
             null, false, false, original.participationCutoff(), LocalDate.of(2026, 12, 1));
-        assertThatThrownBy(() -> admin.update(e.getId(), null, null, null, null, false, null, List.of(replacement)))
+        assertThatThrownBy(() -> admin.update(e.getId(), null, null, null, null, false, null, List.of(replacement), null, false, null))
             .isInstanceOf(EventOperationException.class).satisfies(ex ->
                 assertThat(((EventOperationException) ex).getCode()).isEqualTo("EVENT_CHARGE_CONFIGURATION_LOCKED"));
         assertThat(tx(() -> operations.rules(e.getId()).get(0).financialDueDate())).isEqualTo(original.financialDueDate());
@@ -307,12 +307,12 @@ class EventOperationsIntegrationTest {
         var e = freeEvent();
         var noFinalDate = new AdminEventService.ChargeConfiguration(definition.getId(), null, null, null,
             false, false, null, null);
-        assertThatThrownBy(() -> admin.update(e.getId(), null, null, null, null, false, null, List.of(noFinalDate)))
+        assertThatThrownBy(() -> admin.update(e.getId(), null, null, null, null, false, null, List.of(noFinalDate), null, false, null))
             .isInstanceOf(EventOperationException.class).hasMessageContaining("charge invalid");
         var due = LocalDate.of(2026, 11, 30);
         var withDueDate = new AdminEventService.ChargeConfiguration(definition.getId(), null, null, null,
             false, false, null, due);
-        admin.update(e.getId(), null, null, null, null, false, null, List.of(withDueDate));
+        admin.update(e.getId(), null, null, null, null, false, null, List.of(withDueDate), null, false, null);
         assertThat(tx(() -> operations.rules(e.getId()).get(0).financialDueDate())).isEqualTo(due);
         assertThat(member.register(e.getId(), 10L, List.of()).status()).isEqualTo(EventRegistration.Status.CONFIRMED);
         var chargeId = financial.findByEvent(e.getId()).get(0).memberChargeId();
@@ -341,7 +341,7 @@ class EventOperationsIntegrationTest {
     }
     @Test void scheduleAndFinanceAreLockedAfterRegistration() {
         var e = event(false); member.register(e.getId(), 10L, List.of());
-        assertThatThrownBy(() -> admin.update(e.getId(), null, null, null, START.plusSeconds(60), false, null, null))
+        assertThatThrownBy(() -> admin.update(e.getId(), null, null, null, START.plusSeconds(60), false, null, null, null, false, null))
             .isInstanceOf(EventOperationException.class).hasMessageContaining("configuration locked");
         assertThatThrownBy(() -> member.register(e.getId(), 10L, List.of())).hasMessageContaining("already registered");
         member.cancel(e.getId(), 10L);
@@ -725,7 +725,7 @@ class EventOperationsIntegrationTest {
         var a = event(false); var definition = admin.rules(a.getId()).get(0).chargeDefinitionId();
         var b = freeEvent();
         admin.update(b.getId(), null, null, null, null, false, null,
-            List.of(new AdminEventService.ChargeConfiguration(definition, null, null, null, false, false, null)));
+            List.of(new AdminEventService.ChargeConfiguration(definition, null, null, null, false, false, null)), null, false, null);
         member.register(a.getId(), 10L, List.of()); member.register(b.getId(), 20L, List.of());
         assertThat(financial.findByEvent(a.getId())).extracting(EventFinancialQuery.State::userId).containsExactly(10L);
         assertThat(financial.findByEvent(b.getId())).extracting(EventFinancialQuery.State::userId).containsExactly(20L);
@@ -751,7 +751,7 @@ class EventOperationsIntegrationTest {
         admin.update(e.getId(), null, null, null, null, false, null, List.of(
             new AdminEventService.ChargeConfiguration(initial.chargeDefinitionId(),null,null,null,false,true,null),
             new AdminEventService.ChargeConfiguration(null,"Second " + UUID.randomUUID(),null,AMOUNT,false,true,null),
-            new AdminEventService.ChargeConfiguration(null,"Optional " + UUID.randomUUID(),null,AMOUNT,true,false,null)));
+            new AdminEventService.ChargeConfiguration(null,"Optional " + UUID.randomUUID(),null,AMOUNT,true,false,null)), null, false, null);
         member.register(e.getId(),10L,List.of());
         var required = admin.rules(e.getId()).stream().filter(EventChargeRule::requiredForParticipation).toList();
         var a = financial.evaluate(e.getId(), required.get(0).chargeDefinitionId(), 10L);
@@ -793,7 +793,7 @@ class EventOperationsIntegrationTest {
     }
     @Test void concurrentEventsSharingDefinitionRemainIsolated() throws Exception {
         var a = event(false); var definition = admin.rules(a.getId()).get(0).chargeDefinitionId(); var b = freeEvent();
-        admin.update(b.getId(),null,null,null,null,false,null,List.of(new AdminEventService.ChargeConfiguration(definition,null,null,null,false,false,null)));
+        admin.update(b.getId(),null,null,null,null,false,null,List.of(new AdminEventService.ChargeConfiguration(definition,null,null,null,false,false,null)), null, false, null);
         var outcomes=race(List.of(() -> member.register(a.getId(),10L,List.of()), () -> member.register(b.getId(),20L,List.of())));
         for(var outcome:outcomes) if(outcome instanceof RuntimeException ex) throw new AssertionError("Concurrent Event operation failed",ex);
         assertThat(outcomes).allMatch(EventRegistration.class::isInstance);

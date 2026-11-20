@@ -53,7 +53,7 @@ public class AdminEventController {
     @ResponseStatus(HttpStatus.CREATED)
     public EventResponseDTO create(@RequestBody JsonNode body, @AuthenticationPrincipal UserPrincipal principal) {
         var r = reader.read(body, true);
-        return response(service.create(principal.getUserId(), r.title(), r.content(), images(r.images()), r.startsAt(), r.endsAt(), charges(r.charges())));
+        return response(service.create(principal.getUserId(), r.title(), r.content(), images(r.images()), r.startsAt(), r.endsAt(), charges(r.charges()), r.location(), r.participantLimit()));
     }
     @GetMapping("/charge-catalog")
     @PreAuthorize("hasAnyAuthority('PUBLICATIONS_EVENT_CREATE', 'PUBLICATIONS_EVENT_UPDATE')")
@@ -82,12 +82,12 @@ public class AdminEventController {
     @PatchMapping("/{id}")
     @PreAuthorize("hasAuthority('PUBLICATIONS_EVENT_UPDATE')")
     @RequiredPermission("PUBLICATIONS_EVENT_UPDATE")
-    @Operation(summary="Partial update; finance and schedule locked after registration", description="Omitted top-level fields are preserved; explicit null is allowed for endsAt. When charges is provided it replaces the complete charge configuration: absent or null financialDueDate means no Event-defined final date. Charge configuration, including financialDueDate, is frozen after any registration. No financial snapshots are rewritten.",
+    @Operation(summary="Partial update; finance and schedule locked after registration", description="Omitted top-level fields are preserved; explicit null clears endsAt or participantLimit. location is required when creating an Event; legacy Events can remain without one. participantLimit is informational in people and does not limit registrations. When charges is provided it replaces the complete charge configuration: absent or null financialDueDate means no Event-defined final date. Charge configuration, including financialDueDate, is frozen after any registration. No financial snapshots are rewritten.",
         requestBody=@io.swagger.v3.oas.annotations.parameters.RequestBody(required=true,content=@Content(schema=@Schema(implementation=EventRequestDTO.class))))
     @ApiResponse(responseCode="200", description="Partial update; finance and schedule locked after registration")
     public EventResponseDTO update(@PathVariable Long id, @RequestBody JsonNode body) {
         var r = reader.read(body, false);
-        return response(service.update(id, r.title(), r.content(), images(r.images()), r.startsAt(), body.has("endsAt"), r.endsAt(), charges(r.charges())));
+        return response(service.update(id, r.title(), r.content(), images(r.images()), r.startsAt(), body.has("endsAt"), r.endsAt(), charges(r.charges()), r.location(), body.has("participantLimit"), r.participantLimit()));
     }
     @PostMapping("/{id}/publish")
     @PreAuthorize("hasAuthority('PUBLICATIONS_EVENT_PUBLISH')")

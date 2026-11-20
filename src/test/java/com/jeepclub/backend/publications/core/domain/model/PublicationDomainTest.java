@@ -129,6 +129,19 @@ class PublicationDomainTest {
         assertThatThrownBy(() -> PublicationComment.create(1L, 7L, " ", List.of(), NOW)).isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test void eventEditorialDetailsValidateWithoutConflatingVehicleSeats() {
+        var event = Event.create(7L, "Trip", "Details", gallery(1), NOW.plusSeconds(3600), NOW);
+        assertThat(event.getLocation()).isNull();
+        assertThat(event.getParticipantLimit()).isNull();
+        event.setEditorialDetails("  Meeting point  ", 25);
+        assertThat(event.getLocation()).isEqualTo("Meeting point");
+        assertThat(event.getParticipantLimit()).isEqualTo(25);
+        assertThatThrownBy(() -> event.setEditorialDetails(" ", 25)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> event.setEditorialDetails("x", 0)).isInstanceOf(IllegalArgumentException.class);
+        assertThat(event.getLocation()).isEqualTo("Meeting point");
+        assertThat(event.getParticipantLimit()).isEqualTo(25);
+    }
+
     private static List<PublicationImage> gallery(int count) {
         return IntStream.range(0, count).mapToObj(i -> new PublicationImage(key(i), i, i == 0)).toList();
     }

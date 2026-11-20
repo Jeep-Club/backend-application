@@ -10,12 +10,14 @@ public class EventRequestReader {
     private final ObjectMapper mapper;
     public EventRequestDTO read(JsonNode raw, boolean create) {
         if (raw == null || !raw.isObject()) throw new IllegalArgumentException("Object required.");
-        var allowed = Set.of("title", "content", "images", "startsAt", "endsAt", "charges");
+        var allowed = Set.of("title", "content", "images", "startsAt", "endsAt", "charges", "location", "participantLimit");
         for (String field : raw.propertyNames()) {
-            if (!allowed.contains(field) || raw.get(field).isNull() && !field.equals("endsAt")) throw new IllegalArgumentException("Invalid event field.");
+            if (!allowed.contains(field) || raw.get(field).isNull() && !field.equals("endsAt") && !field.equals("participantLimit")) throw new IllegalArgumentException("Invalid event field.");
         }
-        if (create) for (String field : new String[]{"title","content","images","startsAt"})
+        if (create) for (String field : new String[]{"title","content","images","startsAt","location"})
             if (!raw.has(field)) throw new IllegalArgumentException("Required event field missing.");
+        if (raw.has("location") && !raw.get("location").isString()) throw new IllegalArgumentException("Location must be text.");
+        if (raw.has("participantLimit") && !raw.get("participantLimit").isNull() && !raw.get("participantLimit").isInt()) throw new IllegalArgumentException("participantLimit must be an integer.");
         if (raw.has("charges")) {
             if (!raw.get("charges").isArray()) throw new IllegalArgumentException("Charges must be an array.");
             var fields = Set.of("chargeDefinitionId","name","description","amount","billingRequired","requiredForParticipation","participationCutoff","financialDueDate");

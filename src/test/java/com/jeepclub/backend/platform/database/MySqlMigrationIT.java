@@ -21,6 +21,27 @@ import static org.assertj.core.api.Assertions.*;
 /** Runs only with -Pmysql-migrations; missing Docker is a FAILURE, never a skip. */
 @Testcontainers
 class MySqlMigrationIT {
+    @Test void eventEditorialColumnsPreserveLegacyRowsOnUpgrade() throws Exception {
+        String db = database();
+        Flyway.configure().dataSource(url(db), MYSQL.getUsername(), MYSQL.getPassword())
+                .locations("classpath:db/migration").target("15").load().migrate();
+        try (var c = connection(db); var s = c.createStatement()) {
+            s.executeUpdate("INSERT INTO publications(id,author_user_id,created_at,updated_at,title,content,status) VALUES (901,7,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6),'Legacy','Body','DRAFT')");
+            s.executeUpdate("INSERT INTO publication_events(publication_id,starts_at,event_status) VALUES (901,'2027-01-01 10:00:00','OPEN')");
+            s.executeUpdate("INSERT INTO publication_history(id,publication_id,author_user_id,created_at,updated_at,deleted_at,deleted_by_user_id,title,content,status) VALUES (902,903,7,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6),UTC_TIMESTAMP(6),8,'Old','Retained','DRAFT')");
+            s.executeUpdate("INSERT INTO publication_event_history(history_id,starts_at,event_status) VALUES (902,'2027-01-02 10:00:00','CANCELLED')");
+        }
+        var before = rows(db, "SELECT publication_id, starts_at, event_status FROM publication_events WHERE publication_id=901");
+        var historyBefore = rows(db, "SELECT history_id, starts_at, event_status FROM publication_event_history WHERE history_id=902");
+        flyway(db).migrate();
+        assertThat(rows(db, "SELECT publication_id, starts_at, event_status FROM publication_events WHERE publication_id=901")).isEqualTo(before);
+        assertThat(rows(db, "SELECT history_id, starts_at, event_status FROM publication_event_history WHERE history_id=902")).isEqualTo(historyBefore);
+        assertThat(rows(db, "SELECT location, participant_limit FROM publication_events WHERE publication_id=901")).containsExactly("[null, null]");
+        assertThat(rows(db, "SELECT location, participant_limit FROM publication_event_history WHERE history_id=902")).containsExactly("[null, null]");
+        validateJpa(db);
+        assertThat(flyway(db).migrate().migrationsExecuted).isZero();
+    }
+
     private static String dependentInsert(String table, long id, long owner, long actor) {
         boolean history=table.endsWith("_history");
         return "INSERT INTO "+table+"(id,name,cpf,birth_date,relationship_type,user_id,status,created_at"

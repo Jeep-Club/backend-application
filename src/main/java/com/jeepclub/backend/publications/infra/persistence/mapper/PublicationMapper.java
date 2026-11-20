@@ -15,9 +15,11 @@ public class PublicationMapper {
                     entity.getStatus(), entity.getCreatedAt(), entity.getUpdatedAt(), entity.getPublishedAt(), entity.getArchivedAt(), images);
         }
         if (entity instanceof EventEntity event) {
-            return Event.reconstitute(entity.getId(), entity.getAuthorUserId(), entity.getTitle(), entity.getContent(),
+            var result = Event.reconstitute(entity.getId(), entity.getAuthorUserId(), entity.getTitle(), entity.getContent(),
                     entity.getStatus(), entity.getCreatedAt(), entity.getUpdatedAt(), entity.getPublishedAt(), entity.getArchivedAt(), images,
                     event.getStartsAt(), event.getEndsAt(), event.getEventStatus());
+            result.setEditorialDetails(event.getLocation(), event.getParticipantLimit());
+            return result;
         }
         if (entity instanceof ServicePublicationEntity service) {
             return ServicePublication.reconstitute(entity.getId(), entity.getAuthorUserId(), entity.getTitle(), entity.getContent(),
@@ -42,6 +44,8 @@ public class PublicationMapper {
             target.setStartsAt(event.getStartsAt());
             target.setEndsAt(event.getEndsAt());
             target.setEventStatus(event.getEventStatus());
+            target.setLocation(event.getLocation());
+            target.setParticipantLimit(event.getParticipantLimit());
         }
         if (domain instanceof ServicePublication service && entity instanceof ServicePublicationEntity target) {
             target.setSourceRequestId(service.getSourceRequestId());

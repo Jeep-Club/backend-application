@@ -17,6 +17,9 @@ public class EventHistoryEntity extends PublicationHistoryEntity {
     @Column(name = "starts_at", nullable = false)
     private Instant startsAt;
     private Instant endsAt;
+    @Column(length = 500)
+    private String location;
+    private Integer participantLimit;
     @jakarta.persistence.Enumerated(jakarta.persistence.EnumType.STRING)
     @org.hibernate.annotations.ColumnDefault("'OPEN'")
     private com.jeepclub.backend.publications.core.domain.enums.EventStatus eventStatus;

@@ -15,7 +15,7 @@ public interface PublicationJpaRepository extends JpaRepository<PublicationEntit
     Optional<Long> lockRootId(@Param("id") Long id);
     @Query(value="""
         select p.id,p.author_user_id,p.title,p.content,p.status,p.created_at,p.updated_at,p.published_at,p.archived_at,
-            e.starts_at,e.ends_at,e.event_status
+            e.starts_at,e.ends_at,e.event_status,e.location,e.participant_limit
         from publications p join publication_events e on e.publication_id=p.id where p.id=:id for update
         """,nativeQuery=true)
     java.util.List<Object[]> currentEvent(@Param("id") Long id);

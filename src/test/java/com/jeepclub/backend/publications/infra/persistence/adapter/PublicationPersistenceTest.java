@@ -256,7 +256,12 @@ class PublicationPersistenceTest {
     }
 
     @Test void deleteSnapshotsSubtypeImagesActorAndTimeThenRejectsRepeat() {
-        Publication saved = repository.save(Event.create(7L, "Event", "Body", gallery(), NOW.plusSeconds(3600), NOW));
+        var event = Event.create(7L, "Event", "Body", gallery(), NOW.plusSeconds(3600), NOW);
+        event.setEditorialDetails("Meeting point", 42);
+        Publication saved = repository.save(event);
+        var current = repository.findEventByIdForUpdate(saved.getId()).orElseThrow();
+        assertThat(current.getLocation()).isEqualTo("Meeting point");
+        assertThat(current.getParticipantLimit()).isEqualTo(42);
         likeRepository.save(PublicationLike.create(saved.getId(), 9L, NOW));
         commentRepository.save(PublicationComment.create(saved.getId(), 9L, "Comment",
                 List.of(new PublicationCommentImage(KEY, 0)), NOW));
@@ -277,6 +282,8 @@ class PublicationPersistenceTest {
                     assertThat(snapshot.getDeletedByUserId()).isEqualTo(11L);
                     assertThat(snapshot.getDeletedAt()).isEqualTo(NOW.plusSeconds(60));
                     assertThat(((EventHistoryEntity) snapshot).getStartsAt()).isEqualTo(NOW.plusSeconds(3600));
+                    assertThat(((EventHistoryEntity) snapshot).getLocation()).isEqualTo("Meeting point");
+                    assertThat(((EventHistoryEntity) snapshot).getParticipantLimit()).isEqualTo(42);
                     assertThat(snapshot.getImages()).extracting(PublicationImageEntity::getStorageKey)
                             .containsExactly(KEY, OTHER_KEY);
                     assertThat(snapshot.getImages()).extracting(PublicationImageEntity::isPrimary)

@@ -6,6 +6,8 @@ import java.util.List;
 import java.util.Objects;
 
 public final class Event extends Publication {
+    private String location;
+    private Integer participantLimit;
     private Instant startsAt;
     private Instant endsAt;
     private com.jeepclub.backend.publications.core.domain.enums.EventStatus eventStatus = com.jeepclub.backend.publications.core.domain.enums.EventStatus.OPEN;
@@ -29,6 +31,14 @@ public final class Event extends Publication {
         return new Event(id, authorUserId, title, content, status, createdAt, updatedAt, publishedAt, archivedAt, images, startsAt);
     }
 
+    public String getLocation() { return location; }
+    public Integer getParticipantLimit() { return participantLimit; }
+    public void setEditorialDetails(String location, Integer participantLimit) {
+        if (location != null && (location.isBlank() || location.trim().length() > 500)) throw new IllegalArgumentException("Invalid location.");
+        if (participantLimit != null && participantLimit <= 0) throw new IllegalArgumentException("participantLimit must be positive.");
+        this.location = location == null ? null : location.trim();
+        this.participantLimit = participantLimit;
+    }
     public Instant getStartsAt() { return startsAt; }
 
     public Instant getEndsAt() { return endsAt; }

@@ -628,6 +628,24 @@ interfaces cross-module são adicionadas nas Stories em que a integração se to
 
 ## Feed
 
+### Dados editoriais de localização e lotação — BACK-723
+
+Novos Events exigem endereço em texto não vazio, de até 500 caracteres,
+adequado à apresentação e consulta por mapas no cliente. Coordenadas e
+provedor de mapas não são exigidos. Events legados podem permanecer sem
+endereço; ausência significa não informado. Exigir endereço no POST altera o
+contrato para clientes existentes, conforme decisão para BACK-723; a implantação
+exige coordenação com esses clientes. A galeria segue a regra vigente de 1 a 5 imagens.
+No PATCH, omissão preserva o endereço; null e texto vazio são inválidos.
+
+O limite próprio de Event é opcional e informativo, inteiro positivo em pessoas,
+sem distinção entre membros, dependentes e convidados. Não bloqueia inscrições,
+confirmações ou convidados, nem representa contagem de inscrições. É distinto de
+`totalCapacity`, soma de assentos de veículos. Ausência significa não informado,
+não zero nem lotação ilimitada garantida. No PATCH, null remove o limite e
+omissão o preserva. Eventos legados permanecem sem limite; o snapshot de hard
+delete preserva ambos os atributos.
+
 O feed é uma projeção/leitura unificada das especializações concretas:
 
 ```text
