@@ -5,6 +5,8 @@ import lombok.*;
 import java.time.Instant;
 
 @Entity @Table(name="event_vehicle_capacity_history", indexes=@Index(name="idx_event_vehicle_capacity_history",columnList="event_id,vehicle_id,id"))
+@org.hibernate.annotations.Check(name="ck_event_vehicle_capacity_positive",
+    constraints="capacity > 0 AND (previous_capacity IS NULL OR previous_capacity > 0)")
 @Getter @Setter @NoArgsConstructor
 public class EventVehicleCapacityHistoryEntity {
     @Id @GeneratedValue(strategy=GenerationType.IDENTITY) private Long id;
