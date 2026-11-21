@@ -4,5 +4,11 @@
     "tests": [
       "MySqlMigrationIT#eventEditorialColumnsPreserveLegacyRowsOnUpgrade"
     ]
+  },
+  "3eed4f1c021929a083aa6ff1a2e93e370d02cd892d2532d3f80152cf05cd43f8": {
+    "reason": "Tabela aditiva de historico de capacidade; regressao parte da V16 com evento legado, verifica preservacao, escrita e restricoes da nova tabela.",
+    "tests": [
+      "MySqlMigrationIT#eventVehicleCapacityHistoryUpgradePreservesLegacyEvents"
+    ]
   }
 }

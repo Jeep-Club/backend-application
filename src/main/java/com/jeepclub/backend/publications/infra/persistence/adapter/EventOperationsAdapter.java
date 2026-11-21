@@ -18,6 +18,13 @@ public class EventOperationsAdapter implements EventOperationsRepository {
     private final jakarta.persistence.EntityManager entityManager;
     private final EventCurrentIds currentIds;
 
+    public void recordVehicleCapacity(Long eventId, Long registrationId, Long vehicleId, Integer previousCapacity, int capacity, java.time.Instant occurredAt) {
+        var record = new EventVehicleCapacityHistoryEntity();
+        record.setEventId(eventId); record.setRegistrationId(registrationId); record.setVehicleId(vehicleId);
+        record.setPreviousCapacity(previousCapacity); record.setCapacity(capacity); record.setOccurredAt(occurredAt);
+        entityManager.persist(record);
+    }
+
     /** Normal Event commands are READ_COMMITTED and use one connection. Only a
      * caller's pre-existing RR transaction needs an auxiliary committed snapshot. */
     public References currentReferences(Long eventId) {

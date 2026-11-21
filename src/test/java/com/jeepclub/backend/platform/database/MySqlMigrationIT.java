@@ -21,6 +21,35 @@ import static org.assertj.core.api.Assertions.*;
 /** Runs only with -Pmysql-migrations; missing Docker is a FAILURE, never a skip. */
 @Testcontainers
 class MySqlMigrationIT {
+    @Test void eventVehicleCapacityHistoryUpgradePreservesLegacyEvents() throws Exception {
+        String db = database();
+        Flyway.configure().dataSource(url(db), MYSQL.getUsername(), MYSQL.getPassword())
+                .locations("classpath:db/migration").target("16").load().migrate();
+        try (var c = connection(db); var s = c.createStatement()) {
+            s.executeUpdate("INSERT INTO publications(id,author_user_id,created_at,updated_at,title,content,status) VALUES (901,7,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6),'Legacy','Body','DRAFT')");
+            s.executeUpdate("INSERT INTO publication_events(publication_id,starts_at,event_status,location,participant_limit) VALUES (901,'2027-01-01 10:00:00','OPEN','Trail',12)");
+            s.executeUpdate("INSERT INTO event_registrations(id,event_id,user_id,status,created_at) VALUES (22,901,7,'CONFIRMED',UTC_TIMESTAMP(6))");
+            s.executeUpdate("INSERT INTO event_registration_vehicles(registration_id,vehicle_id) VALUES (22,33)");
+        }
+        var publicationsBefore = rows(db, "SELECT * FROM publications WHERE id=901");
+        var eventsBefore = rows(db, "SELECT * FROM publication_events WHERE publication_id=901");
+        var allocationsBefore = rows(db, "SELECT registration_id, vehicle_id FROM event_registration_vehicles WHERE registration_id=22");
+        flyway(db).migrate();
+        assertThat(rows(db, "SELECT * FROM publications WHERE id=901")).isEqualTo(publicationsBefore);
+        assertThat(rows(db, "SELECT * FROM publication_events WHERE publication_id=901")).isEqualTo(eventsBefore);
+        assertThat(rows(db, "SELECT registration_id, vehicle_id FROM event_registration_vehicles WHERE registration_id=22")).isEqualTo(allocationsBefore);
+        assertThat(count(db, "event_vehicle_capacity_history")).isZero();
+        try (var c = connection(db); var s = c.createStatement()) {
+            s.executeUpdate("INSERT INTO event_vehicle_capacity_history(event_id,registration_id,vehicle_id,previous_capacity,capacity,occurred_at) VALUES (901,22,33,NULL,4,'2027-01-01 10:00:00.123456'),(901,22,33,4,5,'2027-01-01 10:01:00.123456')");
+            assertThatThrownBy(() -> s.executeUpdate("INSERT INTO event_vehicle_capacity_history(event_id,registration_id,vehicle_id,capacity,occurred_at) VALUES (901,22,33,0,UTC_TIMESTAMP(6))")).isInstanceOf(java.sql.SQLException.class);
+            assertThatThrownBy(() -> s.executeUpdate("INSERT INTO event_vehicle_capacity_history(event_id,registration_id,vehicle_id,previous_capacity,capacity,occurred_at) VALUES (901,22,33,0,1,UTC_TIMESTAMP(6))")).isInstanceOf(java.sql.SQLException.class);
+        }
+        assertThat(rows(db, "SELECT event_id,registration_id,vehicle_id,previous_capacity,capacity FROM event_vehicle_capacity_history ORDER BY id"))
+                .containsExactly("[901, 22, 33, null, 4]", "[901, 22, 33, 4, 5]");
+        validateJpa(db);
+        assertThat(flyway(db).migrate().migrationsExecuted).isZero();
+    }
+
     @Test void eventEditorialColumnsPreserveLegacyRowsOnUpgrade() throws Exception {
         String db = database();
         Flyway.configure().dataSource(url(db), MYSQL.getUsername(), MYSQL.getPassword())

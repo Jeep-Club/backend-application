@@ -11,6 +11,7 @@ public interface EventOperationsRepository {
     void replaceRules(Long eventId, List<EventChargeRule> rules);
     List<EventRegistration> registrations(Long eventId);
     EventRegistration save(EventRegistration registration);
+    void recordVehicleCapacity(Long eventId, Long registrationId, Long vehicleId, Integer previousCapacity, int capacity, java.time.Instant occurredAt);
     List<EventGuestRequest> guests(Long eventId);
     EventGuestRequest save(EventGuestRequest request);
     /** Current APPROVED records across all Events, including ADMIN standby and

@@ -57,7 +57,7 @@ public class AdminEventReportController {
     }
     @GetMapping(value="/admin/events/{eventId}/reports/post-event/export",produces={"text/csv","application/pdf"})
     @PreAuthorize("hasAuthority('PUBLICATIONS_EXPORT')") @RequiredPermission("PUBLICATIONS_EXPORT")
-    @Operation(summary="Exportar relatório pós-evento do evento",description="Relatório administrativo CSV/PDF. Sem paginação HTTP. status seleciona situação da inscrição; type=MEMBER/DEPENDENT/GUEST; withVehicle seleciona alocação. view aplica-se somente a transporte. Financeiro aceita somente status; pós-evento não aceita filtros de participantes. Transporte filtra veículos pelos participantes selecionados, preservando sua ocupação real. Limite: 2.000 registros e vínculos operacionais do evento e 20.000 fatos financeiros antes da composição. Controle de acesso não contém clínica ou financeiro; cobertura informa apenas existência da ficha.") @ExportResponse
+    @Operation(summary="Exportar relatório pós-evento",description="Relatório administrativo CSV/PDF sem paginação ou filtros de participantes. Após exclusão, exibe os dados preservados e o estado efetivo no instante da exclusão. Limite: 2.000 registros e vínculos operacionais e 20.000 fatos financeiros.") @ExportResponse
     public ResponseEntity<byte[]> post_event(@PathVariable @Positive Long eventId,@RequestParam(defaultValue="CSV") ExportFormat format,
             @RequestParam(required=false) String status,@RequestParam(required=false) String type,@RequestParam(required=false) Boolean withVehicle,
             @RequestParam(defaultValue="ALL") EventReportService.TransportView view) {

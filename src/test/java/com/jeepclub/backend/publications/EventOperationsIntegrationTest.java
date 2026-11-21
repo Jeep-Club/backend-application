@@ -59,6 +59,7 @@ class EventOperationsIntegrationTest {
     @Autowired MembershipChargeQuery membershipFinancial;
     @Autowired ChargeAssignmentRepository assignments;
     @Autowired EventOperationsRepository operations;
+    @Autowired com.jeepclub.backend.publications.infra.persistence.adapter.EventLifecycleParticipation lifecycleParticipation;
     @Autowired PublicationHistoryJpaRepository history;
     @Autowired SystemLogJpaRepository logs;
     @Autowired PlatformTransactionManager transactionManager;
@@ -163,6 +164,32 @@ class EventOperationsIntegrationTest {
         assertThat(admin.dashboard(e.getId()).availableSeats()).isEqualTo(4);
         assertThat(guestState(e.getId(),guest.id()).transportStatus()).isEqualTo(EventGuestRequest.TransportStatus.STANDBY);
     }
+    @Test void rideDeclineDoesNotRequireCurrentVehicleCapacity() {
+        var event=freeEvent();
+        member.register(event.getId(),10L,List.of(new EventRegistration.Allocation(101L,true,List.of(201L,202L))));
+        var guest=admin.createGuest(event.getId(),99L,guestCpf(event));
+        assertThat(member.rideRequests(event.getId(),10L)).isEmpty();
+        assertThat(member.respond(event.getId(),guest.id(),10L,101L,false).status()).isEqualTo(EventRideOffer.Status.DECLINED);
+        assertThatThrownBy(() -> member.respond(event.getId(),guest.id(),10L,102L,false))
+            .isInstanceOf(EventOperationException.class).extracting("code").isEqualTo("EVENT_VEHICLE_NOT_OWNED");
+        when(vehicles.findActive(101L)).thenReturn(Optional.empty());
+        assertThat(member.respond(event.getId(),guest.id(),10L,101L,false).status()).isEqualTo(EventRideOffer.Status.DECLINED);
+        assertThat(guestState(event.getId(),guest.id()).transportStatus()).isEqualTo(EventGuestRequest.TransportStatus.STANDBY);
+    }
+    @Test void capacityGuardCountsMemberDependentsAndApprovedGuestsPerEvent() {
+        var event=freeEvent();
+        long vehicle=900000L+event.getId();
+        member.register(event.getId(),10L,List.of(new EventRegistration.Allocation(vehicle,true,List.of(201L))));
+        var guest=member.requestGuest(event.getId(),10L,vehicle,guestCpf(event));
+        admin.reviewGuest(event.getId(),guest.id(),99L,true,null);
+        var tx=new TransactionTemplate(transactionManager);
+        boolean over=Boolean.TRUE.equals(tx.execute(status -> lifecycleParticipation.exceedsCapacity(vehicle,2,NOW)));
+        boolean fits=Boolean.TRUE.equals(tx.execute(status -> lifecycleParticipation.exceedsCapacity(vehicle,3,NOW)));
+        boolean finished=Boolean.TRUE.equals(tx.execute(status -> lifecycleParticipation.exceedsCapacity(vehicle,2,START.plusSeconds(7200))));
+        assertThat(over).isTrue();
+        assertThat(fits).isFalse();
+        assertThat(finished).isFalse();
+    }
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(booleans={true,false})
     void memberReallocationCannotRemoveAnApprovedGuestsVehicleOrOverfillIt(boolean removeVehicle) {
@@ -233,17 +260,37 @@ class EventOperationsIntegrationTest {
             PaymentMethod.values()[0], clock.now, "receipt/key", null, clock.now)).getId());
     }
 
-    @Test void independentLifecycleAndHistoryRetainOperations() {
-        var e = freeEvent();
+    @Test void temporalHardDeleteRemovesOperationsAndRetainsEditorialAuditAndBilling() {
+        var e = event(false);
         assertThat(e.getEventStatus()).isEqualTo(EventStatus.OPEN);
         assertThat(member.register(e.getId(), 10L, allocation()).status()).isEqualTo(EventRegistration.Status.CONFIRMED);
-        clock.now = START;
-        var finished = admin.finish(e.getId());
-        assertThat(finished.getStatus()).isEqualTo(PublicationStatus.PUBLISHED);
-        assertThat(finished.effectiveStatus(clock.now)).isEqualTo(EventStatus.FINISHED);
-        admin.delete(e.getId(), 99L);
-        assertThat(tx(() -> operations.registrations(e.getId()))).hasSize(1);
-        assertThat(history.findAll().stream().filter(h -> h.getPublicationId().equals(e.getId())).count()).isEqualTo(1);
+        var guest = admin.createGuest(e.getId(),99L,guestCpf(e));
+        var offer = member.respond(e.getId(),guest.id(),10L,101L,true);
+        admin.select(e.getId(),offer.id(),99L);
+        var auditBefore = admin.guestHistory(e.getId(),guest.id());
+        var financialBefore = financial.findByEvent(e.getId());
+        assertThat(financialBefore).isNotEmpty();
+        clock.now = START.plusSeconds(3600);
+        assertThat(e.effectiveStatus(clock.now)).isEqualTo(EventStatus.FINISHED);
+        new TransactionTemplate(transactionManager).execute(status -> {
+            admin.delete(e.getId(),99L);
+            status.setRollbackOnly();
+            return null;
+        });
+        assertThat(admin.offers(e.getId())).singleElement()
+            .satisfies(retained -> assertThat(retained.status()).isEqualTo(EventRideOffer.Status.SELECTED));
+        assertThat(history.findAll().stream().filter(h -> h.getPublicationId().equals(e.getId()))).isEmpty();
+        admin.delete(e.getId(),99L);
+        assertThat(tx(() -> operations.registrations(e.getId()))).isEmpty();
+        assertThat(tx(() -> operations.rules(e.getId()))).isEmpty();
+        assertThat(tx(() -> operations.guests(e.getId()))).isEmpty();
+        assertThat(tx(() -> operations.offers(e.getId()))).isEmpty();
+        assertThat(jdbc.queryForObject("select count(*) from event_vehicle_capacity_history where event_id=?", Long.class,e.getId())).isZero();
+        assertThat(admin.guestHistory(e.getId(),guest.id())).isEqualTo(auditBefore);
+        assertThat(financial.findByEvent(e.getId())).isEqualTo(financialBefore);
+        assertThat(history.findAll().stream().filter(h -> h.getPublicationId().equals(e.getId())))
+            .singleElement().isInstanceOfSatisfying(com.jeepclub.backend.publications.infra.persistence.entity.EventHistoryEntity.class,
+                h -> assertThat(h.getEventStatus()).isEqualTo(EventStatus.OPEN));
     }
     @Test void optionalChargeDoesNotGateParticipationAndIsCreatedImmediately() {
         var e = event(false);
@@ -503,7 +550,12 @@ class EventOperationsIntegrationTest {
         assertThat(admin.health(e.getId(), MedicalProfileOwner.DEPENDENT, 201L, 99L)).isEqualTo(profile);
         clock.now=START.plus(java.time.Duration.ofDays(2));
         assertThat(admin.health(e.getId(), MedicalProfileOwner.USER, 10L, 99L)).isEqualTo(profile);
-        assertThat(logs.findAll().stream().filter(l -> l.getAction().equals("EVENT_HEALTH_EMERGENCY_READ") && l.getPath().contains("/" + e.getId() + "/"))).hasSize(5);
+        assertThat(logs.findAll().stream().filter(l -> l.getAction().equals("EVENT_HEALTH_EMERGENCY_READ") && l.getPath().contains("/" + e.getId() + "/")))
+            .extracting(com.jeepclub.backend.platform.logging.SystemLogEntity::getStatus).containsExactlyInAnyOrder(404,404,404,200,200);
+        when(health.find(any(), anyLong())).thenThrow(new RuntimeException("technical failure"));
+        assertThatThrownBy(() -> admin.health(e.getId(), MedicalProfileOwner.USER, 10L, 99L)).hasMessage("technical failure");
+        assertThat(logs.findAll().stream().filter(l -> l.getAction().equals("EVENT_HEALTH_EMERGENCY_READ") && l.getPath().contains("/" + e.getId() + "/")))
+            .anySatisfy(l -> { assertThat(l.getStatus()).isEqualTo(500); assertThat(l.getOutcome()).isEqualTo(com.jeepclub.backend.platform.logging.SystemLogOutcome.SERVER_ERROR); });
     }
     @Test void guestNameIsValidatedPersistedAndPreservedAfterReview() {
         var event=freeEvent();member.register(event.getId(),10L,allocation());

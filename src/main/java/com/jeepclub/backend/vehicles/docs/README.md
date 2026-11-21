@@ -229,6 +229,9 @@ a implementa por meio de `identity.api.module.UserQuery.existsById` e
 e `seatingCapacity` de veículos ativos, incluindo consulta em lote. A capacidade
 canônica existente representa todas as pessoas, incluindo motorista; não foi
 criado campo paralelo. Publications valida alocação usando esse contrato.
+Na edição de membro ou administrador, redução abaixo da ocupação de Event
+operacional é recusada até que a alocação seja resolvida. O guard de Publications
+consulta ocupação sob o lock de Vehicle sem adquirir lock do Event.
 Hard delete usa VehicleDeletionGuards da BACK-512 e recusa vínculos impeditivos.
 Galeria não altera capacidade ou alocações; nenhum repository privado de outro
 módulo nem domínio privado de Publications é acessado.

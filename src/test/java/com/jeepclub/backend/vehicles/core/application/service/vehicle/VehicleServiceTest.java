@@ -35,6 +35,17 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class VehicleServiceTest {
 
+    @Test void capacityReductionIsRejectedWhenEventOccupancyExceedsIt() {
+        var vehicle=vehicle(1L,7L,VehicleStatus.ACTIVE);
+        when(vehicleRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(vehicle));
+        when(lifecycleGuard.exceedsCapacity(1L,3,NOW)).thenReturn(true);
+        var edit=fullEdit("Novo","photo","ABC1D23","38249206428","Jeep","Wrangler",2023,2024,"Verde",3,FuelType.DIESEL,2.0,true);
+        assertThatThrownBy(() -> service.update(1L,7L,edit))
+            .isInstanceOf(com.jeepclub.backend.vehicles.core.domain.exception.VehicleLifecycleConflictException.class);
+        assertThat(vehicle.getSeatingCapacity()).isEqualTo(5);
+        verify(vehicleRepository,never()).save(any());
+    }
+
     private static final Instant NOW = Instant.parse("2026-08-13T12:00:00Z");
 
     @Mock

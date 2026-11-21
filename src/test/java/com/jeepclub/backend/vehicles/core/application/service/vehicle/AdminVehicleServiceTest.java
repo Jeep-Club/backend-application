@@ -35,6 +35,16 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class AdminVehicleServiceTest {
+    @Test void capacityReductionIsRejectedWhenEventOccupancyExceedsIt() {
+        var vehicle=vehicle();
+        when(vehicleRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(vehicle));
+        when(lifecycleGuard.exceedsCapacity(1L,3,NOW)).thenReturn(true);
+        var edit=fullEdit("Novo","photo","ABC1D23","38249206428","Jeep","Wrangler",2023,2024,"Verde",3,FuelType.DIESEL,2.0,true);
+        assertThatThrownBy(() -> service.update(1L,edit))
+            .isInstanceOf(com.jeepclub.backend.vehicles.core.domain.exception.VehicleLifecycleConflictException.class);
+        assertThat(vehicle.getSeatingCapacity()).isEqualTo(5);
+        verify(vehicleRepository,never()).save(any());
+    }
     @Test void ownerNameLookupIsBatchedAndRunsOnlyWhenSelected() {
         var filter=new com.jeepclub.backend.vehicles.core.application.query.AdminVehicleFilter("Owner",null,null,null,null,null);
         var row=new com.jeepclub.backend.vehicles.core.application.result.AdminVehicleSearchResult(1L,null,null,null,null,null,null,7L,null,VehicleStatus.ACTIVE);

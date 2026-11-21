@@ -40,6 +40,75 @@ class EventParticipantLifecycleIntegrationTest {
     @Autowired com.jeepclub.backend.dependents.core.application.service.dependent.DependentService dependents;
     @Autowired jakarta.persistence.EntityManager entityManager;
 
+    record CapacitySnapshot(Long eventId, Long registrationId, Long vehicleId, Integer previous, int capacity, Instant occurredAt) {}
+    List<CapacitySnapshot> capacityHistory(Long eventId) {
+        return jdbc.query("select event_id,registration_id,vehicle_id,previous_capacity,capacity,occurred_at from event_vehicle_capacity_history where event_id=? order by id",
+            (rs,row) -> new CapacitySnapshot(rs.getLong(1),rs.getLong(2),rs.getLong(3),
+                (Integer)rs.getObject(4),rs.getInt(5),rs.getTimestamp(6).toInstant()),eventId);
+    }
+    @Test void capacityHistoryCapturesRegistrationAndMemberAndAdminChangesButNotNoOp() {
+        var e=event();member.register(e.getId(),owner,allocation());
+        Long registration=jdbc.queryForObject("select id from event_registrations where event_id=? and user_id=?",Long.class,e.getId(),owner);
+        var initial=capacityHistory(e.getId());
+        assertThat(initial).hasSize(1);
+        assertThat(initial.get(0)).satisfies(row -> {
+            assertThat(row.eventId()).isEqualTo(e.getId());assertThat(row.registrationId()).isEqualTo(registration);
+            assertThat(row.vehicleId()).isEqualTo(vehicle);assertThat(row.previous()).isNull();
+            assertThat(row.capacity()).isEqualTo(5);assertThat(row.occurredAt()).isNotNull();
+        });
+        memberVehicles.update(vehicle,owner,capacityEdit(4));
+        vehicles.update(vehicle,capacityEdit(6));
+        vehicles.update(vehicle,capacityEdit(6));
+        var history=capacityHistory(e.getId());
+        assertThat(history).hasSize(3);
+        assertThat(history).extracting(CapacitySnapshot::previous,CapacitySnapshot::capacity)
+            .containsExactly(tuple(null,5),tuple(5,4),tuple(4,6));
+        assertThat(history).allSatisfy(row -> {
+            assertThat(row.eventId()).isEqualTo(e.getId());assertThat(row.registrationId()).isEqualTo(registration);
+            assertThat(row.vehicleId()).isEqualTo(vehicle);assertThat(row.occurredAt()).isNotNull();
+        });
+    }
+    @Test void legacyAllocationDoesNotInventAnInitialSnapshot() {
+        var e=event();member.register(e.getId(),owner,allocation());
+        jdbc.update("delete from event_vehicle_capacity_history where event_id=?",e.getId());
+        memberVehicles.update(vehicle,owner,capacityEdit(4));
+        assertThat(capacityHistory(e.getId())).extracting(CapacitySnapshot::previous,CapacitySnapshot::capacity)
+            .containsExactly(tuple(5,4));
+    }
+    @Test void rolledBackCapacityChangeDoesNotLeaveHistory() {
+        var e=event();member.register(e.getId(),owner,allocation());
+        var before=capacityHistory(e.getId());
+        transactions.executeWithoutResult(status -> {
+            memberVehicles.update(vehicle,owner,capacityEdit(4));
+            status.setRollbackOnly();
+        });
+        assertThat(vehicles.findById(vehicle).getSeatingCapacity()).isEqualTo(5);
+        assertThat(capacityHistory(e.getId())).isEqualTo(before);
+    }
+    @Test void capacityReductionWaitsForMemberToResolveOccupancy() {
+        Long dependent=dependent();
+        var event=event();
+        member.register(event.getId(),owner,List.of(new EventRegistration.Allocation(vehicle,true,List.of(dependent))));
+        var edit=capacityEdit(1);
+        assertThatThrownBy(() -> memberVehicles.update(vehicle,owner,edit))
+            .isInstanceOf(com.jeepclub.backend.vehicles.core.domain.exception.VehicleLifecycleConflictException.class);
+        assertThatThrownBy(() -> vehicles.update(vehicle,edit))
+            .isInstanceOf(com.jeepclub.backend.vehicles.core.domain.exception.VehicleLifecycleConflictException.class);
+        member.allocate(event.getId(),owner,allocation(),List.of(dependent));
+        memberVehicles.update(vehicle,owner,edit);
+        assertThat(memberVehicles.findById(vehicle,owner).getSeatingCapacity()).isEqualTo(1);
+    }
+    com.jeepclub.backend.vehicles.core.application.VehicleEditFields capacityEdit(int capacity) {
+        return new com.jeepclub.backend.vehicles.core.application.VehicleEditFields(
+            com.jeepclub.backend.vehicles.core.application.FieldUpdate.omitted(),com.jeepclub.backend.vehicles.core.application.FieldUpdate.omitted(),
+            com.jeepclub.backend.vehicles.core.application.FieldUpdate.omitted(),com.jeepclub.backend.vehicles.core.application.FieldUpdate.omitted(),
+            com.jeepclub.backend.vehicles.core.application.FieldUpdate.omitted(),com.jeepclub.backend.vehicles.core.application.FieldUpdate.omitted(),
+            com.jeepclub.backend.vehicles.core.application.FieldUpdate.omitted(),com.jeepclub.backend.vehicles.core.application.FieldUpdate.omitted(),
+            com.jeepclub.backend.vehicles.core.application.FieldUpdate.omitted(),com.jeepclub.backend.vehicles.core.application.FieldUpdate.of(capacity),
+            com.jeepclub.backend.vehicles.core.application.FieldUpdate.omitted(),com.jeepclub.backend.vehicles.core.application.FieldUpdate.omitted(),
+            com.jeepclub.backend.vehicles.core.application.FieldUpdate.omitted());
+    }
+
     Long dependent() {
         return dependents.create("Synthetic participant",String.valueOf(IDS.incrementAndGet()),LocalDate.of(2010,1,1),
             com.jeepclub.backend.dependents.core.domain.enums.RelationshipType.CHILD,null,owner).id();

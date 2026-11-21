@@ -58,7 +58,7 @@ public class EventReportService {
         metadata.add("Evento: "+(event==null?historical.title():event.getTitle()));
         metadata.add("Início: "+ExportValues.text(event==null?historical.startsAt():event.getStartsAt()));
         metadata.add("Término: "+ExportValues.text(event==null?historical.endsAt():event.getEndsAt()));
-        metadata.add("Situação: "+(event==null?historical.status():event.effectiveStatus(clock.instant())));
+        metadata.add("Situação: "+(event==null?historical.effectiveStatusAtDeletion():event.effectiveStatus(clock.instant())));
         if(historical!=null)metadata.add("Contexto histórico — excluído em: "+ExportValues.text(historical.deletedAt()));
         if(status!=null)metadata.add("Inscrição: "+status);if(type!=null)metadata.add("Tipo: "+type);if(withVehicle!=null)metadata.add("Com veículo: "+ExportValues.text(withVehicle));
         // The shareable access/coverage files intentionally omit financial and administrative summaries.
@@ -95,7 +95,7 @@ public class EventReportService {
                     var coveredDeps=covered(MedicalProfileOwner.DEPENDENT,eligible.stream().filter(p->p.type().equals("DEPENDENT")).map(Person::personId).toList());
                     for(var p:eligible)sink.accept(ExportRow.of(p.name(),p.type().equals("MEMBER")?"USER":"DEPENDENT",p.holder(),(p.type().equals("MEMBER")?coveredUsers:coveredDeps).contains(p.personId())));}
                 case POST_EVENT->{
-                    sink.accept(ExportRow.of("Evento",eventId,event==null?historical.title():event.getTitle(),event==null?historical.status():event.effectiveStatus(clock.instant()),"","","","").grouped("Evento"));
+                    sink.accept(ExportRow.of("Evento",eventId,event==null?historical.title():event.getTitle(),event==null?historical.effectiveStatusAtDeletion():event.effectiveStatus(clock.instant()),"","","","").grouped("Evento"));
                     sink.accept(ExportRow.of("Datas",eventId,"Início: "+ExportValues.text(event==null?historical.startsAt():event.getStartsAt())+"; término: "+ExportValues.text(event==null?historical.endsAt():event.getEndsAt()),historical==null?"Atual":"Histórico — excluído em: "+ExportValues.text(historical.deletedAt()),"","","","").grouped("Evento"));
                     for(var rule:rules)sink.accept(ExportRow.of("Regras",rule.chargeDefinitionId(),"Obrigatória para participação: "+ExportValues.text(rule.requiredForParticipation())+"; limite: "+ExportValues.text(rule.participationCutoff())+"; vencimento: "+ExportValues.text(rule.financialDueDate()),"","","","","").grouped("Regras financeiras e de participação"));
                     for(var p:all)sink.accept(ExportRow.of("Participantes",p.personId(),p.name()+" / "+p.holder(),p.registrationStatus(),"",historicalVehicle(p.vehicleId(),vs.get(p.vehicleId())),"","").grouped("Participantes"));
