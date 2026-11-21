@@ -116,8 +116,8 @@ public class AdminEventController {
     @DeleteMapping("/{id}")
     @PreAuthorize("hasAuthority('PUBLICATIONS_EVENT_DELETE')")
     @RequiredPermission("PUBLICATIONS_EVENT_DELETE")
-    @Operation(summary="Hard delete with history; retain financial and participation facts")
-    @ApiResponse(responseCode="204", description="Hard delete with history; retain financial and participation facts")
+    @Operation(summary="Hard delete operational Event data; retain editorial history, audit and financial facts")
+    @ApiResponse(responseCode="204", description="Event and its operational records removed")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@PathVariable Long id, @AuthenticationPrincipal UserPrincipal principal) {
         service.delete(id, principal.getUserId());

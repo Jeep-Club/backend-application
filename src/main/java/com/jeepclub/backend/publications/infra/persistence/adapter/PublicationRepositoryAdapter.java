@@ -48,6 +48,7 @@ public class PublicationRepositoryAdapter implements PublicationRepository {
     private final PublicationCommentJpaRepository comments;
     private final PublicationMapper mapper;
     private final PublicationHistoryMapper historyMapper;
+    private final jakarta.persistence.EntityManager entityManager;
     private final com.jeepclub.backend.publications.infra.persistence.mapper.CurrentEventMapper currentEventMapper;
     @Override
     public org.springframework.data.domain.Page<com.jeepclub.backend.publications.core.domain.model.Event> findEvents(org.springframework.data.domain.Pageable pageable) {
@@ -95,12 +96,32 @@ public class PublicationRepositoryAdapter implements PublicationRepository {
             snapshot=mapper.newEntity(currentEvent(id).orElseThrow());snapshot.setId(id);
         }
         history.saveAndFlush(historyMapper.snapshot(snapshot, deletedByUserId, deletedAt));
+        if (entity instanceof EventEntity) deleteEventOperations(id);
         comments.deleteAll(comments.findAllByPublication_Id(id));
         comments.flush();
         likes.deleteAll(likes.findAllByPublication_Id(id));
         likes.flush();
         publications.delete(entity);
         publications.flush();
+    }
+
+    private void deleteEventOperations(Long id) {
+        // Break the guest-to-selected-offer reference before removing offers.
+        executeEventMutation("update event_guest_requests set selected_offer_id=null where event_id=:event and selected_offer_id is not null", id);
+        executeEventMutation("delete from event_ride_offers where event_id=:event", id);
+        executeEventMutation("delete from event_guest_requests where event_id=:event", id);
+        for (var table : java.util.List.of("event_registration_occupants", "event_registration_vehicles",
+                "event_registration_unallocated_dependents")) {
+            executeEventMutation("delete from " + table
+                + " where registration_id in (select id from event_registrations where event_id=:event)", id);
+        }
+        executeEventMutation("delete from event_vehicle_capacity_history where event_id=:event", id);
+        executeEventMutation("delete from event_registrations where event_id=:event", id);
+        executeEventMutation("delete from event_charge_rules where event_id=:event", id);
+    }
+
+    private void executeEventMutation(String sql, Long id) {
+        entityManager.createNativeQuery(sql).setParameter("event", id).executeUpdate();
     }
 
     private Optional<PublicationEntity> lockedEntity(Long id) {

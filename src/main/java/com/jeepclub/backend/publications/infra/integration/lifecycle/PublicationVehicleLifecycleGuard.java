@@ -10,4 +10,6 @@ import java.time.Instant;
 class PublicationVehicleLifecycleGuard implements VehicleLifecycleGuard {
     private final EventLifecycleParticipation participation;
     public boolean hasOperationalParticipation(Long id, Instant now) { return participation.vehicle(id,now); }
+    public boolean exceedsCapacity(Long id, int capacity, Instant now) { return participation.exceedsCapacity(id,capacity,now); }
+    public void recordCapacityChange(Long id, int previous, int capacity, Instant now) { participation.recordCapacityChange(id,previous,capacity,now); }
 }

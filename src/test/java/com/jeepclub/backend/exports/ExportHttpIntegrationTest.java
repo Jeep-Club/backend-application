@@ -281,7 +281,7 @@ Arguments.of("/billing/admin/refunds/export","BILLING_EXPORT"));}
     @Autowired com.jeepclub.backend.vehicles.api.module.EventVehicleQuery eventVehicles;
     @Autowired com.jeepclub.backend.dependents.api.module.DependentsQuery eventDependents;
     @Test @org.springframework.transaction.annotation.Transactional
-    void postEventKeepsVehicleAndDependentAfterTheirRealHardDeletes()throws Exception {
+    void postEventOmitsOperationalDataAfterHardDelete()throws Exception {
         var owner=user("Titular da viagem","52998224725");
         var vehicle=vehicle(id(owner),"ABC1D23","12345678901",com.jeepclub.backend.vehicles.core.domain.enums.VehicleStatus.ACTIVE);
         ((com.jeepclub.backend.vehicles.infra.persistence.entity.VehicleEntity)vehicle).setNickname("Jeep da viagem");
@@ -306,7 +306,8 @@ Arguments.of("/billing/admin/refunds/export","BILLING_EXPORT"));}
         em.flush();em.clear();
         for(String format:List.of("CSV","PDF"))
             assertThat(download("/admin/events/"+eventId+"/reports/post-event/export","PUBLICATIONS_EXPORT",format))
-                .contains("ABC1D23","Jeep da viagem","Jeep Renegade","Dependente da viagem","Titular da viagem");
+                .contains("Viagem auditável","FINISHED")
+                .doesNotContain("ABC1D23","Jeep da viagem","Jeep Renegade","Dependente da viagem","Titular da viagem");
 
         vehicleAdministration.delete(vehicleId,999L);
         dependentAdministration.delete(dependentId,id(owner));
@@ -322,11 +323,8 @@ Arguments.of("/billing/admin/refunds/export","BILLING_EXPORT"));}
         assertThat(eventDependents.isActiveDependentOfUser(dependentId,id(owner))).isFalse();
         for(String format:List.of("CSV","PDF")) {
             String post=download("/admin/events/"+eventId+"/reports/post-event/export","PUBLICATIONS_EXPORT",format);
-            assertThat(post).contains("ABC1D23","Jeep da viagem","Jeep Renegade","Dependente da viagem",
-                "Titular da viagem",vehicleId.toString())
-                .doesNotContain("Cadastro indisponível","Veículo indisponível");
-            if(format.equals("CSV"))assertThat(post).contains("\"ABC1D23\";\"2\";\"3\"");
-            else assertThat(post).contains("capacidade: 5","vagas: 3");
+            assertThat(post).contains("Viagem auditável","FINISHED")
+                .doesNotContain("ABC1D23","Jeep da viagem","Dependente da viagem","Titular da viagem");
         }
     }
     @Test @org.springframework.transaction.annotation.Transactional
@@ -414,7 +412,8 @@ Arguments.of("/billing/admin/refunds/export","BILLING_EXPORT"));}
         assertThat(em.createQuery("select count(e) from EventChargeContextEntity e where e.eventId=:id",Long.class).setParameter("id",eventId).getSingleResult()).isEqualTo(1);
         for(String format:List.of("CSV","PDF")) {
             String post=download("/admin/events/"+eventId+"/reports/post-event/export","PUBLICATIONS_EXPORT",format);
-            assertThat(post).contains("Evento removido auditável","FINISHED","Participante histórico","Convidado histórico","ABC1D23","CONFIRMED","Histórico","PENDING_PAYMENT");
+            assertThat(post).contains("Evento removido auditável","FINISHED","Nome histórico")
+                .doesNotContain("Participante histórico","Convidado histórico","ABC1D23","PENDING_PAYMENT");
             for(String product:List.of("definitions","cycles","member-charges","payments","refunds")) {
                 String result=download("/billing/admin/"+product+"/export","BILLING_EXPORT",format,"eventId",eventId.toString());
                 assertThat(result).as(product+" histórico "+format).contains("Evento removido auditável").doesNotContain("HISTORICAL_RECEIPT_SECRET");
@@ -424,9 +423,7 @@ Arguments.of("/billing/admin/refunds/export","BILLING_EXPORT"));}
         }
         auth("PUBLICATIONS_EXPORT");
         mvc.perform(get("/admin/events/"+eventId+"/reports/manifest/export").header("Authorization","Bearer export-test")).andExpect(status().isNotFound());
-        assertThat(eventOperations.registrations(eventId)).hasSize(2);
-        assertThat(eventOperations.registrations(eventId).stream().filter(r->r.userId().equals(id(pendingUser))).findFirst().orElseThrow().status())
-            .isEqualTo(com.jeepclub.backend.publications.core.domain.model.EventRegistration.Status.PENDING_PAYMENT);
+        assertThat(eventOperations.registrations(eventId)).isEmpty();
     }
     private String download(String path,String permission,String format,String...params)throws Exception {
         auth(permission);var request=get(path).param("format",format).header("Authorization","Bearer export-test");

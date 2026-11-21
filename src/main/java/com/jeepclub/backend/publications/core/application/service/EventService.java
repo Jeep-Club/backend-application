@@ -73,6 +73,8 @@ public class EventService {
         }
         operations.save(replacement);
         for (var allocation : allocations) if (events.spare(id, allocation.vehicleId()) < 0) throw error("EVENT_VEHICLE_CAPACITY_EXCEEDED");
+        events.recordInitialCapacities(replacement, allocations.stream()
+            .filter(a -> registration.allocations().stream().noneMatch(old -> old.vehicleId().equals(a.vehicleId()))).toList());
         return replacement;
     }
     public EventGuestRequest requestGuest(Long id, Long user, Long vehicle, String cpf, String guestName) {
@@ -98,16 +100,18 @@ public class EventService {
     }
     public EventRideOffer respond(Long id, Long guestId, Long user, Long vehicle, boolean accept) {
         var event = events.locked(id,List.of(vehicle),List.of()); events.requireOpen(event);
-        if (!rideRequests(id, user).contains(guestId)) throw error("EVENT_RIDE_OFFER_INVALID");
         var registration = events.registration(id, user);
+        var guest = operations.guests(id).stream().filter(g -> g.id().equals(guestId) && g.administrative()
+            && g.transportStatus() == EventGuestRequest.TransportStatus.STANDBY).findFirst()
+            .orElseThrow(() -> error("EVENT_RIDE_OFFER_INVALID"));
+        if (registration.status() != EventRegistration.Status.CONFIRMED) throw error("EVENT_RIDE_OFFER_INVALID");
         if (registration.allocations().stream().noneMatch(a -> a.vehicleId().equals(vehicle))) throw error("EVENT_VEHICLE_NOT_OWNED");
-        events.guestSpace(id, vehicle);
+        if (accept) events.guestSpace(id, vehicle);
         var previous = operations.offers(id).stream().filter(o -> o.guestRequestId().equals(guestId) && o.vehicleId().equals(vehicle)
             && (o.status() == EventRideOffer.Status.ACCEPTED || o.status() == EventRideOffer.Status.SELECTED)).findFirst();
         if (previous.isPresent()) throw error("EVENT_RIDE_OFFER_INVALID");
         var offer = operations.save(new EventRideOffer(null, id, guestId, registration.id(), user, vehicle,
             accept ? EventRideOffer.Status.ACCEPTED : EventRideOffer.Status.DECLINED, events.now(), null));
-        var guest = events.guest(id,guestId);
         events.record(guest,guest,accept ? "OFFER_ACCEPTED" : "OFFER_DECLINED",user,"MEMBER_RIDE_RESPONSE",offer.id());
         return offer;
     }

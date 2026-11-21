@@ -187,9 +187,17 @@ public class AdminVehicleService {
             images.requireExisting(updates.photo().value());
         }
         VehicleEditResolver.Resolved resolved = VehicleEditResolver.resolve(vehicle, updates);
+        if (resolved.seatingCapacity() < vehicle.getSeatingCapacity()
+                && lifecycleGuards.stream().anyMatch(guard -> guard.exceedsCapacity(vehicleId, resolved.seatingCapacity(), Instant.now(clock))))
+            throw new com.jeepclub.backend.vehicles.core.domain.exception.VehicleLifecycleConflictException("Resolve Event occupancy before reducing vehicle capacity.");
         String canonicalPlate = Vehicle.normalizePlate(resolved.plate());
         String canonicalRenavam = Vehicle.normalizeRenavam(resolved.renavam());
         assertUniqueChangedIdentifiers(vehicle, canonicalPlate, canonicalRenavam);
+
+        if (resolved.seatingCapacity() != vehicle.getSeatingCapacity()) {
+            int previous=vehicle.getSeatingCapacity(); Instant changedAt=Instant.now(clock);
+            lifecycleGuards.forEach(guard -> guard.recordCapacityChange(vehicleId,previous,resolved.seatingCapacity(),changedAt));
+        }
 
         vehicle.update(
                 resolved.nickname(),

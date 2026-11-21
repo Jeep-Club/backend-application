@@ -57,9 +57,16 @@ public class EventOperations {
         validateDependents(user, unallocatedDependentIds);
         validateAllocations(user, allocations);
         registration = operations.save(registration);
+        recordInitialCapacities(registration, allocations);
         for (var rule : rules.stream().sorted(Comparator.comparing(EventChargeRule::chargeDefinitionId)).toList())
             billing.ensureEventMemberCharge(event.getId(), rule.chargeDefinitionId(), user, resolveFinancialDueDate(rule, event), user);
         return refresh(registration, financial.findByEvent(event.getId()));
+    }
+    public void recordInitialCapacities(EventRegistration registration, List<EventRegistration.Allocation> allocations) {
+        for (var allocation : allocations) {
+            var vehicle = vehicleLocks.activeById(allocation.vehicleId()).orElseThrow(() -> error("EVENT_VEHICLE_NOT_FOUND"));
+            operations.recordVehicleCapacity(registration.eventId(),registration.id(),allocation.vehicleId(),null,vehicle.seatingCapacity(),now());
+        }
     }
     private LocalDate resolveFinancialDueDate(EventChargeRule rule, Event event) {
         return rule.financialDueDate() != null ? rule.financialDueDate()

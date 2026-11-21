@@ -43,6 +43,27 @@ class EventParticipantLifecycleMySqlIT extends EventParticipantLifecycleIntegrat
         }
         assertThat(waiting).as("Observed real InnoDB lock wait").isTrue();
     }
+    @Test void committedAllocationPreventsWaitingCapacityReductionWithOldSnapshot() throws Exception {
+        var e=event();Long d=dependent();var ready=new CountDownLatch(1);var proceed=new CountDownLatch(1);
+        var connection=new CompletableFuture<Long>();var pool=Executors.newSingleThreadExecutor();
+        try {
+            var reduction=pool.submit(() -> {
+                try {return transactions.execute(s -> {
+                    jdbc.queryForObject("select count(*) from event_registrations where event_id=?",Long.class,e.getId());
+                    connection.complete(jdbc.queryForObject("select connection_id()",Long.class));ready.countDown();await(proceed);
+                    memberVehicles.update(vehicle,owner,capacityEdit(1));return "REDUCED";
+                });} catch(RuntimeException ex) {return ex;}
+            });
+            await(ready);
+            transactions.execute(s -> {
+                member.register(e.getId(),owner,java.util.List.of(new com.jeepclub.backend.publications.core.domain.model.EventRegistration.Allocation(vehicle,true,java.util.List.of(d))));
+                proceed.countDown();actualWait(connection.join());return null;
+            });
+            assertThat(reduction.get(20,TimeUnit.SECONDS))
+                .isInstanceOf(com.jeepclub.backend.vehicles.core.domain.exception.VehicleLifecycleConflictException.class);
+            assertThat(memberVehicles.findById(vehicle,owner).getSeatingCapacity()).isEqualTo(5);
+        } finally {proceed.countDown();pool.shutdownNow();}
+    }
     @Test void committedRegistrationWinsAgainstWaitingLifecycleEvenWithOldRepeatableReadSnapshot() throws Exception {
         var e=event();var established=new CountDownLatch(1);var proceed=new CountDownLatch(1);
         var connection=new CompletableFuture<Long>();var pool=Executors.newSingleThreadExecutor();

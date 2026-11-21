@@ -36,6 +36,48 @@ public class EventLifecycleParticipation {
             )
             """,id,now));
     }
+    public boolean exceedsCapacity(Long id, int capacity, Instant now) {
+        return current(() -> !entityManager.createNativeQuery("""
+            select e.publication_id from publication_events e where
+            """+OPERATIONAL_EVENT+"""
+            and ((select count(*) from event_registration_occupants o
+                  join event_registrations r on r.id=o.registration_id
+                  where r.event_id=e.publication_id and r.status in ('PENDING_PAYMENT','CONFIRMED') and o.vehicle_id=:id)
+                 + (select count(*) from event_guest_requests g where g.event_id=e.publication_id
+                    and g.status='APPROVED' and g.vehicle_id=:id)) > :capacity
+            """).setParameter("id",id).setParameter("now",now).setParameter("capacity",capacity)
+                .setMaxResults(1).getResultList().isEmpty());
+    }
+    private record Allocation(Long eventId, Long registrationId) {}
+    private java.util.Set<Allocation> allocations(Long vehicleId, Instant now) {
+        @SuppressWarnings("unchecked")
+        var rows = (java.util.List<Object[]>)entityManager.createNativeQuery("""
+            select e.publication_id,r.id from publication_events e
+            join event_registrations r on r.event_id=e.publication_id
+            join event_registration_vehicles v on v.registration_id=r.id
+            where
+            """+OPERATIONAL_EVENT+"""
+            and r.status in ('PENDING_PAYMENT','CONFIRMED') and v.vehicle_id=:id
+            """).setParameter("id",vehicleId).setParameter("now",now).getResultList();
+        return rows.stream().map(row -> new Allocation(((Number)row[0]).longValue(),((Number)row[1]).longValue()))
+            .collect(java.util.stream.Collectors.toSet());
+    }
+    public void recordCapacityChange(Long vehicleId, int previous, int capacity, Instant now) {
+        entityManager.flush();
+        var visible=allocations(vehicleId,now);
+        if (!Objects.equals(TransactionSynchronizationManager.getCurrentTransactionIsolationLevel(),java.sql.Connection.TRANSACTION_READ_COMMITTED)) {
+            // Either view can omit links visible to the other. Writing on disagreement
+            // would risk a missing snapshot or a snapshot for a removed allocation.
+            var committed=committedSnapshots.inCommittedSnapshot(() -> allocations(vehicleId,now));
+            if (!visible.equals(committed)) throw new org.springframework.dao.ConcurrencyFailureException("Event allocations changed; retry vehicle update in a new transaction.");
+        }
+        for (var allocation : visible) {
+            var record=new com.jeepclub.backend.publications.infra.persistence.entity.EventVehicleCapacityHistoryEntity();
+            record.setEventId(allocation.eventId()); record.setRegistrationId(allocation.registrationId());
+            record.setVehicleId(vehicleId); record.setPreviousCapacity(previous); record.setCapacity(capacity); record.setOccurredAt(now);
+            entityManager.persist(record);
+        }
+    }
     private boolean exists(String sql,Long id,Instant now) {
         return !entityManager.createNativeQuery(sql).setParameter("id",id).setParameter("now",now)
             .setMaxResults(1).getResultList().isEmpty();

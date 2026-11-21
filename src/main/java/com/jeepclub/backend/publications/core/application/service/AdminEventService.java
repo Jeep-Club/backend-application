@@ -110,9 +110,11 @@ public class AdminEventService {
     }
     public void delete(Long id, Long actor) {
         var e = events.locked(id);
-        if (!operations.registrations(id).isEmpty() && e.effectiveStatus(events.now()) != EventStatus.CANCELLED && e.effectiveStatus(events.now()) != EventStatus.FINISHED)
+        var deletedAt = events.now();
+        var state = e.effectiveStatus(deletedAt);
+        if (!operations.registrations(id).isEmpty() && state != EventStatus.CANCELLED && state != EventStatus.FINISHED)
             throw error("EVENT_INVALID_STATE");
-        publications.delete(id, actor, events.now());
+        publications.delete(id, actor, deletedAt);
     }
     public List<EventGuestRequest> guests(Long id) { events.locked(id); return operations.guests(id); }
     public long currentApprovedGuestCount(String cpf) { return operations.currentApprovedGuestCount(cpf); }
@@ -139,9 +141,9 @@ public class AdminEventService {
     }
     @Transactional(readOnly=true)
     public List<EventGuestTransition> guestHistory(Long id,Long guest) {
-        // Scalar operational IDs and independent history survive Event hard delete.
-        events.guest(id,guest);
-        return operations.history(id,guest);
+        var history = operations.history(id,guest);
+        if (history.isEmpty()) events.guest(id,guest);
+        return history;
     }
     public List<EventRideOffer> offers(Long id) { events.locked(id); return operations.offers(id); }
     public EventRideOffer select(Long id, Long offerId, Long actor) {
@@ -206,14 +208,27 @@ public class AdminEventService {
             guests.stream().filter(g -> g.status() == EventGuestRequest.Status.CANCELLED).count());
     }
     public EmergencyMedicalProfileQuery.Profile health(Long id, MedicalProfileOwner type, Long target, Long actor) {
-        boolean success = false;
+        int status = 500;
         try {
             var profile = readHealth(id,type,target);
-            success = true;
+            status = 200;
             return profile;
+        } catch (com.jeepclub.backend.publications.core.application.exception.EventOperationException ex) {
+            status = ex.getCode().endsWith("NOT_FOUND") ? 404
+                : ex.getCode().equals("EVENT_HEALTH_ACCESS_NOT_ALLOWED") || ex.getCode().equals("EVENT_GUEST_ACCESS_DENIED") ? 403 : 409;
+            throw ex;
+        } catch (org.springframework.security.access.AccessDeniedException ex) {
+            status = 403;
+            throw ex;
+        } catch (IllegalArgumentException ex) {
+            status = 400;
+            throw ex;
+        } catch (IllegalStateException | org.springframework.dao.ConcurrencyFailureException ex) {
+            status = 409;
+            throw ex;
         } finally {
             audit.recordRequired(new SystemLogEvent(actor, "EVENT_HEALTH_EMERGENCY_READ", "GET", "/admin/events/" + id + "/health/" + type + "/" + target,
-                success ? 200 : 403, success ? SystemLogOutcome.SUCCESS : SystemLogOutcome.CLIENT_ERROR, 0, null, events.now()));
+                status, status == 200 ? SystemLogOutcome.SUCCESS : status < 500 ? SystemLogOutcome.CLIENT_ERROR : SystemLogOutcome.SERVER_ERROR, 0, null, events.now()));
         }
     }
     private EmergencyMedicalProfileQuery.Profile readHealth(Long id, MedicalProfileOwner type, Long target) {

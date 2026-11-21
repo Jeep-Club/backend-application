@@ -354,6 +354,9 @@ reativar retorna exclusivamente a STANDBY, sem restaurar vínculo/oferta antiga.
 REJECTED legado continua distinto de cancelamento e não pode ser reativado.
 
 Ofertas usam ACCEPTED/DECLINED/SELECTED/WITHDRAWN. Aceite não reserva vaga.
+Uma recusa exige inscrição confirmada, veículo alocado ao membro e convidado
+administrativo em standby, mas independe da disponibilidade atual do veículo
+ou de assentos; o aceite e a seleção continuam revalidando capacidade.
 Alocação/cancelamento retira ofertas anteriores coerentemente, preservando
 respondedAt e selectedAt; withdrawnAt registra encerramento. Nova oferta pode
 ser criada após encerramento sem sobrescrever a anterior. Não há push ou seleção automática.
@@ -386,14 +389,22 @@ reconcilia o legado sem alterar V1–V8. Locks seguem Event, Vehicles ordenados,
 Dependents ordenados e filhos operacionais, com leituras atuais por IDs estáveis
 para evitar snapshots RR antigos e locks de intervalos vazios. Corridas são exercitadas com transações
 independentes. Handlers Event são limitados aos seus controllers e retornam RFC 9457.
+Uma redução da capacidade de Vehicle é recusada enquanto a ocupação de qualquer
+Event operacional exceder a capacidade proposta. Contam os ocupantes de
+inscrições ativas e os convidados aprovados alocados; ofertas não reservam vaga.
 
-Hard delete exige estado terminal quando há inscrições. O snapshot preserva agenda,
-estado operacional persistido e dados editoriais. O estado temporal retornado pela API
-é calculado por `effectiveStatus(now)` e pode diferir do estado persistido no snapshot.
-Registrations, rules, guests e offers não são copiados para `publication_event_history`:
-suas linhas operacionais permanecem por referência escalar ao ID removido, sem FK para
-`publications`, e deixam de ser alcançáveis pelas rotas do Event excluído. Billing
-mantém seus contextos e fatos sem FK/cascade destrutivo. A mídia física global não é removida.
+O histórico de capacidade registra o valor visto na entrada de cada veículo em
+uma alocação e as mudanças posteriores enquanto o vínculo está ativo em Event
+operacional. As mudanças registram capacidade anterior e nova sob o lock de
+Vehicle. Vínculos legados não recebem um valor inicial retroativo. A alocação
+continua usando a capacidade atual.
+
+Hard delete exige estado terminal quando há inscrições. O snapshot editorial
+preserva agenda e estado persistido. Os relatórios calculam o estado efetivo no
+instante da exclusão. A mesma transação remove inscrições, ocupantes, regras de
+participação, convidados, ofertas e histórico de capacidade. Permanecem as
+transições de auditoria de convidados, o log de Health e os fatos de Billing.
+Relatórios de eventos excluídos por este fluxo exibem os fatos preservados.
 Listagens administrativas de Event, guests e ofertas usam PageResponse. Coleções
 operacionais são ordenadas por ID e paginadas depois da resolução de elegibilidade;
 o dashboard é uma projeção completa do Event. Contratos exatos ficam no OpenAPI.
