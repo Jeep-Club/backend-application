@@ -698,15 +698,31 @@ Não existe item de Publication genérica.
 apenas Services materializados após aprovação participam da consulta, sempre
 com a última versão aprovada enquanto houver proposta pendente.
 
-`GET /publications/feed` retorna `PageResponse` de Notice, Event e Service publicados,
-ordenados por `publishedAt DESC, id DESC`. Aceita `type=NOTICE|EVENT|SERVICE` e período
-inclusivo `publishedFrom`/`publishedTo`. Rascunhos e arquivados não aparecem. Event
-`FINISHED` continua visível se a Publication permanecer `PUBLISHED`. O item contém
-`authorUserId`, campos editoriais, imagem marcada `primary`, resumo social e `details`
-específico do tipo. `GET /publications/{publicationId}` retorna galeria completa na
-ordem persistida e os mesmos dados públicos, sem DTO administrativo ou dados de
-inscrição, cobrança, saúde ou guest. O feed usa consultas agrupadas de likes/comments,
-consulta de likedByMe por conjunto de IDs e leitura em lote das imagens.
+`GET /publications/feed` retorna `PageResponse` de Notice, Event e Service publicados
+(respeitando também a janela temporal de `Notice`), ordenados por `publishedAt DESC, id DESC`
+como default. Aceita filtro de tipo único (`type=NOTICE|EVENT|SERVICE`) ou múltiplos tipos
+(`types=NOTICE,EVENT,SERVICE`; informar `type` e `types` simultaneamente retorna `400
+PUBLICATION_FEED_INVALID`), filtro por autor (`authorUserId`), busca textual literal
+case-insensitive em título/conteúdo (`q` ou `search`, escape `!` para `%`, `_`, `!`, máx.
+200 caracteres), período inclusivo `publishedFrom`/`publishedTo` e ordenação por allowlist
+(`publishedAt`, `createdAt`, `updatedAt`, `title`, `id`) com `id` como desempate determinístico.
+Rascunhos e arquivados não aparecem. Event `FINISHED` continua visível se a Publication
+permanecer `PUBLISHED`.
+
+### Autoria humana e prévia de inscritos no feed — BACK-715 (`BACK-564`, `BACK-565`, `BACK-569`)
+
+O item do feed e o detalhe (`GET /publications/{publicationId}`) preservam `authorUserId` e
+expõem a representação mínima segura do autor ativo (`authorName`, `authorProfilePhotoStorageKey`
+e `author: {userId, name, profilePhotoStorageKey}`), sem expor CPF, RG, e-mail, telefone ou
+dados administrativos. Autores inativos, arquivados ou ausentes recebem fallback seguro (`null`).
+Em `EventDetails`, além de `registrationCount` (contagem de inscrições `CONFIRMED`, independente
+do limite da prévia e excluindo `PENDING_PAYMENT` e `CANCELLED`), o contrato expõe até 5
+titulares confirmados ativos em ordem de inscrição em `participantsPreview` (e no alias de
+compatibilidade `participants`), cada item com `{userId, name, profilePhotoStorageKey}`, sem
+dependentes, convidados, dados financeiros ou de saúde. A consulta de `event_registrations`
+agrega contagem e candidatos de prévia em uma única query por página, e a resolução em Identity
+usa `UserQuery.findByIds` em lotes de até 500 IDs distintos após a paginação (sem N+1).
+Autoria de comentários permanece isolada na task `BACK-622`.
 
 ## Interações sociais
 

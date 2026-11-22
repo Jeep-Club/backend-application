@@ -15,7 +15,11 @@ public class PublicationFeedExceptionHandler extends ApiExceptionHandler {
     public ResponseEntity<ApiErrorResponse> notFound(Exception ignored) {
         return buildErrorResponse("PUBLICATION_NOT_FOUND", "Publication was not found.", HttpStatus.NOT_FOUND);
     }
-    @ExceptionHandler(IllegalArgumentException.class)
+    @ExceptionHandler({
+            IllegalArgumentException.class,
+            org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class,
+            org.springframework.data.core.PropertyReferenceException.class
+    })
     public ResponseEntity<ApiErrorResponse> invalid(Exception ignored) {
         return buildErrorResponse("PUBLICATION_FEED_INVALID", "Feed filters are invalid.", HttpStatus.BAD_REQUEST);
     }
