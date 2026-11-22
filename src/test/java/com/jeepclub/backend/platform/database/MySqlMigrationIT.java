@@ -387,6 +387,7 @@ class MySqlMigrationIT {
         rejectionNotificationPhysicalConstraints(expected);
         retainedReferencePhysicalConstraints(expected);
         storagePhysicalConstraints(expected);
+        noticePriorityPhysicalConstraints(expected);
         assertThat(snapshot(fresh)).containsExactlyElementsOf(snapshot(expected));
         assertThat(flyway(fresh).migrate().migrationsExecuted).isZero();
         assertThat(count(fresh, "flyway_schema_history")).isEqualTo(migrationVersions().size());
@@ -683,6 +684,14 @@ class MySqlMigrationIT {
                 st.execute("ALTER TABLE storage_media_variants MODIFY " + column.getKey() + " VARCHAR(" + column.getValue()
                         + ") CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL");
             }
+        }
+    }
+
+    // Flyway-only default and priority allowlist checks supplement the JPA fixture.
+    private static void noticePriorityPhysicalConstraints(String name) throws Exception {
+        try (var c = connection(name); var st = c.createStatement()) {
+            st.execute("ALTER TABLE publication_notices MODIFY priority VARCHAR(20) NOT NULL DEFAULT 'NORMAL', ADD CONSTRAINT ck_publication_notices_priority CHECK (priority IN ('LOW','NORMAL','HIGH','URGENT'))");
+            st.execute("ALTER TABLE publication_notice_history MODIFY priority VARCHAR(20) NOT NULL DEFAULT 'NORMAL', ADD CONSTRAINT ck_publication_notice_history_priority CHECK (priority IN ('LOW','NORMAL','HIGH','URGENT'))");
         }
     }
 
