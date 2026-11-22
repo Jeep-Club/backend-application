@@ -25,20 +25,34 @@ import com.jeepclub.backend.publications.infra.persistence.entity.ServicePublica
 public class PublicationRepositoryAdapter implements PublicationRepository {
     @Override
     public Page<Publication> findPublished(String type, Instant from, Instant to, Pageable pageable) {
+        return findPublished(type == null ? java.util.Set.of() : java.util.Set.of(type), null, null, from, to, pageable);
+    }
+
+    @Override
+    public Page<Publication> findPublished(java.util.Set<String> types, Long authorUserId, String queryText, Instant from, Instant to, Pageable pageable) {
         Instant now = Instant.now(clock);
         Specification<PublicationEntity> filter = (root, query, cb) -> {
             var conditions = new java.util.ArrayList<jakarta.persistence.criteria.Predicate>();
             conditions.add(cb.equal(root.get("status"), PublicationStatus.PUBLISHED));
             if (from != null) conditions.add(cb.greaterThanOrEqualTo(root.get("publishedAt"), from));
             if (to != null) conditions.add(cb.lessThanOrEqualTo(root.get("publishedAt"), to));
-            if (type != null) {
-                Class<? extends PublicationEntity> subtype = switch (type) {
-                    case "NOTICE" -> NoticeEntity.class;
-                    case "EVENT" -> EventEntity.class;
-                    case "SERVICE" -> ServicePublicationEntity.class;
-                    default -> throw new IllegalArgumentException("Unsupported publication type.");
-                };
-                conditions.add(cb.equal(root.type(), subtype));
+            if (types != null && !types.isEmpty()) {
+                var subtypes = types.stream().map(PublicationRepositoryAdapter::resolveSubtype).toList();
+                if (subtypes.size() == 1) {
+                    conditions.add(cb.equal(root.type(), subtypes.get(0)));
+                } else {
+                    conditions.add(root.type().in(subtypes));
+                }
+            }
+            if (authorUserId != null) {
+                conditions.add(cb.equal(root.get("authorUserId"), authorUserId));
+            }
+            String pattern = likePattern(queryText);
+            if (pattern != null) {
+                conditions.add(cb.or(
+                        cb.like(cb.lower(root.get("title")), pattern, '!'),
+                        cb.like(cb.lower(root.get("content")), pattern, '!')
+                ));
             }
             var invalidNotice = query.subquery(Long.class);
             var notice = invalidNotice.from(NoticeEntity.class);
@@ -53,6 +67,15 @@ public class PublicationRepositoryAdapter implements PublicationRepository {
             return cb.and(conditions.toArray(jakarta.persistence.criteria.Predicate[]::new));
         };
         return publications.findAll(filter, pageable).map(mapper::toDomain);
+    }
+
+    private static Class<? extends PublicationEntity> resolveSubtype(String type) {
+        return switch (type) {
+            case "NOTICE" -> NoticeEntity.class;
+            case "EVENT" -> EventEntity.class;
+            case "SERVICE" -> ServicePublicationEntity.class;
+            default -> throw new IllegalArgumentException("Unsupported publication type.");
+        };
     }
     private final PublicationJpaRepository publications;
     private final PublicationHistoryJpaRepository history;
