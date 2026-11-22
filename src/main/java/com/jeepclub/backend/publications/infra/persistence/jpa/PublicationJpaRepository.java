@@ -34,7 +34,7 @@ public interface PublicationJpaRepository extends JpaRepository<PublicationEntit
         """)
     Page<NoticeEntity> findNotices(
             @Param("status") PublicationStatus status,
-            @Param("priority") NoticePriority priority,
+            @Param("priority") String priority,
             @Param("expired") Boolean expired,
             @Param("referenceNow") Instant referenceNow,
             @Param("pattern") String pattern,

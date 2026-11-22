@@ -1,2 +1,2 @@
-ALTER TABLE publication_notices ADD COLUMN priority ENUM ('HIGH','LOW','NORMAL','URGENT') DEFAULT 'NORMAL' NOT NULL, ADD COLUMN valid_from DATETIME(6) NULL, ADD COLUMN valid_until DATETIME(6) NULL;
-ALTER TABLE publication_notice_history ADD COLUMN priority ENUM ('HIGH','LOW','NORMAL','URGENT') DEFAULT 'NORMAL' NOT NULL, ADD COLUMN valid_from DATETIME(6) NULL, ADD COLUMN valid_until DATETIME(6) NULL;
+ALTER TABLE publication_notices ADD COLUMN priority VARCHAR(20) NOT NULL DEFAULT 'NORMAL', ADD COLUMN valid_from DATETIME(6) NULL, ADD COLUMN valid_until DATETIME(6) NULL, ADD CONSTRAINT ck_publication_notices_priority CHECK (priority IN ('LOW','NORMAL','HIGH','URGENT'));
+ALTER TABLE publication_notice_history ADD COLUMN priority VARCHAR(20) NOT NULL DEFAULT 'NORMAL', ADD COLUMN valid_from DATETIME(6) NULL, ADD COLUMN valid_until DATETIME(6) NULL, ADD CONSTRAINT ck_publication_notice_history_priority CHECK (priority IN ('LOW','NORMAL','HIGH','URGENT'));

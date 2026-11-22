@@ -5,7 +5,7 @@
       "MySqlMigrationIT#eventEditorialColumnsPreserveLegacyRowsOnUpgrade"
     ]
   },
-  "e8e0aa0711b7c7e1a5936c059c9c630fab4cf9962727c8e3cdb0d6829c281630": {
+  "0fd8b16767ef7d27b1c0c820ca6b6572cbdfb5ffcdd74a3a12ec6ad032e92d3f": {
     "reason": "DDL aditivo de prioridade (default NORMAL) e janela temporal anulável em Notice e histórico; regressão parte da V16 com linhas legadas em ambas as tabelas, compara estados e valida Hibernate.",
     "tests": [
       "MySqlMigrationIT#noticePriorityAndValidityColumnsPreserveLegacyRowsOnUpgrade"

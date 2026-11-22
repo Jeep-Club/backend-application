@@ -457,7 +457,7 @@ class NoticeHttpIntegrationTest {
                 .filter(item -> item.getPublicationId().equals(urgentExpiredId))
                 .map(NoticeHistoryEntity.class::cast)
                 .findFirst().orElseThrow();
-        assertThat(snapshot.getPriority().name()).isEqualTo("URGENT");
+        assertThat(snapshot.getPriority()).isEqualTo("URGENT");
         assertThat(snapshot.getValidFrom()).isEqualTo(Instant.parse("2020-01-01T00:00:00Z"));
         assertThat(snapshot.getValidUntil()).isEqualTo(Instant.parse("2020-01-02T00:00:00Z"));
     }

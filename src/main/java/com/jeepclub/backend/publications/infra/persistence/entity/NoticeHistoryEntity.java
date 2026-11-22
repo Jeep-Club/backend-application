@@ -3,14 +3,11 @@ package com.jeepclub.backend.publications.infra.persistence.entity;
 import com.jeepclub.backend.publications.core.domain.enums.NoticePriority;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
-import jakarta.persistence.EnumType;
-import jakarta.persistence.Enumerated;
 import jakarta.persistence.PrimaryKeyJoinColumn;
 import jakarta.persistence.Table;
 import java.time.Instant;
 import lombok.Getter;
 import lombok.Setter;
-import org.hibernate.annotations.ColumnDefault;
 
 @Entity
 @Table(name = "publication_notice_history")
@@ -18,10 +15,8 @@ import org.hibernate.annotations.ColumnDefault;
 @Getter
 @Setter
 public class NoticeHistoryEntity extends PublicationHistoryEntity {
-    @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
-    @ColumnDefault("'NORMAL'")
-    private NoticePriority priority = NoticePriority.NORMAL;
+    @Column(name = "priority", nullable = false, length = 20)
+    private String priority = NoticePriority.NORMAL.name();
 
     @Column(name = "valid_from")
     private Instant validFrom;

@@ -214,7 +214,7 @@ class PublicationPersistenceTest {
                 .filter(item -> item.getPublicationId().equals(deletedId))
                 .map(NoticeHistoryEntity.class::cast)
                 .findFirst().orElseThrow();
-        assertThat(snapshot.getPriority()).isEqualTo(NoticePriority.URGENT);
+        assertThat(snapshot.getPriority()).isEqualTo(NoticePriority.URGENT.name());
         assertThat(snapshot.getValidFrom()).isEqualTo(referenceNow);
         assertThat(snapshot.getValidUntil()).isEqualTo(referenceNow);
     }
