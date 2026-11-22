@@ -47,10 +47,11 @@ public class PublicationFeedController {
     }
 
     @GetMapping("/{publicationId}")
-    @Operation(summary = "Read publication detail", description = "Only PUBLISHED concrete publications. Returns ordered full gallery and subtype details; Event FINISHED remains visible while editorially published.")
+    @Operation(summary = "Read publication detail", description = "Only PUBLISHED concrete publications within their temporal validity window. Returns ordered full gallery and subtype details; Event FINISHED remains visible while editorially published.")
     @ApiResponse(responseCode = "200", description = "Visible publication detail")
     public PublicationFeedDTO.Detail detail(@PathVariable Long publicationId,
                                             @AuthenticationPrincipal UserPrincipal principal) {
-        return PublicationFeedDTO.Detail.from(feed.detail(publicationId, principal.getUserId()), Instant.now(clock));
+        Instant now = Instant.now(clock);
+        return PublicationFeedDTO.Detail.from(feed.detail(publicationId, principal.getUserId(), now), now);
     }
 }

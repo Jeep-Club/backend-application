@@ -1,5 +1,6 @@
 package com.jeepclub.backend.publications.infra.persistence.adapter;
 
+import com.jeepclub.backend.publications.core.domain.enums.NoticePriority;
 import com.jeepclub.backend.publications.core.domain.enums.PublicationStatus;
 import com.jeepclub.backend.publications.core.domain.enums.ServicePublicationRequestStatus;
 import com.jeepclub.backend.publications.core.application.service.AdminServicePublicationRequestService;
@@ -154,6 +155,68 @@ class PublicationPersistenceTest {
         assertThat(repository.findServicesByIds(List.of(pubService.getId(), archService.getId(), deletedNotice.getId())))
                 .extracting(ServicePublication::getId)
                 .containsExactlyInAnyOrder(pubService.getId(), archService.getId());
+    }
+
+    @Test void noticePriorityAndValidityWindowFilterFeedPreserveEditorialStatusAndSnapshotOnDelete() {
+        // Clock in JpaTestConfiguration is fixed at NOW.plusSeconds(1)
+        Instant referenceNow = NOW.plusSeconds(1);
+        Instant publishedAt = Instant.parse("2060-01-01T00:00:00Z");
+
+        var activeBoundaryNotice = Notice.create(7L, "Urgent Valid", "Boundary valid", gallery(),
+                NoticePriority.URGENT, referenceNow, referenceNow, NOW);
+        activeBoundaryNotice.publish(publishedAt.plusSeconds(1));
+        activeBoundaryNotice = (Notice) repository.save(activeBoundaryNotice);
+
+        var futureNotice = Notice.create(7L, "Future Notice", "Starts later", gallery(),
+                NoticePriority.HIGH, referenceNow.plusSeconds(10), referenceNow.plusSeconds(60), NOW);
+        futureNotice.publish(publishedAt.plusSeconds(2));
+        futureNotice = (Notice) repository.save(futureNotice);
+
+        var expiredNotice = Notice.create(7L, "Expired Notice", "Ended earlier", gallery(),
+                NoticePriority.LOW, referenceNow.minusSeconds(60), referenceNow.minusSeconds(1), NOW);
+        expiredNotice.publish(publishedAt.plusSeconds(3));
+        expiredNotice = (Notice) repository.save(expiredNotice);
+
+        var event = Event.create(7L, "Published Event", "Still visible", gallery(), NOW.plusSeconds(3600), NOW);
+        event.publish(publishedAt.plusSeconds(4));
+        event = (Event) repository.save(event);
+
+        em.flush();
+        em.clear();
+
+        var feedPage = repository.findPublished(null, publishedAt, publishedAt.plusSeconds(10),
+                org.springframework.data.domain.PageRequest.of(0, 10,
+                        org.springframework.data.domain.Sort.by(
+                                org.springframework.data.domain.Sort.Order.desc("publishedAt"),
+                                org.springframework.data.domain.Sort.Order.desc("id"))));
+        assertThat(feedPage.getTotalElements()).isEqualTo(2);
+        assertThat(feedPage.getContent()).extracting(Publication::getId)
+                .containsExactly(event.getId(), activeBoundaryNotice.getId());
+
+        var sortAsc = org.springframework.data.domain.PageRequest.of(0, 10, org.springframework.data.domain.Sort.by("id"));
+        var expiredAdminPage = repository.findNotices(null, null, true, referenceNow, null, null, null, publishedAt, publishedAt.plusSeconds(10), sortAsc);
+        assertThat(expiredAdminPage.getContent()).extracting(Notice::getId).containsExactly(expiredNotice.getId());
+        assertThat(expiredAdminPage.getContent().get(0).getStatus()).isEqualTo(PublicationStatus.PUBLISHED);
+
+        var activeAdminPage = repository.findNotices(null, null, false, referenceNow, null, null, null, publishedAt, publishedAt.plusSeconds(10), sortAsc);
+        assertThat(activeAdminPage.getContent()).extracting(Notice::getId)
+                .containsExactly(activeBoundaryNotice.getId(), futureNotice.getId());
+
+        var urgentAdminPage = repository.findNotices(null, NoticePriority.URGENT, null, referenceNow, null, null, null, publishedAt, publishedAt.plusSeconds(10), sortAsc);
+        assertThat(urgentAdminPage.getContent()).extracting(Notice::getId).containsExactly(activeBoundaryNotice.getId());
+
+        long deletedId = activeBoundaryNotice.getId();
+        repository.delete(deletedId, 77L, publishedAt.plusSeconds(20));
+        em.flush();
+        em.clear();
+
+        var snapshot = history.findAll().stream()
+                .filter(item -> item.getPublicationId().equals(deletedId))
+                .map(NoticeHistoryEntity.class::cast)
+                .findFirst().orElseThrow();
+        assertThat(snapshot.getPriority()).isEqualTo(NoticePriority.URGENT);
+        assertThat(snapshot.getValidFrom()).isEqualTo(referenceNow);
+        assertThat(snapshot.getValidUntil()).isEqualTo(referenceNow);
     }
 
     @Test

@@ -6,6 +6,7 @@ import com.jeepclub.backend.platform.web.exception.ApiErrorResponse;
 import com.jeepclub.backend.platform.web.pagination.PageResponse;
 import com.jeepclub.backend.publications.api.http.dto.*;
 import com.jeepclub.backend.publications.core.application.service.AdminNoticeService;
+import com.jeepclub.backend.publications.core.domain.enums.NoticePriority;
 import com.jeepclub.backend.publications.core.domain.enums.PublicationStatus;
 import com.jeepclub.backend.publications.core.domain.model.PublicationImage;
 import io.swagger.v3.oas.annotations.Operation;
@@ -54,6 +55,10 @@ public class AdminNoticeController {
     public PageResponse<NoticeResponseDTO> list(
             @Parameter(description = "Filtro por estado editorial (DRAFT, PUBLISHED, ARCHIVED).")
             @RequestParam(required = false) PublicationStatus status,
+            @Parameter(description = "Filtro por prioridade editorial (LOW, NORMAL, HIGH, URGENT).")
+            @RequestParam(required = false) NoticePriority priority,
+            @Parameter(description = "Filtro por expiração temporal (true apenas vencidos em relação ao Clock; false apenas vigentes/sem vencimento; omitido retorna todos).")
+            @RequestParam(required = false) Boolean expired,
             @Parameter(description = "Busca textual literal case-insensitive em título ou conteúdo (máximo 200 caracteres).")
             @RequestParam(required = false) String q,
             @Parameter(hidden = true) @RequestParam(required = false) String search,
@@ -77,7 +82,7 @@ public class AdminNoticeController {
         }
         String effectiveQuery = q != null && !q.isBlank() ? q : search;
         return PageResponse.from(presentation.notices(
-                notices.findAll(status, effectiveQuery, from, to, publishedFrom, publishedTo, pageable)
+                notices.findAll(status, priority, expired, effectiveQuery, from, to, publishedFrom, publishedTo, pageable)
         ));
     }
 
@@ -98,7 +103,8 @@ public class AdminNoticeController {
                                                      @AuthenticationPrincipal UserPrincipal principal) {
         var request = reader.create(body);
         return ResponseEntity.status(HttpStatus.CREATED).body(presentation.notice(
-                notices.create(principal.getUserId(), request.title(), request.content(), images(request.images()))));
+                notices.create(principal.getUserId(), request.title(), request.content(), images(request.images()),
+                        request.priority(), request.validFrom(), request.validUntil())));
     }
 
     @GetMapping("/{id}")
@@ -133,7 +139,9 @@ public class AdminNoticeController {
                                                      @RequestBody JsonNode body) {
         var request = reader.update(body);
         return ResponseEntity.ok(presentation.notice(notices.update(id, request.title(), request.content(),
-                request.images() == null ? null : images(request.images()))));
+                request.images() == null ? null : images(request.images()),
+                request.priority(), body.has("validFrom"), request.validFrom(),
+                body.has("validUntil"), request.validUntil())));
     }
 
     @PostMapping("/{id}/publish")

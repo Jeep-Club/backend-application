@@ -1,5 +1,6 @@
 package com.jeepclub.backend.publications.infra.persistence.jpa;
 
+import com.jeepclub.backend.publications.core.domain.enums.NoticePriority;
 import com.jeepclub.backend.publications.core.domain.enums.PublicationStatus;
 import com.jeepclub.backend.publications.infra.persistence.entity.NoticeEntity;
 import com.jeepclub.backend.publications.infra.persistence.entity.PublicationEntity;
@@ -21,6 +22,10 @@ public interface PublicationJpaRepository extends JpaRepository<PublicationEntit
     @Query("""
         select n from NoticeEntity n
         where (:status is null or n.status = :status)
+          and (:priority is null or n.priority = :priority)
+          and (:expired is null
+               or (:expired = true and n.validUntil is not null and n.validUntil < :referenceNow)
+               or (:expired = false and (n.validUntil is null or n.validUntil >= :referenceNow)))
           and (:pattern is null or lower(n.title) like :pattern escape '!' or lower(n.content) like :pattern escape '!')
           and (:from is null or n.createdAt >= :from)
           and (:to is null or n.createdAt <= :to)
@@ -29,6 +34,9 @@ public interface PublicationJpaRepository extends JpaRepository<PublicationEntit
         """)
     Page<NoticeEntity> findNotices(
             @Param("status") PublicationStatus status,
+            @Param("priority") NoticePriority priority,
+            @Param("expired") Boolean expired,
+            @Param("referenceNow") Instant referenceNow,
             @Param("pattern") String pattern,
             @Param("from") Instant from,
             @Param("to") Instant to,

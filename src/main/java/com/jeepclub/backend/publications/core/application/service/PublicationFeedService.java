@@ -2,24 +2,47 @@ package com.jeepclub.backend.publications.core.application.service;
 
 import com.jeepclub.backend.publications.core.domain.enums.PublicationStatus;
 import com.jeepclub.backend.publications.core.domain.exception.PublicationNotFoundException;
+import com.jeepclub.backend.publications.core.domain.model.Notice;
 import com.jeepclub.backend.publications.core.domain.model.Publication;
 import com.jeepclub.backend.publications.core.repository.PublicationRepository;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.Map;
 
 @Service
-@RequiredArgsConstructor
 public class PublicationFeedService {
     private final PublicationRepository publications;
     private final PublicationSocialSummaryQuery social;
     private final com.jeepclub.backend.publications.core.repository.EventParticipantRepository participants;
+    private final Clock clock;
+
+    @Autowired
+    public PublicationFeedService(
+            PublicationRepository publications,
+            PublicationSocialSummaryQuery social,
+            com.jeepclub.backend.publications.core.repository.EventParticipantRepository participants,
+            Clock clock
+    ) {
+        this.publications = publications;
+        this.social = social;
+        this.participants = participants;
+        this.clock = clock;
+    }
+
+    public PublicationFeedService(
+            PublicationRepository publications,
+            PublicationSocialSummaryQuery social,
+            com.jeepclub.backend.publications.core.repository.EventParticipantRepository participants
+    ) {
+        this(publications, social, participants, Clock.systemUTC());
+    }
 
     public record Item(Publication publication, PublicationSocialSummaryQuery.Summary summary, long registrationCount) {}
 
@@ -43,8 +66,16 @@ public class PublicationFeedService {
 
     @Transactional(readOnly = true)
     public Item detail(Long id, Long memberUserId) {
+        return detail(id, memberUserId, Instant.now(clock));
+    }
+
+    @Transactional(readOnly = true)
+    public Item detail(Long id, Long memberUserId, Instant now) {
         var publication = publications.findById(id).orElseThrow(() -> new PublicationNotFoundException(id));
         if (publication.getStatus() != PublicationStatus.PUBLISHED) throw new PublicationNotFoundException(id);
+        if (publication instanceof Notice notice && !notice.isTemporallyVisibleAt(now)) {
+            throw new PublicationNotFoundException(id);
+        }
         return new Item(publication, social.get(java.util.List.of(id), memberUserId).get(id),
                 publication instanceof com.jeepclub.backend.publications.core.domain.model.Event ? participants.confirmedCounts(java.util.List.of(id)).getOrDefault(id, 0L) : 0L);
     }
