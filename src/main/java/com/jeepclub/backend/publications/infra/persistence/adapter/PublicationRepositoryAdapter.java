@@ -81,7 +81,7 @@ public class PublicationRepositoryAdapter implements PublicationRepository {
             Pageable pageable
     ) {
         Instant effectiveNow = referenceNow != null ? referenceNow : Instant.now(clock);
-        return publications.findNotices(status, priority, expired, effectiveNow, likePattern(query), from, to, publishedFrom, publishedTo, pageable)
+        return publications.findNotices(status, priority == null ? null : priority.name(), expired, effectiveNow, likePattern(query), from, to, publishedFrom, publishedTo, pageable)
                 .map(e -> (com.jeepclub.backend.publications.core.domain.model.Notice) mapper.toDomain(e));
     }
 
