@@ -1,6 +1,8 @@
 package com.jeepclub.backend.publications.core.application.service;
 
 import com.jeepclub.backend.publications.api.http.dto.PublicationFeedDTO;
+import com.jeepclub.backend.publications.core.domain.enums.NoticePriority;
+import com.jeepclub.backend.publications.core.domain.enums.PublicationStatus;
 import com.jeepclub.backend.publications.core.domain.exception.PublicationNotFoundException;
 import com.jeepclub.backend.publications.core.domain.model.*;
 import com.jeepclub.backend.publications.core.repository.PublicationRepository;
@@ -86,6 +88,30 @@ class PublicationFeedServiceTest {
         verify(participants).confirmedCounts(List.of(2L));
         assertThat(dto.type()).isEqualTo("EVENT");
         assertThat(dto.details()).isEqualTo(new PublicationFeedDTO.EventDetails(event.getStartsAt(), event.getEndsAt(), "FINISHED", 3L, "Meeting point", 42));
+    }
+
+    @Test void noticeDetailEnforcesTemporalValidityWindowAndProjectsPriorityAndValidity() {
+        var publications = mock(PublicationRepository.class);
+        var social = mock(PublicationSocialSummaryQuery.class);
+        var participants = mock(com.jeepclub.backend.publications.core.repository.EventParticipantRepository.class);
+        Instant start = NOW.plusSeconds(10);
+        Instant end = NOW.plusSeconds(60);
+        var notice = Notice.reconstitute(10L, 7L, "Urgent Notice", "Body", PublicationStatus.PUBLISHED,
+                NOW.minusSeconds(20), NOW.minusSeconds(10), NOW.minusSeconds(10), null, gallery(),
+                NoticePriority.URGENT, start, end);
+        when(publications.findById(10L)).thenReturn(Optional.of(notice));
+        when(social.get(List.of(10L), 9L)).thenReturn(Map.of(10L, new PublicationSocialSummaryQuery.Summary(1, 0, false)));
+        var service = new PublicationFeedService(publications, social, participants);
+
+        assertThatThrownBy(() -> service.detail(10L, 9L, start.minusNanos(1)))
+                .isInstanceOf(PublicationNotFoundException.class);
+        assertThatThrownBy(() -> service.detail(10L, 9L, end.plusNanos(1)))
+                .isInstanceOf(PublicationNotFoundException.class);
+
+        var atStart = PublicationFeedDTO.Detail.from(service.detail(10L, 9L, start), start);
+        assertThat(atStart.details()).isEqualTo(new PublicationFeedDTO.NoticeDetails(NoticePriority.URGENT, start, end));
+        var atEnd = PublicationFeedDTO.Detail.from(service.detail(10L, 9L, end), end);
+        assertThat(atEnd.details()).isEqualTo(new PublicationFeedDTO.NoticeDetails(NoticePriority.URGENT, start, end));
     }
 
     private static List<PublicationImage> gallery() { return List.of(new PublicationImage(KEY, 0, true)); }

@@ -225,11 +225,35 @@ específica de Notice; o controller usa `@PreAuthorize` para enforcement e
 `@RequiredPermission` para OpenAPI. Como a superfície é administrativa e permissionada,
 não exige `@RequiresMembership`. `GET /admin/notices` e `GET /admin/notices/{id}` podem ler
 DRAFT, PUBLISHED e ARCHIVED; a listagem paginada aplica filtros opcionais de `status`,
-busca literal `q` por título/conteúdo e intervalos `from`/`to` (`createdAt`) ou
-`publishedFrom`/`publishedTo` (`publishedAt`), com allowlist de ordenação e `id` como
-desempate determinístico. Quando o administrador possui `IDENTITY_USER_READ`, `authorName`
-é resolvido em lote para autores ativos (permanecendo `null` sem a permissão suplementar ou
-para usuário inativo/ausente).
+`priority` (`LOW`, `NORMAL`, `HIGH`, `URGENT`), `expired` (`true` para `validUntil < now`,
+`false` para vigentes/sem vencimento, omitido para todos), busca literal `q` por
+título/conteúdo e intervalos `from`/`to` (`createdAt`) ou `publishedFrom`/`publishedTo`
+(`publishedAt`), com allowlist de ordenação (incluindo `priority`, `validFrom`, `validUntil`)
+e `id` como desempate determinístico. Quando o administrador possui `IDENTITY_USER_READ`,
+`authorName` é resolvido em lote para autores ativos (permanecendo `null` sem a permissão
+suplementar ou para usuário inativo/ausente).
+
+### Prioridade e validade temporal — BACK-724 / BACK-571
+
+Todo `Notice` possui prioridade editorial `NoticePriority` (`LOW`, `NORMAL`, `HIGH`, `URGENT`,
+com default `NORMAL` quando omitida na criação ou em registros legados) e limites temporais
+opcionais `validFrom` e `validUntil` (`Instant` UTC, inclusivos). Quando ambos os limites
+são informados, `validFrom <= validUntil` é obrigatório (`400 NOTICE_INVALID_REQUEST` se
+invertidos). No `PATCH /admin/notices/{id}`, omitir `priority`, `validFrom` ou `validUntil`
+preserva o valor atual; `null` explícito é inválido para `priority`, mas permitido em
+`validFrom` e `validUntil` para limpar o respectivo limite temporal.
+
+A expiração temporal (`now > validUntil`) e o agendamento futuro (`now < validFrom`) governam
+exclusivamente a **visibilidade para associados** em `GET /publications/feed` e
+`GET /publications/{publicationId}` (avaliada via `Clock`, com limites inclusivos
+`[validFrom, validUntil]`), **sem alterar o `PublicationStatus` editorial** (`DRAFT`,
+`PUBLISHED`, `ARCHIVED`) e sem criar estado técnico de publicação expirada. Avisos
+`PUBLISHED` fora da janela temporal ficam ocultos no feed (em SQL, antes da paginação e
+contagem) e retornam `404 PUBLICATION_NOT_FOUND` no detalhe do membro, mas continuam
+`PUBLISHED` e integralmente consultáveis/editáveis/arquiváveis na superfície administrativa
+(`/admin/notices`). Quando visíveis no feed/detalhe, `NoticeDetails` projeta `priority`,
+`validFrom` e `validUntil`. O snapshot de hard delete (`publication_notice_history`) preserva
+`priority`, `valid_from` e `valid_until`.
 
 Na criação, o `authorUserId` vem de `UserPrincipal.userId`, e o domínio cria o Notice em
 DRAFT. O cliente envia apenas título, conteúdo e galeria; estado e timestamps pertencem

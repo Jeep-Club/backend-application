@@ -14,6 +14,7 @@ import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
+import com.jeepclub.backend.publications.core.domain.enums.NoticePriority;
 import com.jeepclub.backend.publications.core.domain.enums.PublicationStatus;
 import com.jeepclub.backend.publications.infra.persistence.entity.NoticeEntity;
 import com.jeepclub.backend.publications.infra.persistence.entity.EventEntity;
@@ -24,6 +25,7 @@ import com.jeepclub.backend.publications.infra.persistence.entity.ServicePublica
 public class PublicationRepositoryAdapter implements PublicationRepository {
     @Override
     public Page<Publication> findPublished(String type, Instant from, Instant to, Pageable pageable) {
+        Instant now = Instant.now(clock);
         Specification<PublicationEntity> filter = (root, query, cb) -> {
             var conditions = new java.util.ArrayList<jakarta.persistence.criteria.Predicate>();
             conditions.add(cb.equal(root.get("status"), PublicationStatus.PUBLISHED));
@@ -38,6 +40,16 @@ public class PublicationRepositoryAdapter implements PublicationRepository {
                 };
                 conditions.add(cb.equal(root.type(), subtype));
             }
+            var invalidNotice = query.subquery(Long.class);
+            var notice = invalidNotice.from(NoticeEntity.class);
+            invalidNotice.select(notice.get("id")).where(
+                    cb.equal(notice.get("id"), root.get("id")),
+                    cb.or(
+                            cb.and(cb.isNotNull(notice.get("validFrom")), cb.greaterThan(notice.get("validFrom"), now)),
+                            cb.and(cb.isNotNull(notice.get("validUntil")), cb.lessThan(notice.get("validUntil"), now))
+                    )
+            );
+            conditions.add(cb.not(cb.exists(invalidNotice)));
             return cb.and(conditions.toArray(jakarta.persistence.criteria.Predicate[]::new));
         };
         return publications.findAll(filter, pageable).map(mapper::toDomain);
@@ -49,6 +61,7 @@ public class PublicationRepositoryAdapter implements PublicationRepository {
     private final PublicationMapper mapper;
     private final PublicationHistoryMapper historyMapper;
     private final com.jeepclub.backend.publications.infra.persistence.mapper.CurrentEventMapper currentEventMapper;
+    private final java.time.Clock clock;
     @Override
     public org.springframework.data.domain.Page<com.jeepclub.backend.publications.core.domain.model.Event> findEvents(org.springframework.data.domain.Pageable pageable) {
         return publications.findEvents(pageable).map(e -> (com.jeepclub.backend.publications.core.domain.model.Event) mapper.toDomain(e));
@@ -57,6 +70,9 @@ public class PublicationRepositoryAdapter implements PublicationRepository {
     @Override
     public Page<com.jeepclub.backend.publications.core.domain.model.Notice> findNotices(
             PublicationStatus status,
+            NoticePriority priority,
+            Boolean expired,
+            Instant referenceNow,
             String query,
             Instant from,
             Instant to,
@@ -64,7 +80,8 @@ public class PublicationRepositoryAdapter implements PublicationRepository {
             Instant publishedTo,
             Pageable pageable
     ) {
-        return publications.findNotices(status, likePattern(query), from, to, publishedFrom, publishedTo, pageable)
+        Instant effectiveNow = referenceNow != null ? referenceNow : Instant.now(clock);
+        return publications.findNotices(status, priority, expired, effectiveNow, likePattern(query), from, to, publishedFrom, publishedTo, pageable)
                 .map(e -> (com.jeepclub.backend.publications.core.domain.model.Notice) mapper.toDomain(e));
     }
 

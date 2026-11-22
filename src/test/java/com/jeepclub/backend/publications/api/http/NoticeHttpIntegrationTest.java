@@ -312,6 +312,8 @@ class NoticeHttpIntegrationTest {
         // Invalid filter / sort / pagination returns 400 NOTICE_INVALID_REQUEST
         for (String[] bad : new String[][]{
                 {"status", "INVALID"},
+                {"priority", "INVALID"},
+                {"expired", "not-a-boolean"},
                 {"sort", "unknownField,asc"},
                 {"page", "-1"},
                 {"size", "0"},
@@ -327,6 +329,125 @@ class NoticeHttpIntegrationTest {
                         .param("to", "2026-10-01T00:00:00Z")))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("NOTICE_INVALID_REQUEST"));
+    }
+
+    @Test
+    @Transactional
+    void noticePriorityAndValidityWindowSupportCreatePatchAdminFiltersAndSnapshotHistory() throws Exception {
+        long author = persistUser("Editora Avisos", UserStatus.ACTIVE);
+        authenticateAs(author, List.of(
+                "PUBLICATIONS_NOTICE_CREATE",
+                "PUBLICATIONS_NOTICE_UPDATE",
+                "PUBLICATIONS_NOTICE_PUBLISH",
+                "PUBLICATIONS_NOTICE_READ",
+                "PUBLICATIONS_NOTICE_DELETE"
+        ));
+
+        // Default priority is NORMAL and validity bounds are null when omitted
+        long defaultNoticeId = json.readTree(mvc.perform(withToken(post("/admin/notices")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(CREATE.formatted(KEY))))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.priority").value("NORMAL"))
+                .andExpect(jsonPath("$.validFrom").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.validUntil").value(org.hamcrest.Matchers.nullValue()))
+                .andReturn().getResponse().getContentAsString()).get("id").asLong();
+
+        // Explicit priority and temporal window
+        long urgentExpiredId = json.readTree(mvc.perform(withToken(post("/admin/notices")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"title":"Alerta Urgente","content":"Trecho interditado","priority":"URGENT",
+                                 "validFrom":"2020-01-01T00:00:00Z","validUntil":"2020-01-02T00:00:00Z",
+                                 "images":[{"storageKey":"%s","position":0,"primary":true}]}
+                                """.formatted(KEY))))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.priority").value("URGENT"))
+                .andExpect(jsonPath("$.validFrom").value("2020-01-01T00:00:00Z"))
+                .andExpect(jsonPath("$.validUntil").value("2020-01-02T00:00:00Z"))
+                .andReturn().getResponse().getContentAsString()).get("id").asLong();
+
+        mvc.perform(withToken(post("/admin/notices/{id}/publish", urgentExpiredId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PUBLISHED"))
+                .andExpect(jsonPath("$.priority").value("URGENT"));
+
+        // Invalid create payloads: reversed validity window, null priority, unknown priority
+        for (String invalidCreate : new String[]{
+                """
+                {"title":"Inválido","content":"Janela invertida","priority":"HIGH",
+                 "validFrom":"2026-10-10T00:00:00Z","validUntil":"2026-10-01T00:00:00Z",
+                 "images":[{"storageKey":"%s","position":0,"primary":true}]}
+                """.formatted(KEY),
+                """
+                {"title":"Inválido","content":"Prioridade nula","priority":null,
+                 "images":[{"storageKey":"%s","position":0,"primary":true}]}
+                """.formatted(KEY),
+                """
+                {"title":"Inválido","content":"Prioridade desconhecida","priority":"CRITICAL",
+                 "images":[{"storageKey":"%s","position":0,"primary":true}]}
+                """.formatted(KEY)
+        }) {
+            mvc.perform(withToken(post("/admin/notices").contentType(MediaType.APPLICATION_JSON).content(invalidCreate)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("NOTICE_INVALID_REQUEST"));
+        }
+
+        // PATCH updates priority and window, preserves omitted fields, allows explicit null on validFrom/validUntil, rejects null priority or reversed effective window
+        mvc.perform(withToken(patch("/admin/notices/{id}", defaultNoticeId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"priority\":\"HIGH\",\"validFrom\":\"2030-05-01T10:00:00Z\",\"validUntil\":\"2030-05-10T10:00:00Z\"}")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.priority").value("HIGH"))
+                .andExpect(jsonPath("$.validFrom").value("2030-05-01T10:00:00Z"))
+                .andExpect(jsonPath("$.validUntil").value("2030-05-10T10:00:00Z"));
+
+        // Reversed against preserved validFrom is rejected
+        mvc.perform(withToken(patch("/admin/notices/{id}", defaultNoticeId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"validUntil\":\"2030-04-01T10:00:00Z\"}")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("NOTICE_INVALID_REQUEST"));
+
+        // Explicit null priority is rejected
+        mvc.perform(withToken(patch("/admin/notices/{id}", defaultNoticeId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"priority\":null}")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("NOTICE_INVALID_REQUEST"));
+
+        // Explicit null on validFrom clears the start bound while preserving priority and validUntil
+        mvc.perform(withToken(patch("/admin/notices/{id}", defaultNoticeId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"validFrom\":null}")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.priority").value("HIGH"))
+                .andExpect(jsonPath("$.validFrom").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.validUntil").value("2030-05-10T10:00:00Z"));
+
+        // Admin filters by priority and expired without losing PUBLISHED status on expired notices
+        mvc.perform(withToken(get("/admin/notices").param("priority", "URGENT").param("expired", "true")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(1))
+                .andExpect(jsonPath("$.content[0].id").value(urgentExpiredId))
+                .andExpect(jsonPath("$.content[0].status").value("PUBLISHED"))
+                .andExpect(jsonPath("$.content[0].priority").value("URGENT"));
+
+        mvc.perform(withToken(get("/admin/notices").param("expired", "false").param("priority", "HIGH")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(1))
+                .andExpect(jsonPath("$.content[0].id").value(defaultNoticeId));
+
+        // Hard delete snapshots priority and validity window in NoticeHistoryEntity
+        mvc.perform(withToken(delete("/admin/notices/{id}", urgentExpiredId)))
+                .andExpect(status().isNoContent());
+        var snapshot = history.findAll().stream()
+                .filter(item -> item.getPublicationId().equals(urgentExpiredId))
+                .map(NoticeHistoryEntity.class::cast)
+                .findFirst().orElseThrow();
+        assertThat(snapshot.getPriority().name()).isEqualTo("URGENT");
+        assertThat(snapshot.getValidFrom()).isEqualTo(Instant.parse("2020-01-01T00:00:00Z"));
+        assertThat(snapshot.getValidUntil()).isEqualTo(Instant.parse("2020-01-02T00:00:00Z"));
     }
 
     private long persistUser(String name, UserStatus status) {
