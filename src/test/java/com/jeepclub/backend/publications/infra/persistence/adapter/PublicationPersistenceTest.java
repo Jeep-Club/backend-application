@@ -88,6 +88,74 @@ class PublicationPersistenceTest {
         assertThat(page.getContent()).singleElement().satisfies(c -> assertThat(c.getImages()).hasSize(1));
     }
 
+    @Test void administrativeNoticeAndServiceQueriesFilterCombineAndIsolateSubtypesInSql() {
+        Instant base = Instant.parse("2027-01-15T12:00:00Z");
+        var draftNotice = repository.save(Notice.create(7L, "Aviso %_! Rascunho", "Conteúdo interno", gallery(), base));
+        var publishedNotice = Notice.create(7L, "Aviso Publicado", "Trilha especial", gallery(), base.plusSeconds(10));
+        publishedNotice.publish(base.plusSeconds(20));
+        publishedNotice = (Notice) repository.save(publishedNotice);
+        var archivedNotice = Notice.create(8L, "Aviso Arquivado", "Trilha antiga", gallery(), base.plusSeconds(30));
+        archivedNotice.publish(base.plusSeconds(40));
+        archivedNotice.archive(base.plusSeconds(50));
+        archivedNotice = (Notice) repository.save(archivedNotice);
+
+        var deletedNotice = (Notice) repository.save(Notice.create(7L, "Aviso Removido", "Trilha removida", gallery(), base.plusSeconds(60)));
+        repository.delete(deletedNotice.getId(), 99L, base.plusSeconds(70));
+
+        repository.save(Event.create(7L, "Evento Trilha", "Não é aviso nem serviço", gallery(), base.plusSeconds(3600), base));
+
+        var pubService = (ServicePublication) repository.save(ServicePublication.fromApprovedRequest(
+                ServicePublicationRequest.reconstitute(1001L, 7L, "Mecânica %_! 4x4", "Revisão completa", new BigDecimal("250.00"),
+                        "11999990001", gallery(), ServicePublicationRequestStatus.PENDING, null, null, null, base, null, base, 0L),
+                base.plusSeconds(15)
+        ));
+        var archService = ServicePublication.fromApprovedRequest(
+                ServicePublicationRequest.reconstitute(1002L, 8L, "Guincho Pesado", "Atendimento 24h", new BigDecimal("500.00"),
+                        "11999990002", gallery(), ServicePublicationRequestStatus.PENDING, null, null, null, base, null, base, 0L),
+                base.plusSeconds(25)
+        );
+        archService.archive(base.plusSeconds(35));
+        archService = (ServicePublication) repository.save(archService);
+
+        var sortDesc = org.springframework.data.domain.PageRequest.of(
+                0, 10, org.springframework.data.domain.Sort.by(
+                        org.springframework.data.domain.Sort.Order.desc("createdAt"),
+                        org.springframework.data.domain.Sort.Order.desc("id")
+                )
+        );
+
+        var allNotices = repository.findNotices(null, null, base, base.plusSeconds(100), null, null, sortDesc);
+        assertThat(allNotices.getTotalElements()).isEqualTo(3);
+        assertThat(allNotices.getContent()).extracting(Notice::getId)
+                .containsExactly(archivedNotice.getId(), publishedNotice.getId(), draftNotice.getId());
+
+        var literalNoticeSearch = repository.findNotices(PublicationStatus.DRAFT, "%_!", base, base.plusSeconds(100), null, null, sortDesc);
+        assertThat(literalNoticeSearch.getTotalElements()).isEqualTo(1);
+        assertThat(literalNoticeSearch.getContent()).singleElement()
+                .extracting(Notice::getId).isEqualTo(draftNotice.getId());
+
+        var contentAndPublishedRange = repository.findNotices(
+                null, "TRILHA", null, null, base.plusSeconds(15), base.plusSeconds(25), sortDesc
+        );
+        assertThat(contentAndPublishedRange.getTotalElements()).isEqualTo(1);
+        assertThat(contentAndPublishedRange.getContent()).singleElement()
+                .extracting(Notice::getId).isEqualTo(publishedNotice.getId());
+
+        var allServices = repository.findServices(null, null, base, base.plusSeconds(100), null, null, sortDesc);
+        assertThat(allServices.getTotalElements()).isEqualTo(2);
+        assertThat(allServices.getContent()).extracting(ServicePublication::getId)
+                .containsExactly(archService.getId(), pubService.getId());
+
+        var archivedServices = repository.findServices(PublicationStatus.ARCHIVED, "24h", base, base.plusSeconds(100), null, null, sortDesc);
+        assertThat(archivedServices.getTotalElements()).isEqualTo(1);
+        assertThat(archivedServices.getContent()).singleElement()
+                .extracting(ServicePublication::getId).isEqualTo(archService.getId());
+
+        assertThat(repository.findServicesByIds(List.of(pubService.getId(), archService.getId(), deletedNotice.getId())))
+                .extracting(ServicePublication::getId)
+                .containsExactlyInAnyOrder(pubService.getId(), archService.getId());
+    }
+
     @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     void concurrentLikeForSameMemberSerializesAndPersistsOneRow() throws Exception {

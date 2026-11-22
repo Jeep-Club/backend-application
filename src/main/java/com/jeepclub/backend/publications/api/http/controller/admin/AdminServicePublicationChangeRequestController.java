@@ -35,18 +35,19 @@ import org.springframework.web.bind.annotation.*;
 })
 public class AdminServicePublicationChangeRequestController {
     private final AdminServicePublicationChangeRequestService changes;
+    private final PublicationAdminPresentation presentation;
 
     @GetMapping
     @PreAuthorize("hasAuthority('PUBLICATIONS_SERVICE_CHANGE_REQUEST_ADMIN_READ')")
     @RequiredPermission("PUBLICATIONS_SERVICE_CHANGE_REQUEST_ADMIN_READ")
-    @Operation(summary = "Listar solicitações de alteração", description = "Página administrativa com filtro opcional por status.")
+    @Operation(summary = "Listar solicitações de alteração", description = "Página administrativa com filtro opcional por status. Resolve requestedByUserName/reviewedByUserName em lote quando o administrador possui IDENTITY_USER_READ e servicePublicationTitle quando o serviço vinculado está disponível.")
     @ApiResponse(responseCode = "200", description = "Página de change requests.",
             content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE,
                     schema = @Schema(implementation = ServicePublicationChangeRequestPageResponseSchema.class)))
     public PageResponse<AdminServicePublicationChangeRequestResponseDTO> list(
             @RequestParam(required = false) ServicePublicationChangeRequestStatus status,
             @PageableDefault(size = 20, sort = {"requestedAt", "id"}, direction = Sort.Direction.DESC) Pageable pageable) {
-        return PageResponse.from(changes.findAll(status, pageable).map(AdminServicePublicationChangeRequestResponseDTO::from));
+        return PageResponse.from(presentation.changes(changes.findAll(status, pageable)));
     }
 
     @GetMapping("/{id}")
@@ -55,7 +56,7 @@ public class AdminServicePublicationChangeRequestController {
     @Operation(summary = "Consultar alteração administrativamente")
     @ApiResponse(responseCode = "200", description = "Change request encontrada.", content = @Content(schema = @Schema(implementation = AdminServicePublicationChangeRequestResponseDTO.class)))
     public AdminServicePublicationChangeRequestResponseDTO find(@PathVariable Long id) {
-        return AdminServicePublicationChangeRequestResponseDTO.from(changes.findById(id));
+        return presentation.change(changes.findById(id));
     }
 
     @PostMapping("/{id}/approve")
@@ -65,7 +66,7 @@ public class AdminServicePublicationChangeRequestController {
     @ApiResponse(responseCode = "200", description = "Alteração aprovada e aplicada.", content = @Content(schema = @Schema(implementation = AdminServicePublicationChangeRequestResponseDTO.class)))
     public AdminServicePublicationChangeRequestResponseDTO approve(@PathVariable Long id,
             @AuthenticationPrincipal UserPrincipal principal) {
-        return AdminServicePublicationChangeRequestResponseDTO.from(changes.approve(id, principal.getUserId()));
+        return presentation.change(changes.approve(id, principal.getUserId()));
     }
 
     @PostMapping(value = "/{id}/reject", consumes = MediaType.APPLICATION_JSON_VALUE)
@@ -78,7 +79,7 @@ public class AdminServicePublicationChangeRequestController {
     public AdminServicePublicationChangeRequestResponseDTO reject(@PathVariable Long id,
             @RequestBody(required = false) RejectServiceRequestDTO body,
             @AuthenticationPrincipal UserPrincipal principal) {
-        return AdminServicePublicationChangeRequestResponseDTO.from(changes.reject(id, principal.getUserId(),
+        return presentation.change(changes.reject(id, principal.getUserId(),
                 body == null ? null : body.rejectionReason()));
     }
 }

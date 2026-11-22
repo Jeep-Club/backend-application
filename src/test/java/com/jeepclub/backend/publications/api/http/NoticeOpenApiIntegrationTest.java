@@ -7,6 +7,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
+import static org.hamcrest.Matchers.hasItems;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -19,6 +20,15 @@ class NoticeOpenApiIntegrationTest {
     @Test void noticeContractDescribesPathsSchemasSecurityAndDistinctPermissions() throws Exception {
         mvc.perform(get("/v3/api-docs"))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$['paths']['/admin/notices']['get']['x-required-permissions'][0]").value("PUBLICATIONS_NOTICE_READ"))
+                .andExpect(jsonPath("$['paths']['/admin/notices']['get']['parameters'][*].name")
+                        .value(hasItems("status", "q", "from", "to", "publishedFrom", "publishedTo", "page", "size", "sort")))
+                .andExpect(jsonPath("$['paths']['/admin/notices']['get']['responses']['200']['content']['application/json']['schema']['$ref']")
+                        .value("#/components/schemas/PageResponseNoticeResponseDTO"))
+                .andExpect(jsonPath("$['paths']['/admin/notices']['get']['responses']['400']['content']['application/problem+json']['schema']['$ref']")
+                        .value("#/components/schemas/ApiErrorResponse"))
+                .andExpect(jsonPath("$['paths']['/admin/notices']['get']['responses']['403']['content']['application/problem+json']['schema']['$ref']")
+                        .value("#/components/schemas/ApiErrorResponse"))
                 .andExpect(jsonPath("$['paths']['/admin/notices']['post']['x-required-permissions'][0]").value("PUBLICATIONS_NOTICE_CREATE"))
                 .andExpect(jsonPath("$['paths']['/admin/notices/{id}']['get']['x-required-permissions'][0]").value("PUBLICATIONS_NOTICE_READ"))
                 .andExpect(jsonPath("$['paths']['/admin/notices/{id}']['patch']['x-required-permissions'][0]").value("PUBLICATIONS_NOTICE_UPDATE"))
@@ -37,6 +47,8 @@ class NoticeOpenApiIntegrationTest {
                 .andExpect(jsonPath("$['components']['schemas']['CreateNoticeRequestDTO']['properties']['images']['minItems']").value(1))
                 .andExpect(jsonPath("$['components']['schemas']['CreateNoticeRequestDTO']['properties']['images']['maxItems']").value(5))
                 .andExpect(jsonPath("$['components']['schemas']['NoticeResponseDTO']['properties']['status']['enum']").isArray())
+                .andExpect(jsonPath("$['components']['schemas']['NoticeResponseDTO']['properties']['authorName']['type']")
+                        .value(hasItems("string", "null")))
                 .andExpect(jsonPath("$['paths']['/publications/feed']").exists());
     }
 }

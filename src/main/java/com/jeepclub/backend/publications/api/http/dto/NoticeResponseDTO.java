@@ -10,6 +10,8 @@ import java.util.List;
 public record NoticeResponseDTO(
         Long id,
         Long authorUserId,
+        @Schema(description = "Nome cadastral atual do autor ativo, quando autorizado com IDENTITY_USER_READ.", nullable = true)
+        String authorName,
         String title,
         String content,
         @Schema(allowableValues = {"DRAFT", "PUBLISHED", "ARCHIVED"}) PublicationStatus status,
@@ -20,7 +22,11 @@ public record NoticeResponseDTO(
         Instant archivedAt
 ) {
     public static NoticeResponseDTO from(Notice notice) {
-        return new NoticeResponseDTO(notice.getId(), notice.getAuthorUserId(), notice.getTitle(), notice.getContent(),
+        return from(notice, null);
+    }
+
+    public static NoticeResponseDTO from(Notice notice, String authorName) {
+        return new NoticeResponseDTO(notice.getId(), notice.getAuthorUserId(), authorName, notice.getTitle(), notice.getContent(),
                 notice.getStatus(), notice.getImages().stream().map(PublicationImageResponseDTO::from).toList(),
                 notice.getCreatedAt(), notice.getUpdatedAt(), notice.getPublishedAt(), notice.getArchivedAt());
     }

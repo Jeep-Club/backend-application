@@ -3,8 +3,10 @@ package com.jeepclub.backend.publications.api.http.controller.admin;
 import com.jeepclub.backend.platform.openapi.security.RequiredPermission;
 import com.jeepclub.backend.platform.security.principal.UserPrincipal;
 import com.jeepclub.backend.platform.web.exception.ApiErrorResponse;
+import com.jeepclub.backend.platform.web.pagination.PageResponse;
 import com.jeepclub.backend.publications.api.http.dto.*;
 import com.jeepclub.backend.publications.core.application.service.AdminNoticeService;
+import com.jeepclub.backend.publications.core.domain.enums.PublicationStatus;
 import com.jeepclub.backend.publications.core.domain.model.PublicationImage;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -13,6 +15,10 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import org.springdoc.core.annotations.ParameterObject;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -20,6 +26,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import tools.jackson.databind.JsonNode;
+import java.time.Instant;
 import java.util.List;
 
 @RestController
@@ -29,6 +36,50 @@ import java.util.List;
 public class AdminNoticeController {
     private final AdminNoticeService notices;
     private final NoticeRequestReader reader;
+    private final PublicationAdminPresentation presentation;
+
+    @GetMapping
+    @PreAuthorize("hasAuthority('PUBLICATIONS_NOTICE_READ')")
+    @RequiredPermission("PUBLICATIONS_NOTICE_READ")
+    @Operation(
+            summary = "Listar avisos administrativamente",
+            description = "Página zero-based de Notice em DRAFT, PUBLISHED ou ARCHIVED (size default 20 e máximo 50). Suporta filtros opcionais por status editorial, busca literal case-insensitive por título/conteúdo (q ou search) e intervalos inclusivos de criação (from/to) ou publicação (publishedFrom/publishedTo). Ordenação com allowlist e id como desempate determinístico. Quando o administrador também possui IDENTITY_USER_READ, authorName é resolvido em lote para autores ativos.",
+            responses = {
+                    @ApiResponse(responseCode = "200", description = "Página de avisos retornada.", content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = NoticePageResponseSchema.class))),
+                    @ApiResponse(responseCode = "400", description = "Filtro, ordenação ou paginação inválidos.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class))),
+                    @ApiResponse(responseCode = "401", description = "Não autenticado.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class))),
+                    @ApiResponse(responseCode = "403", description = "Sem PUBLICATIONS_NOTICE_READ.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class)))
+            }
+    )
+    public PageResponse<NoticeResponseDTO> list(
+            @Parameter(description = "Filtro por estado editorial (DRAFT, PUBLISHED, ARCHIVED).")
+            @RequestParam(required = false) PublicationStatus status,
+            @Parameter(description = "Busca textual literal case-insensitive em título ou conteúdo (máximo 200 caracteres).")
+            @RequestParam(required = false) String q,
+            @Parameter(hidden = true) @RequestParam(required = false) String search,
+            @Parameter(description = "Limite inferior inclusivo de criação (createdAt).")
+            @RequestParam(required = false) Instant from,
+            @Parameter(description = "Limite superior inclusivo de criação (createdAt).")
+            @RequestParam(required = false) Instant to,
+            @Parameter(description = "Limite inferior inclusivo de publicação (publishedAt).")
+            @RequestParam(required = false) Instant publishedFrom,
+            @Parameter(description = "Limite superior inclusivo de publicação (publishedAt).")
+            @RequestParam(required = false) Instant publishedTo,
+            @Parameter(hidden = true) @RequestParam(required = false, name = "page") Integer requestedPage,
+            @Parameter(hidden = true) @RequestParam(required = false, name = "size") Integer requestedSize,
+            @ParameterObject @PageableDefault(size = 20, sort = {"createdAt", "id"}, direction = Sort.Direction.DESC) Pageable pageable
+    ) {
+        if (requestedPage != null && requestedPage < 0 || requestedSize != null && (requestedSize < 1 || requestedSize > 50)) {
+            throw new IllegalArgumentException("Invalid notice pagination parameters.");
+        }
+        if (q != null && !q.isBlank() && search != null && !search.isBlank()) {
+            throw new IllegalArgumentException("Specify either q or search, not both.");
+        }
+        String effectiveQuery = q != null && !q.isBlank() ? q : search;
+        return PageResponse.from(presentation.notices(
+                notices.findAll(status, effectiveQuery, from, to, publishedFrom, publishedTo, pageable)
+        ));
+    }
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
     @PreAuthorize("hasAuthority('PUBLICATIONS_NOTICE_CREATE')")
@@ -46,7 +97,7 @@ public class AdminNoticeController {
     public ResponseEntity<NoticeResponseDTO> create(@RequestBody JsonNode body,
                                                      @AuthenticationPrincipal UserPrincipal principal) {
         var request = reader.create(body);
-        return ResponseEntity.status(HttpStatus.CREATED).body(NoticeResponseDTO.from(
+        return ResponseEntity.status(HttpStatus.CREATED).body(presentation.notice(
                 notices.create(principal.getUserId(), request.title(), request.content(), images(request.images()))));
     }
 
@@ -61,7 +112,7 @@ public class AdminNoticeController {
                     @ApiResponse(responseCode = "404", description = "Aviso não encontrado.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class)))
             })
     public ResponseEntity<NoticeResponseDTO> findById(@Parameter(description = "ID do aviso.") @PathVariable Long id) {
-        return ResponseEntity.ok(NoticeResponseDTO.from(notices.findById(id)));
+        return ResponseEntity.ok(presentation.notice(notices.findById(id)));
     }
 
     @PatchMapping(value = "/{id}", consumes = MediaType.APPLICATION_JSON_VALUE)
@@ -81,7 +132,7 @@ public class AdminNoticeController {
     public ResponseEntity<NoticeResponseDTO> update(@Parameter(description = "ID do aviso.") @PathVariable Long id,
                                                      @RequestBody JsonNode body) {
         var request = reader.update(body);
-        return ResponseEntity.ok(NoticeResponseDTO.from(notices.update(id, request.title(), request.content(),
+        return ResponseEntity.ok(presentation.notice(notices.update(id, request.title(), request.content(),
                 request.images() == null ? null : images(request.images()))));
     }
 
@@ -97,7 +148,7 @@ public class AdminNoticeController {
                     @ApiResponse(responseCode = "409", description = "Estado editorial incompatível.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class)))
             })
     public ResponseEntity<NoticeResponseDTO> publish(@Parameter(description = "ID do aviso.") @PathVariable Long id) {
-        return ResponseEntity.ok(NoticeResponseDTO.from(notices.publish(id)));
+        return ResponseEntity.ok(presentation.notice(notices.publish(id)));
     }
 
     @PostMapping("/{id}/archive")
@@ -112,7 +163,7 @@ public class AdminNoticeController {
                     @ApiResponse(responseCode = "409", description = "Estado editorial incompatível.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class)))
             })
     public ResponseEntity<NoticeResponseDTO> archive(@Parameter(description = "ID do aviso.") @PathVariable Long id) {
-        return ResponseEntity.ok(NoticeResponseDTO.from(notices.archive(id)));
+        return ResponseEntity.ok(presentation.notice(notices.archive(id)));
     }
 
     @DeleteMapping("/{id}")

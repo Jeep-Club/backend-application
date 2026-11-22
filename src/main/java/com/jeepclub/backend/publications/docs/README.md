@@ -223,8 +223,13 @@ permanecer um tipo concreto próprio para evoluir independentemente.
 A BACK-398 expõe uma API administrativa própria de Notice. Cada ação tem authority
 específica de Notice; o controller usa `@PreAuthorize` para enforcement e
 `@RequiredPermission` para OpenAPI. Como a superfície é administrativa e permissionada,
-não exige `@RequiresMembership`. A consulta administrativa por ID pode ler DRAFT,
-PUBLISHED e ARCHIVED; não existe leitura pública ou listagem que antecipe o feed.
+não exige `@RequiresMembership`. `GET /admin/notices` e `GET /admin/notices/{id}` podem ler
+DRAFT, PUBLISHED e ARCHIVED; a listagem paginada aplica filtros opcionais de `status`,
+busca literal `q` por título/conteúdo e intervalos `from`/`to` (`createdAt`) ou
+`publishedFrom`/`publishedTo` (`publishedAt`), com allowlist de ordenação e `id` como
+desempate determinístico. Quando o administrador possui `IDENTITY_USER_READ`, `authorName`
+é resolvido em lote para autores ativos (permanecendo `null` sem a permissão suplementar ou
+para usuário inativo/ausente).
 
 Na criação, o `authorUserId` vem de `UserPrincipal.userId`, e o domínio cria o Notice em
 DRAFT. O cliente envia apenas título, conteúdo e galeria; estado e timestamps pertencem
@@ -490,8 +495,18 @@ ServicePublication não cria `ChargeDefinition`, `MemberCharge`, `MemberPayment`
 checkout, comissão ou qualquer fluxo financeiro interno.
 
 Os contratos de HTTP, permissions, paginação e erros estão nos controllers/DTOs OpenAPI.
-As listagens administrativas paginadas aceitam filtro opcional por status e retornam
-`PageResponse<T>`. Billing não participa da request, aprovação ou alteração.
+`GET /admin/services` (`PUBLICATIONS_SERVICE_ADMIN_READ`) lista serviços `PUBLISHED` e
+`ARCHIVED` com paginação SQL, busca literal `q` por título/conteúdo, intervalos `from`/`to`
+e `publishedFrom`/`publishedTo`, allowlist de ordenação com `id` de desempate e rejeição
+`400` para `status=DRAFT`. As respostas administrativas de `Notice`, `ServicePublication`,
+`ServicePublicationRequest` e `ServicePublicationChangeRequest` resolvem nomes atuais de
+autores/revisores ativos em lote via `UserQuery.findByIds` somente quando o administrador
+possui `IDENTITY_USER_READ` (`null` caso contrário, sem `403` adicional e sem expor
+`authorName` em `GET /services/{id}`). Pedidos de criação aprovados expõem
+`createdPublicationTitle` e propostas de alteração expõem `servicePublicationTitle` (distinto
+de `proposedTitle`) quando o serviço vinculado está disponível (`PUBLISHED`, ou `ARCHIVED`
+com `PUBLICATIONS_SERVICE_ADMIN_READ`), retornando `null` se o serviço foi excluído. Billing
+não participa da request, aprovação ou alteração.
 
 ## Permissions
 

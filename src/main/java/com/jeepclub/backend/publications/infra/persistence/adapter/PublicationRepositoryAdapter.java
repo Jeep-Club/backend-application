@@ -55,6 +55,54 @@ public class PublicationRepositoryAdapter implements PublicationRepository {
     }
 
     @Override
+    public Page<com.jeepclub.backend.publications.core.domain.model.Notice> findNotices(
+            PublicationStatus status,
+            String query,
+            Instant from,
+            Instant to,
+            Instant publishedFrom,
+            Instant publishedTo,
+            Pageable pageable
+    ) {
+        return publications.findNotices(status, likePattern(query), from, to, publishedFrom, publishedTo, pageable)
+                .map(e -> (com.jeepclub.backend.publications.core.domain.model.Notice) mapper.toDomain(e));
+    }
+
+    @Override
+    public Page<com.jeepclub.backend.publications.core.domain.model.ServicePublication> findServices(
+            PublicationStatus status,
+            String query,
+            Instant from,
+            Instant to,
+            Instant publishedFrom,
+            Instant publishedTo,
+            Pageable pageable
+    ) {
+        return publications.findServices(status, likePattern(query), from, to, publishedFrom, publishedTo, pageable)
+                .map(e -> (com.jeepclub.backend.publications.core.domain.model.ServicePublication) mapper.toDomain(e));
+    }
+
+    @Override
+    public java.util.List<com.jeepclub.backend.publications.core.domain.model.ServicePublication> findServicesByIds(java.util.Collection<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return java.util.List.of();
+        }
+        return publications.findServicesByIdIn(ids).stream()
+                .map(e -> (com.jeepclub.backend.publications.core.domain.model.ServicePublication) mapper.toDomain(e))
+                .toList();
+    }
+
+    private static String likePattern(String query) {
+        if (query == null || query.isBlank()) {
+            return null;
+        }
+        return "%" + query.trim().toLowerCase(java.util.Locale.ROOT)
+                .replace("!", "!!")
+                .replace("%", "!%")
+                .replace("_", "!_") + "%";
+    }
+
+    @Override
     public Publication save(Publication publication) {
         PublicationEntity entity;
         if (publication.getId() == null) entity = mapper.newEntity(publication);
