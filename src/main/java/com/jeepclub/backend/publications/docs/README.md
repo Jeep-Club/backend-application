@@ -735,9 +735,18 @@ Em `EventDetails`, além de `registrationCount` (contagem de inscrições `CONFI
 do limite da prévia e excluindo `PENDING_PAYMENT` e `CANCELLED`), o contrato expõe até 5
 titulares confirmados ativos em ordem de inscrição em `participantsPreview` (e no alias de
 compatibilidade `participants`), cada item com `{userId, name, profilePhotoStorageKey}`, sem
-dependentes, convidados, dados financeiros ou de saúde. A consulta de `event_registrations`
-agrega contagem e candidatos de prévia em uma única query por página, e a resolução em Identity
-usa `UserQuery.findByIds` em lotes de até 500 IDs distintos após a paginação (sem N+1).
+dependentes, convidados, dados financeiros ou de saúde. A consulta inicial de
+`event_registrations` (`confirmedSummaries`) agrega contagem e janela inicial de 25 candidatos
+por evento em uma única query por página; quando eventos da página possuem inscritos iniciais
+inativos/arquivados e ainda não atingiram 5 participantes ativos, a complementação executa
+rodadas em lote (`confirmedUserIdWindow`, 25 candidatos adicionais por evento/rodada, sem
+`COUNT(*)` e sem loop individual por evento) apenas para os eventos ainda incompletos até
+atingir 5 ativos ou esgotar os confirmados. A resolução em Identity usa `UserQuery.findByIds`
+em lotes de até 500 IDs distintos após a paginação, memorizando no escopo da requisição tanto
+usuários ativos quanto inativos/ausentes para evitar consultas repetidas entre eventos e
+rodadas (sem N+1). As chaves `profilePhotoStorageKey` pertencem ao namespace autenticado
+`images/...` (validadas por `ImageReference`, nunca `private-images/...`) e são servidas por
+`GET /media/images?key=...` apenas a usuários autenticados.
 Autoria de comentários permanece isolada na task `BACK-622`.
 
 ## Interações sociais
