@@ -40,7 +40,7 @@ public class AdminServicePublicationRequestController {
     @GetMapping
     @PreAuthorize("hasAuthority('PUBLICATIONS_SERVICE_REQUEST_ADMIN_READ')")
     @RequiredPermission("PUBLICATIONS_SERVICE_REQUEST_ADMIN_READ")
-    @Operation(summary = "Listar solicitações iniciais", description = "Página administrativa, com filtro opcional por PENDING, APPROVED ou REJECTED. Resolve requestedByUserName/reviewedByUserName em lote quando o administrador possui IDENTITY_USER_READ e createdPublicationTitle quando aprovado e disponível.")
+    @Operation(summary = "Listar solicitações iniciais", description = "Página administrativa, com filtro opcional por PENDING, APPROVED ou REJECTED. Resolve requestedByUserName/reviewedByUserName em lote quando o administrador possui IDENTITY_USER_READ e createdPublicationTitle em lote quando aprovado e o administrador possui PUBLICATIONS_SERVICE_ADMIN_READ.")
     @ApiResponse(responseCode = "200", description = "Página de requests.",
             content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE,
                     schema = @Schema(implementation = ServicePublicationRequestPageResponseSchema.class)))

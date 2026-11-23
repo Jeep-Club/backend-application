@@ -175,6 +175,9 @@ public class PublicationAdminPresentation {
     }
 
     Map<Long, String> serviceTitles(Collection<Long> ids) {
+        if (!hasAuthority("PUBLICATIONS_SERVICE_ADMIN_READ")) {
+            return Map.of();
+        }
         List<Long> distinct = ids.stream()
                 .filter(Objects::nonNull)
                 .filter(id -> id > 0)
@@ -183,11 +186,19 @@ public class PublicationAdminPresentation {
         if (distinct.isEmpty()) {
             return Map.of();
         }
-        boolean canReadNonPublishedService = hasAuthority("PUBLICATIONS_SERVICE_ADMIN_READ");
-        return publications.findServicesByIds(distinct).stream()
-                .filter(service -> service.getStatus() == PublicationStatus.PUBLISHED || canReadNonPublishedService)
-                .filter(service -> service.getTitle() != null && !service.getTitle().isBlank())
-                .collect(Collectors.toMap(ServicePublication::getId, ServicePublication::getTitle, (a, b) -> a));
+        Map<Long, String> resolved = new java.util.HashMap<>();
+        for (int offset = 0; offset < distinct.size(); offset += IDENTITY_BATCH_SIZE) {
+            List<Long> batch = distinct.subList(offset, Math.min(offset + IDENTITY_BATCH_SIZE, distinct.size()));
+            for (ServicePublication service : publications.findServicesByIds(batch)) {
+                if (service != null
+                        && service.getId() != null
+                        && service.getTitle() != null
+                        && !service.getTitle().isBlank()) {
+                    resolved.putIfAbsent(service.getId(), service.getTitle());
+                }
+            }
+        }
+        return resolved;
     }
 
     static boolean hasAuthority(String authority) {

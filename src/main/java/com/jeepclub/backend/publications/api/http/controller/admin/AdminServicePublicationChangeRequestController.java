@@ -40,7 +40,7 @@ public class AdminServicePublicationChangeRequestController {
     @GetMapping
     @PreAuthorize("hasAuthority('PUBLICATIONS_SERVICE_CHANGE_REQUEST_ADMIN_READ')")
     @RequiredPermission("PUBLICATIONS_SERVICE_CHANGE_REQUEST_ADMIN_READ")
-    @Operation(summary = "Listar solicitações de alteração", description = "Página administrativa com filtro opcional por status. Resolve requestedByUserName/reviewedByUserName em lote quando o administrador possui IDENTITY_USER_READ e servicePublicationTitle quando o serviço vinculado está disponível.")
+    @Operation(summary = "Listar solicitações de alteração", description = "Página administrativa com filtro opcional por status. Resolve requestedByUserName/reviewedByUserName em lote quando o administrador possui IDENTITY_USER_READ e servicePublicationTitle em lote quando o serviço vinculado existe e o administrador possui PUBLICATIONS_SERVICE_ADMIN_READ.")
     @ApiResponse(responseCode = "200", description = "Página de change requests.",
             content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE,
                     schema = @Schema(implementation = ServicePublicationChangeRequestPageResponseSchema.class)))

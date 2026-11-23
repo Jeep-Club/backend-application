@@ -327,8 +327,9 @@ class ServicePublicationHttpIntegrationTest {
                                 """.formatted(KEY))))
                 .andExpect(status().isCreated()).andReturn());
 
-        // Reviewer approves req1 and req3, rejects req2, with IDENTITY_USER_READ
-        authenticate(reviewer, "PUBLICATIONS_SERVICE_REQUEST_APPROVE", "PUBLICATIONS_SERVICE_REQUEST_REJECT", "IDENTITY_USER_READ");
+        // Reviewer approves req1 and req3, rejects req2, with IDENTITY_USER_READ + PUBLICATIONS_SERVICE_ADMIN_READ
+        authenticate(reviewer, "PUBLICATIONS_SERVICE_REQUEST_APPROVE", "PUBLICATIONS_SERVICE_REQUEST_REJECT",
+                "PUBLICATIONS_SERVICE_ADMIN_READ", "IDENTITY_USER_READ");
         MvcResult approved1 = mvc.perform(token(post("/admin/service-publication-requests/{id}/approve", req1)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.requestedByUserId").value(authorA))
@@ -445,31 +446,45 @@ class ServicePublicationHttpIntegrationTest {
                 .andExpect(jsonPath("$.content[3].requestedByUserName").value(org.hamcrest.Matchers.nullValue()))
                 .andExpect(jsonPath("$.content[3].reviewedByUserName").value(org.hamcrest.Matchers.nullValue()));
         assertThat(Sql.statements.get().stream().filter(sql -> sql.contains("identity_users")).count()).isEqualTo(1);
+        assertThat(Sql.statements.get().stream().filter(sql -> sql.contains("publication_services")).count()).isEqualTo(1);
 
         // Without IDENTITY_USER_READ and without PUBLICATIONS_SERVICE_ADMIN_READ:
-        // names are null, ARCHIVED service title is null, PUBLISHED service title remains visible
+        // names are null and createdPublicationTitle is null for BOTH PUBLISHED and ARCHIVED services (fail-closed, no 403, no extra queries)
+        Sql.statements.get().clear();
         authenticate(reviewer, "PUBLICATIONS_SERVICE_REQUEST_ADMIN_READ");
         mvc.perform(token(get("/admin/service-publication-requests").param("sort", "id,asc")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content[0].requestedByUserName").value(org.hamcrest.Matchers.nullValue()))
                 .andExpect(jsonPath("$.content[0].reviewedByUserName").value(org.hamcrest.Matchers.nullValue()))
-                .andExpect(jsonPath("$.content[0].createdPublicationTitle").value("Mecânica %_! 4x4"))
+                .andExpect(jsonPath("$.content[0].createdPublicationTitle").value(org.hamcrest.Matchers.nullValue()))
                 .andExpect(jsonPath("$.content[2].createdPublicationTitle").value(org.hamcrest.Matchers.nullValue()));
+        assertThat(Sql.statements.get().stream().filter(sql -> sql.contains("identity_users")).count()).isZero();
+        assertThat(Sql.statements.get().stream().filter(sql -> sql.contains("publication_services")).count()).isZero();
 
         // 3. Service Change Requests GET/POST /admin/service-publication-change-requests (BACK-729)
-        // Before approval: servicePublicationTitle is "Mecânica %_! 4x4" while proposedTitle is "Mecânica 4x4 Premium"
+        // Without PUBLICATIONS_SERVICE_ADMIN_READ: servicePublicationTitle is null while proposedTitle remains visible
         authenticate(reviewer, "PUBLICATIONS_SERVICE_CHANGE_REQUEST_ADMIN_READ", "IDENTITY_USER_READ");
         mvc.perform(token(get("/admin/service-publication-change-requests")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content[0].id").value(change1Id))
                 .andExpect(jsonPath("$.content[0].servicePublicationId").value(service1Id))
-                .andExpect(jsonPath("$.content[0].servicePublicationTitle").value("Mecânica %_! 4x4"))
+                .andExpect(jsonPath("$.content[0].servicePublicationTitle").value(org.hamcrest.Matchers.nullValue()))
                 .andExpect(jsonPath("$.content[0].proposedTitle").value("Mecânica 4x4 Premium"))
                 .andExpect(jsonPath("$.content[0].requestedByUserName").value("Oficina Silva"))
                 .andExpect(jsonPath("$.content[0].reviewedByUserName").value(org.hamcrest.Matchers.nullValue()));
 
-        // Approve change request: servicePublicationTitle reflects the newly applied title
-        authenticate(reviewer, "PUBLICATIONS_SERVICE_CHANGE_REQUEST_APPROVE", "IDENTITY_USER_READ");
+        // With PUBLICATIONS_SERVICE_ADMIN_READ before approval: servicePublicationTitle is "Mecânica %_! 4x4" while proposedTitle is "Mecânica 4x4 Premium"
+        Sql.statements.get().clear();
+        authenticate(reviewer, "PUBLICATIONS_SERVICE_CHANGE_REQUEST_ADMIN_READ", "PUBLICATIONS_SERVICE_ADMIN_READ", "IDENTITY_USER_READ");
+        mvc.perform(token(get("/admin/service-publication-change-requests")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].servicePublicationTitle").value("Mecânica %_! 4x4"))
+                .andExpect(jsonPath("$.content[0].proposedTitle").value("Mecânica 4x4 Premium"));
+        assertThat(Sql.statements.get().stream().filter(sql -> sql.contains("identity_users")).count()).isEqualTo(1);
+        assertThat(Sql.statements.get().stream().filter(sql -> sql.contains("publication_services")).count()).isEqualTo(1);
+
+        // Approve change request: servicePublicationTitle reflects the newly applied title when authorized
+        authenticate(reviewer, "PUBLICATIONS_SERVICE_CHANGE_REQUEST_APPROVE", "PUBLICATIONS_SERVICE_ADMIN_READ", "IDENTITY_USER_READ");
         mvc.perform(token(post("/admin/service-publication-change-requests/{id}/approve", change1Id)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("APPROVED"))
@@ -479,7 +494,8 @@ class ServicePublicationHttpIntegrationTest {
                 .andExpect(jsonPath("$.reviewedByUserName").value("Moderador Chefe"));
 
         // Hard delete Service 1: createdPublicationTitle and servicePublicationTitle become null without inventing labels
-        authenticate(reviewer, "PUBLICATIONS_SERVICE_ADMIN_DELETE", "PUBLICATIONS_SERVICE_REQUEST_ADMIN_READ",
+        authenticate(reviewer, "PUBLICATIONS_SERVICE_ADMIN_DELETE", "PUBLICATIONS_SERVICE_ADMIN_READ",
+                "PUBLICATIONS_SERVICE_REQUEST_ADMIN_READ",
                 "PUBLICATIONS_SERVICE_CHANGE_REQUEST_ADMIN_READ", "IDENTITY_USER_READ");
         mvc.perform(token(delete("/admin/services/{id}", service1Id))).andExpect(status().isNoContent());
         mvc.perform(token(get("/admin/service-publication-requests/{id}", req1)))
