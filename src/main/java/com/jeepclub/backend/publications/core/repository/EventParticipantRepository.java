@@ -26,4 +26,15 @@ public interface EventParticipantRepository {
                         e -> new ConfirmedSummary(e.getValue(), List.of())
                 ));
     }
+
+    default Map<Long, List<Long>> confirmedUserIdWindow(Collection<Long> eventIds, int afterRowNumber, int limitPerEvent) {
+        if (eventIds == null || eventIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, List<Long>> empty = new java.util.LinkedHashMap<>();
+        for (Long eventId : eventIds) {
+            empty.put(eventId, List.of());
+        }
+        return Map.copyOf(empty);
+    }
 }

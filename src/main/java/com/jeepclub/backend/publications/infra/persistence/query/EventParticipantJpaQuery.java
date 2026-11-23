@@ -81,4 +81,43 @@ public class EventParticipantJpaQuery implements EventParticipantRepository {
         }
         return Map.copyOf(result);
     }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public Map<Long, List<Long>> confirmedUserIdWindow(Collection<Long> eventIds, int afterRowNumber, int limitPerEvent) {
+        if (eventIds == null || eventIds.isEmpty()) return Map.of();
+        int effectiveAfter = Math.max(0, afterRowNumber);
+        int effectiveMax = effectiveAfter + Math.max(1, limitPerEvent);
+        List<Object[]> rows = em.createNativeQuery("""
+                select p.event_id, p.user_id
+                from (
+                    select r.event_id, r.user_id, r.id,
+                           row_number() over (partition by r.event_id order by r.id asc) as rn
+                    from event_registrations r
+                    where r.event_id in (:ids) and r.status = 'CONFIRMED'
+                ) p
+                where p.rn > :afterRn and p.rn <= :maxRn
+                order by p.event_id asc, p.id asc
+                """)
+                .setParameter("ids", eventIds)
+                .setParameter("afterRn", effectiveAfter)
+                .setParameter("maxRn", effectiveMax)
+                .getResultList();
+        Map<Long, List<Long>> windows = new LinkedHashMap<>();
+        for (Long eventId : eventIds) {
+            windows.put(eventId, new ArrayList<>());
+        }
+        for (Object[] row : rows) {
+            Long eventId = ((Number) row[0]).longValue();
+            if (row[1] != null) {
+                Long userId = ((Number) row[1]).longValue();
+                windows.computeIfAbsent(eventId, ignored -> new ArrayList<>()).add(userId);
+            }
+        }
+        Map<Long, List<Long>> result = new LinkedHashMap<>();
+        for (Map.Entry<Long, List<Long>> entry : windows.entrySet()) {
+            result.put(entry.getKey(), List.copyOf(entry.getValue()));
+        }
+        return Map.copyOf(result);
+    }
 }

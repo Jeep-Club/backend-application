@@ -251,9 +251,24 @@ exclusivamente a **visibilidade para associados** em `GET /publications/feed` e
 `PUBLISHED` fora da janela temporal ficam ocultos no feed (em SQL, antes da paginação e
 contagem) e retornam `404 PUBLICATION_NOT_FOUND` no detalhe do membro, mas continuam
 `PUBLISHED` e integralmente consultáveis/editáveis/arquiváveis na superfície administrativa
-(`/admin/notices`). Quando visíveis no feed/detalhe, `NoticeDetails` projeta `priority`,
-`validFrom` e `validUntil`. O snapshot de hard delete (`publication_notice_history`) preserva
-`priority`, `valid_from` e `valid_until`.
+(`/admin/notices`). Na listagem administrativa, `sort=priority,desc` aplica ordenação semântica
+por gravidade (`URGENT > HIGH > NORMAL > LOW`, e inverso em `asc`) com `id` como desempate
+determinístico; `expired=true` filtra exclusivamente `validUntil < now`, enquanto `expired=false`
+inclui avisos vigentes, sem `validUntil` e agendados com início futuro (`validFrom > now`).
+Quando visíveis no feed/detalhe, `NoticeDetails` projeta `priority`, `validFrom` e `validUntil`.
+O snapshot de hard delete (`publication_notice_history`) preserva `priority`, `valid_from` e
+`valid_until`.
+
+**Estratégia de recuperação da migration `V17__notice_priority_and_validity.sql` (MySQL 8):**
+a `V17` executa dois `ALTER TABLE` aditivos (`publication_notices` e `publication_notice_history`)
+com `VARCHAR(20) NOT NULL DEFAULT 'NORMAL'`, `DATETIME(6) NULL` e constraints `CHECK`. Como DDL
+em MySQL dispara commits implícitos (não transacionais), uma falha intermediária pode deixar a
+primeira tabela alterada e a segunda pendente. Em caso de falha: (1) não executar `flyway repair`
+para mascarar divergência nem editar a `V17` após publicação; (2) preferencialmente restaurar o
+snapshot pré-deploy conforme `docs/database/06-vps-runbook.md`; (3) alternativamente, auditar
+`information_schema.COLUMNS` e `information_schema.TABLE_CONSTRAINTS` em ambas as tabelas,
+validar a reconciliação em cópia descartável e, se necessário ajuste físico posterior, criar nova
+migration aditiva versionada.
 
 Na criação, o `authorUserId` vem de `UserPrincipal.userId`, e o domínio cria o Notice em
 DRAFT. O cliente envia apenas título, conteúdo e galeria; estado e timestamps pertencem
@@ -528,8 +543,9 @@ autores/revisores ativos em lote via `UserQuery.findByIds` somente quando o admi
 possui `IDENTITY_USER_READ` (`null` caso contrário, sem `403` adicional e sem expor
 `authorName` em `GET /services/{id}`). Pedidos de criação aprovados expõem
 `createdPublicationTitle` e propostas de alteração expõem `servicePublicationTitle` (distinto
-de `proposedTitle`) quando o serviço vinculado está disponível (`PUBLISHED`, ou `ARCHIVED`
-com `PUBLICATIONS_SERVICE_ADMIN_READ`), retornando `null` se o serviço foi excluído. Billing
+de `proposedTitle`) em lote somente quando o administrador possui
+`PUBLICATIONS_SERVICE_ADMIN_READ`, retornando `null` sem `403` adicional quando a permissão
+suplementar está ausente ou quando o serviço foi excluído. Billing
 não participa da request, aprovação ou alteração.
 
 ## Permissions
@@ -719,9 +735,18 @@ Em `EventDetails`, além de `registrationCount` (contagem de inscrições `CONFI
 do limite da prévia e excluindo `PENDING_PAYMENT` e `CANCELLED`), o contrato expõe até 5
 titulares confirmados ativos em ordem de inscrição em `participantsPreview` (e no alias de
 compatibilidade `participants`), cada item com `{userId, name, profilePhotoStorageKey}`, sem
-dependentes, convidados, dados financeiros ou de saúde. A consulta de `event_registrations`
-agrega contagem e candidatos de prévia em uma única query por página, e a resolução em Identity
-usa `UserQuery.findByIds` em lotes de até 500 IDs distintos após a paginação (sem N+1).
+dependentes, convidados, dados financeiros ou de saúde. A consulta inicial de
+`event_registrations` (`confirmedSummaries`) agrega contagem e janela inicial de 25 candidatos
+por evento em uma única query por página; quando eventos da página possuem inscritos iniciais
+inativos/arquivados e ainda não atingiram 5 participantes ativos, a complementação executa
+rodadas em lote (`confirmedUserIdWindow`, 25 candidatos adicionais por evento/rodada, sem
+`COUNT(*)` e sem loop individual por evento) apenas para os eventos ainda incompletos até
+atingir 5 ativos ou esgotar os confirmados. A resolução em Identity usa `UserQuery.findByIds`
+em lotes de até 500 IDs distintos após a paginação, memorizando no escopo da requisição tanto
+usuários ativos quanto inativos/ausentes para evitar consultas repetidas entre eventos e
+rodadas (sem N+1). As chaves `profilePhotoStorageKey` pertencem ao namespace autenticado
+`images/...` (validadas por `ImageReference`, nunca `private-images/...`) e são servidas por
+`GET /media/images?key=...` apenas a usuários autenticados.
 Autoria de comentários permanece isolada na task `BACK-622`.
 
 ## Interações sociais

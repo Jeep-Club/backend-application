@@ -33,7 +33,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class PublicationFeedService {
     public static final int MAX_PARTICIPANTS_PREVIEW = 5;
     private static final int PREVIEW_CANDIDATE_LIMIT = 25;
-    private static final int PARTICIPANT_BACKFILL_PAGE_SIZE = 50;
+    private static final int PARTICIPANT_BACKFILL_WINDOW_SIZE = 25;
     private static final int IDENTITY_BATCH_SIZE = 500;
     private static final int MAX_QUERY_LENGTH = 200;
     private static final int MAX_PAGE_SIZE = 50;
@@ -168,7 +168,8 @@ public class PublicationFeedService {
             }
         }
         Map<Long, UserDetails> activeUsers = new HashMap<>(resolveActiveUsers(userIdsToResolve));
-        Map<Long, List<ParticipantInfo>> resolvedPreviews = resolveParticipantPreviews(eventSummaries, activeUsers);
+        Set<Long> resolvedUserIds = new LinkedHashSet<>(userIdsToResolve);
+        Map<Long, List<ParticipantInfo>> resolvedPreviews = resolveParticipantPreviews(eventSummaries, activeUsers, resolvedUserIds);
 
         return page.map(publication -> toItem(
                 publication,
@@ -208,9 +209,10 @@ public class PublicationFeedService {
             }
         }
         Map<Long, UserDetails> activeUsers = new HashMap<>(resolveActiveUsers(userIdsToResolve));
+        Set<Long> resolvedUserIds = new LinkedHashSet<>(userIdsToResolve);
         Map<Long, EventParticipantRepository.ConfirmedSummary> singleEventMap =
                 eventSummary == null ? Map.of() : Map.of(id, eventSummary);
-        Map<Long, List<ParticipantInfo>> resolvedPreviews = resolveParticipantPreviews(singleEventMap, activeUsers);
+        Map<Long, List<ParticipantInfo>> resolvedPreviews = resolveParticipantPreviews(singleEventMap, activeUsers, resolvedUserIds);
         return toItem(publication, summary, eventSummary, activeUsers, resolvedPreviews.getOrDefault(id, List.of()));
     }
 
@@ -262,62 +264,100 @@ public class PublicationFeedService {
 
     private Map<Long, List<ParticipantInfo>> resolveParticipantPreviews(
             Map<Long, EventParticipantRepository.ConfirmedSummary> eventSummaries,
-            Map<Long, UserDetails> activeUsers
+            Map<Long, UserDetails> activeUsers,
+            Set<Long> resolvedUserIds
     ) {
         if (eventSummaries.isEmpty()) {
             return Map.of();
         }
-        Map<Long, List<ParticipantInfo>> result = new HashMap<>();
+        Map<Long, List<ParticipantInfo>> itemsByEvent = new HashMap<>();
+        Map<Long, Set<Long>> seenByEvent = new HashMap<>();
+        Map<Long, Integer> fetchedRowsByEvent = new HashMap<>();
+        Set<Long> exhaustedEvents = new LinkedHashSet<>();
+
         for (Map.Entry<Long, EventParticipantRepository.ConfirmedSummary> entry : eventSummaries.entrySet()) {
             Long eventId = entry.getKey();
             EventParticipantRepository.ConfirmedSummary eventSummary = entry.getValue();
-            if (eventSummary == null || eventSummary.previewUserIds().isEmpty()) {
-                result.put(eventId, List.of());
-                continue;
-            }
             List<ParticipantInfo> items = new ArrayList<>(MAX_PARTICIPANTS_PREVIEW);
             Set<Long> seen = new LinkedHashSet<>();
-            collectActiveParticipants(eventSummary.previewUserIds(), activeUsers, seen, items);
-            if (users != null
-                    && items.size() < MAX_PARTICIPANTS_PREVIEW
-                    && eventSummary.count() > eventSummary.previewUserIds().size()) {
-                backfillActiveParticipants(eventId, activeUsers, seen, items);
+            itemsByEvent.put(eventId, items);
+            seenByEvent.put(eventId, seen);
+            if (eventSummary == null || eventSummary.previewUserIds().isEmpty()) {
+                fetchedRowsByEvent.put(eventId, 0);
+                exhaustedEvents.add(eventId);
+                continue;
             }
-            result.put(eventId, List.copyOf(items));
+            int initialCount = eventSummary.previewUserIds().size();
+            fetchedRowsByEvent.put(eventId, initialCount);
+            collectActiveParticipants(eventSummary.previewUserIds(), activeUsers, seen, items);
+            if (items.size() >= MAX_PARTICIPANTS_PREVIEW || initialCount >= eventSummary.count()) {
+                exhaustedEvents.add(eventId);
+            }
+        }
+
+        if (users != null) {
+            int afterRowNumber = PREVIEW_CANDIDATE_LIMIT;
+            while (true) {
+                List<Long> eventsNeedingMore = new ArrayList<>();
+                for (Map.Entry<Long, EventParticipantRepository.ConfirmedSummary> entry : eventSummaries.entrySet()) {
+                    Long eventId = entry.getKey();
+                    EventParticipantRepository.ConfirmedSummary summary = entry.getValue();
+                    if (!exhaustedEvents.contains(eventId)
+                            && summary != null
+                            && itemsByEvent.get(eventId).size() < MAX_PARTICIPANTS_PREVIEW
+                            && fetchedRowsByEvent.getOrDefault(eventId, 0) < summary.count()) {
+                        eventsNeedingMore.add(eventId);
+                    }
+                }
+                if (eventsNeedingMore.isEmpty()) {
+                    break;
+                }
+                eventsNeedingMore.sort(Long::compareTo);
+                Map<Long, List<Long>> windowByEvent = participants.confirmedUserIdWindow(
+                        eventsNeedingMore,
+                        afterRowNumber,
+                        PARTICIPANT_BACKFILL_WINDOW_SIZE
+                );
+                Set<Long> unseenIds = new LinkedHashSet<>();
+                for (Long eventId : eventsNeedingMore) {
+                    List<Long> candidates = windowByEvent == null
+                            ? List.of()
+                            : windowByEvent.getOrDefault(eventId, List.of());
+                    for (Long userId : candidates) {
+                        if (userId != null && userId > 0 && !resolvedUserIds.contains(userId)) {
+                            unseenIds.add(userId);
+                        }
+                    }
+                }
+                if (!unseenIds.isEmpty()) {
+                    activeUsers.putAll(resolveActiveUsers(unseenIds));
+                    resolvedUserIds.addAll(unseenIds);
+                }
+                for (Long eventId : eventsNeedingMore) {
+                    List<Long> candidates = windowByEvent == null
+                            ? List.of()
+                            : windowByEvent.getOrDefault(eventId, List.of());
+                    if (candidates.isEmpty()) {
+                        exhaustedEvents.add(eventId);
+                        continue;
+                    }
+                    int updatedFetched = fetchedRowsByEvent.getOrDefault(eventId, 0) + candidates.size();
+                    fetchedRowsByEvent.put(eventId, updatedFetched);
+                    collectActiveParticipants(candidates, activeUsers, seenByEvent.get(eventId), itemsByEvent.get(eventId));
+                    if (candidates.size() < PARTICIPANT_BACKFILL_WINDOW_SIZE
+                            || itemsByEvent.get(eventId).size() >= MAX_PARTICIPANTS_PREVIEW) {
+                        exhaustedEvents.add(eventId);
+                    }
+                }
+                afterRowNumber += PARTICIPANT_BACKFILL_WINDOW_SIZE;
+            }
+        }
+
+        Map<Long, List<ParticipantInfo>> result = new HashMap<>();
+        for (Map.Entry<Long, List<ParticipantInfo>> entry : itemsByEvent.entrySet()) {
+            result.put(entry.getKey(), List.copyOf(entry.getValue()));
         }
         return result;
-    }
-
-    private void backfillActiveParticipants(
-            Long eventId,
-            Map<Long, UserDetails> activeUsers,
-            Set<Long> seen,
-            List<ParticipantInfo> items
-    ) {
-        int pageNumber = 0;
-        while (items.size() < MAX_PARTICIPANTS_PREVIEW) {
-            Page<Long> nextPage = participants.confirmedUserIds(
-                    eventId,
-                    PageRequest.of(pageNumber, PARTICIPANT_BACKFILL_PAGE_SIZE)
-            );
-            if (nextPage == null || nextPage.isEmpty()) {
-                break;
-            }
-            Set<Long> unseenIds = new LinkedHashSet<>();
-            for (Long userId : nextPage.getContent()) {
-                if (userId != null && userId > 0 && !seen.contains(userId) && !activeUsers.containsKey(userId)) {
-                    unseenIds.add(userId);
-                }
-            }
-            if (!unseenIds.isEmpty()) {
-                activeUsers.putAll(resolveActiveUsers(unseenIds));
-            }
-            collectActiveParticipants(nextPage.getContent(), activeUsers, seen, items);
-            if (!nextPage.hasNext()) {
-                break;
-            }
-            pageNumber++;
-        }
     }
 
     private static void collectActiveParticipants(

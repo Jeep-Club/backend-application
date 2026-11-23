@@ -229,36 +229,67 @@ class PublicationFeedServiceTest {
         verifyNoInteractions(social, participants, users);
     }
 
-    @Test void feedBackfillsActiveParticipantsWhenLeadingConfirmedRegistrantsAreInactive() {
+    @Test void feedBackfillsActiveParticipantsInBatchAcrossMultipleEventsWithoutNPlus1OrRedundantIdentityLookups() {
         var publications = mock(PublicationRepository.class);
         var social = mock(PublicationSocialSummaryQuery.class);
         var participants = mock(EventParticipantRepository.class);
         var users = mock(UserQuery.class);
 
-        var event = Event.reconstitute(20L, 7L, "Expedição", "Conteúdo", PublicationStatus.PUBLISHED,
+        var eventA = Event.reconstitute(20L, 7L, "Expedição A", "Conteúdo A", PublicationStatus.PUBLISHED,
                 NOW.minusSeconds(10), NOW.minusSeconds(10), NOW.minusSeconds(10), null, gallery(),
                 NOW.plusSeconds(3600), null, com.jeepclub.backend.publications.core.domain.enums.EventStatus.OPEN);
-        when(publications.findPublished(isNull(), isNull(), isNull(), any()))
-                .thenReturn(new PageImpl<>(List.of(event), PageRequest.of(0, 20), 1));
-        when(social.get(List.of(20L), 9L))
-                .thenReturn(Map.of(20L, new PublicationSocialSummaryQuery.Summary(0, 0, false)));
+        var eventB = Event.reconstitute(21L, 7L, "Expedição B", "Conteúdo B", PublicationStatus.PUBLISHED,
+                NOW.minusSeconds(11), NOW.minusSeconds(11), NOW.minusSeconds(11), null, gallery(),
+                NOW.plusSeconds(3600), null, com.jeepclub.backend.publications.core.domain.enums.EventStatus.OPEN);
+        var eventC = Event.reconstitute(22L, 7L, "Expedição C", "Conteúdo C", PublicationStatus.PUBLISHED,
+                NOW.minusSeconds(12), NOW.minusSeconds(12), NOW.minusSeconds(12), null, gallery(),
+                NOW.plusSeconds(3600), null, com.jeepclub.backend.publications.core.domain.enums.EventStatus.OPEN);
+        var eventD = Event.reconstitute(23L, 7L, "Expedição D", "Conteúdo D", PublicationStatus.PUBLISHED,
+                NOW.minusSeconds(13), NOW.minusSeconds(13), NOW.minusSeconds(13), null, gallery(),
+                NOW.plusSeconds(3600), null, com.jeepclub.backend.publications.core.domain.enums.EventStatus.OPEN);
 
-        // First 25 candidates are all inactive; total confirmed is 30 (last 5 are active: 126..130)
-        List<Long> firstWindow = java.util.stream.LongStream.rangeClosed(101L, 125L).boxed().toList();
-        List<Long> fullConfirmed = java.util.stream.LongStream.rangeClosed(101L, 130L).boxed().toList();
-        when(participants.confirmedSummaries(List.of(20L), 25))
-                .thenReturn(Map.of(20L, new EventParticipantRepository.ConfirmedSummary(30L, firstWindow)));
-        when(participants.confirmedUserIds(eq(20L), any()))
-                .thenReturn(new PageImpl<>(fullConfirmed, PageRequest.of(0, 50), 30L));
+        when(publications.findPublished(isNull(), isNull(), isNull(), any()))
+                .thenReturn(new PageImpl<>(List.of(eventA, eventB, eventC, eventD), PageRequest.of(0, 20), 4));
+        when(social.get(List.of(20L, 21L, 22L, 23L), 9L)).thenReturn(Map.of(
+                20L, new PublicationSocialSummaryQuery.Summary(0, 0, false),
+                21L, new PublicationSocialSummaryQuery.Summary(0, 0, false),
+                22L, new PublicationSocialSummaryQuery.Summary(0, 0, false),
+                23L, new PublicationSocialSummaryQuery.Summary(0, 0, false)
+        ));
+
+        // Initial 25 candidates:
+        // - eventA (55 confirmed): 101..125 (all inactive) -> needs round 1 (126..150 inactive) + round 2 (151..155 active)
+        // - eventB (28 confirmed): 101..125 (shared inactive) -> completes in round 1 with 3 active (201..203)
+        // - eventC (0 confirmed): empty -> never enters backfill
+        // - eventD (30 confirmed): 101..125 (shared inactive) -> round 1 returns 126..130 (all inactive, < 25 -> exhausted)
+        List<Long> sharedInitialInactive = java.util.stream.LongStream.rangeClosed(101L, 125L).boxed().toList();
+        when(participants.confirmedSummaries(List.of(20L, 21L, 22L, 23L), 25)).thenReturn(Map.of(
+                20L, new EventParticipantRepository.ConfirmedSummary(55L, sharedInitialInactive),
+                21L, new EventParticipantRepository.ConfirmedSummary(28L, sharedInitialInactive),
+                22L, new EventParticipantRepository.ConfirmedSummary(0L, List.of()),
+                23L, new EventParticipantRepository.ConfirmedSummary(30L, sharedInitialInactive)
+        ));
+        List<Long> round1Inactive = java.util.stream.LongStream.rangeClosed(126L, 150L).boxed().toList();
+        when(participants.confirmedUserIdWindow(List.of(20L, 21L, 23L), 25, 25)).thenReturn(Map.of(
+                20L, round1Inactive,
+                21L, List.of(201L, 202L, 203L),
+                23L, List.of(126L, 127L, 128L, 129L, 130L)
+        ));
+        when(participants.confirmedUserIdWindow(List.of(20L), 50, 25)).thenReturn(Map.of(
+                20L, List.of(151L, 152L, 153L, 154L, 155L)
+        ));
+
+        List<List<Long>> identityBatches = new java.util.ArrayList<>();
         when(users.findByIds(anyCollection())).thenAnswer(invocation -> {
             @SuppressWarnings("unchecked")
-            var ids = (java.util.Collection<Long>) invocation.getArgument(0);
+            var ids = new java.util.ArrayList<>((java.util.Collection<Long>) invocation.getArgument(0));
+            identityBatches.add(ids);
             List<UserDetails> list = new java.util.ArrayList<>();
             for (Long id : ids) {
                 if (id == 7L) {
                     list.add(activeUser(7L, "Organizador", "profiles/org.jpg"));
-                } else if (id >= 126L && id <= 130L) {
-                    list.add(activeUser(id, "Ativo " + id, null));
+                } else if ((id >= 151L && id <= 155L) || (id >= 201L && id <= 203L)) {
+                    list.add(activeUser(id, "Ativo " + id, id % 2 == 0 ? "profiles/" + id + ".jpg" : null));
                 } else {
                     list.add(inactiveUser(id, "Inativo " + id));
                 }
@@ -269,12 +300,34 @@ class PublicationFeedServiceTest {
         var service = new PublicationFeedService(publications, social, participants, users, Clock.fixed(NOW, ZoneOffset.UTC));
         var result = service.feed(null, null, null, null, null, null, PageRequest.of(0, 20), 9L);
 
-        var eventDto = PublicationFeedDTO.Item.from(result.getContent().get(0), NOW);
-        var details = (PublicationFeedDTO.EventDetails) eventDto.details();
-        assertThat(details.registrationCount()).isEqualTo(30L);
-        assertThat(details.participantsPreview()).hasSize(5)
-                .extracting(PublicationFeedDTO.ParticipantPreview::userId)
-                .containsExactly(126L, 127L, 128L, 129L, 130L);
+        // Zero per-event confirmedUserIds calls; strictly 2 batch backfill rounds across all incomplete events
+        verify(participants, never()).confirmedUserIds(any(), any());
+        verify(participants, times(1)).confirmedSummaries(List.of(20L, 21L, 22L, 23L), 25);
+        verify(participants, times(1)).confirmedUserIdWindow(List.of(20L, 21L, 23L), 25, 25);
+        verify(participants, times(1)).confirmedUserIdWindow(List.of(20L), 50, 25);
+
+        // No user ID (active OR inactive) is ever queried twice in Identity across events or rounds, and every batch <= 500
+        List<Long> allQueriedIds = identityBatches.stream().flatMap(List::stream).toList();
+        assertThat(allQueriedIds).doesNotHaveDuplicates();
+        assertThat(identityBatches).allSatisfy(batch -> assertThat(batch.size()).isLessThanOrEqualTo(500));
+
+        var detailsA = (PublicationFeedDTO.EventDetails) PublicationFeedDTO.Item.from(result.getContent().get(0), NOW).details();
+        assertThat(detailsA.registrationCount()).isEqualTo(55L);
+        assertThat(detailsA.participantsPreview()).extracting(PublicationFeedDTO.ParticipantPreview::userId)
+                .containsExactly(151L, 152L, 153L, 154L, 155L);
+
+        var detailsB = (PublicationFeedDTO.EventDetails) PublicationFeedDTO.Item.from(result.getContent().get(1), NOW).details();
+        assertThat(detailsB.registrationCount()).isEqualTo(28L);
+        assertThat(detailsB.participantsPreview()).extracting(PublicationFeedDTO.ParticipantPreview::userId)
+                .containsExactly(201L, 202L, 203L);
+
+        var detailsC = (PublicationFeedDTO.EventDetails) PublicationFeedDTO.Item.from(result.getContent().get(2), NOW).details();
+        assertThat(detailsC.registrationCount()).isZero();
+        assertThat(detailsC.participantsPreview()).isEmpty();
+
+        var detailsD = (PublicationFeedDTO.EventDetails) PublicationFeedDTO.Item.from(result.getContent().get(3), NOW).details();
+        assertThat(detailsD.registrationCount()).isEqualTo(30L);
+        assertThat(detailsD.participantsPreview()).isEmpty();
     }
 
     private static UserDetails activeUser(Long id, String name, String photo) {
