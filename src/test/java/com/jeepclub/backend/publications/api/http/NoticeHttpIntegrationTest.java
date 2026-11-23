@@ -486,6 +486,32 @@ class NoticeHttpIntegrationTest {
                 .andExpect(jsonPath("$.content[2].priority").value("HIGH"))
                 .andExpect(jsonPath("$.content[3].priority").value("URGENT"));
 
+        // Future-scheduled notice (validFrom=2030-06-01) is included in expired=false (not expired) and excluded from expired=true,
+        // combined with semantic priority sort and pagination
+        mvc.perform(withToken(get("/admin/notices")
+                        .param("expired", "false")
+                        .param("sort", "priority,desc")
+                        .param("page", "0")
+                        .param("size", "2")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(3))
+                .andExpect(jsonPath("$.totalPages").value(2))
+                .andExpect(jsonPath("$.content[0].priority").value("HIGH"))
+                .andExpect(jsonPath("$.content[1].priority").value("NORMAL"));
+        mvc.perform(withToken(get("/admin/notices")
+                        .param("expired", "false")
+                        .param("sort", "priority,desc")
+                        .param("page", "1")
+                        .param("size", "2")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(3))
+                .andExpect(jsonPath("$.content.length()").value(1))
+                .andExpect(jsonPath("$.content[0].priority").value("LOW"));
+        mvc.perform(withToken(get("/admin/notices").param("expired", "true")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(1))
+                .andExpect(jsonPath("$.content[0].id").value(urgentExpiredId));
+
         // Hard delete snapshots priority and validity window in NoticeHistoryEntity
         mvc.perform(withToken(delete("/admin/notices/{id}", urgentExpiredId)))
                 .andExpect(status().isNoContent());

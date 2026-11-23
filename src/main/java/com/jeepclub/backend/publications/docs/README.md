@@ -251,9 +251,24 @@ exclusivamente a **visibilidade para associados** em `GET /publications/feed` e
 `PUBLISHED` fora da janela temporal ficam ocultos no feed (em SQL, antes da paginação e
 contagem) e retornam `404 PUBLICATION_NOT_FOUND` no detalhe do membro, mas continuam
 `PUBLISHED` e integralmente consultáveis/editáveis/arquiváveis na superfície administrativa
-(`/admin/notices`). Quando visíveis no feed/detalhe, `NoticeDetails` projeta `priority`,
-`validFrom` e `validUntil`. O snapshot de hard delete (`publication_notice_history`) preserva
-`priority`, `valid_from` e `valid_until`.
+(`/admin/notices`). Na listagem administrativa, `sort=priority,desc` aplica ordenação semântica
+por gravidade (`URGENT > HIGH > NORMAL > LOW`, e inverso em `asc`) com `id` como desempate
+determinístico; `expired=true` filtra exclusivamente `validUntil < now`, enquanto `expired=false`
+inclui avisos vigentes, sem `validUntil` e agendados com início futuro (`validFrom > now`).
+Quando visíveis no feed/detalhe, `NoticeDetails` projeta `priority`, `validFrom` e `validUntil`.
+O snapshot de hard delete (`publication_notice_history`) preserva `priority`, `valid_from` e
+`valid_until`.
+
+**Estratégia de recuperação da migration `V17__notice_priority_and_validity.sql` (MySQL 8):**
+a `V17` executa dois `ALTER TABLE` aditivos (`publication_notices` e `publication_notice_history`)
+com `VARCHAR(20) NOT NULL DEFAULT 'NORMAL'`, `DATETIME(6) NULL` e constraints `CHECK`. Como DDL
+em MySQL dispara commits implícitos (não transacionais), uma falha intermediária pode deixar a
+primeira tabela alterada e a segunda pendente. Em caso de falha: (1) não executar `flyway repair`
+para mascarar divergência nem editar a `V17` após publicação; (2) preferencialmente restaurar o
+snapshot pré-deploy conforme `docs/database/06-vps-runbook.md`; (3) alternativamente, auditar
+`information_schema.COLUMNS` e `information_schema.TABLE_CONSTRAINTS` em ambas as tabelas,
+validar a reconciliação em cópia descartável e, se necessário ajuste físico posterior, criar nova
+migration aditiva versionada.
 
 Na criação, o `authorUserId` vem de `UserPrincipal.userId`, e o domínio cria o Notice em
 DRAFT. O cliente envia apenas título, conteúdo e galeria; estado e timestamps pertencem
