@@ -450,6 +450,42 @@ class NoticeHttpIntegrationTest {
                 .andExpect(jsonPath("$.totalElements").value(1))
                 .andExpect(jsonPath("$.content[0].id").value(defaultNoticeId));
 
+        // Create LOW and NORMAL notices (including equal validFrom == validUntil boundary) to verify semantic priority ordering
+        mvc.perform(withToken(post("/admin/notices")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"title":"Aviso Baixo","content":"Informativo geral","priority":"LOW",
+                                 "validFrom":"2030-06-01T12:00:00Z","validUntil":"2030-06-01T12:00:00Z",
+                                 "images":[{"storageKey":"%s","position":0,"primary":true}]}
+                                """.formatted(KEY))))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.priority").value("LOW"))
+                .andExpect(jsonPath("$.validFrom").value("2030-06-01T12:00:00Z"))
+                .andExpect(jsonPath("$.validUntil").value("2030-06-01T12:00:00Z"));
+        mvc.perform(withToken(post("/admin/notices")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"title":"Aviso Normal","content":"Comunicado padrao","priority":"NORMAL",
+                                 "images":[{"storageKey":"%s","position":0,"primary":true}]}
+                                """.formatted(KEY))))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.priority").value("NORMAL"));
+
+        // Semantic priority sort (not alphabetical): DESC => URGENT, HIGH, NORMAL, LOW; ASC => LOW, NORMAL, HIGH, URGENT
+        mvc.perform(withToken(get("/admin/notices").param("sort", "priority,desc")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].priority").value("URGENT"))
+                .andExpect(jsonPath("$.content[1].priority").value("HIGH"))
+                .andExpect(jsonPath("$.content[2].priority").value("NORMAL"))
+                .andExpect(jsonPath("$.content[3].priority").value("LOW"));
+
+        mvc.perform(withToken(get("/admin/notices").param("sort", "priority,asc")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].priority").value("LOW"))
+                .andExpect(jsonPath("$.content[1].priority").value("NORMAL"))
+                .andExpect(jsonPath("$.content[2].priority").value("HIGH"))
+                .andExpect(jsonPath("$.content[3].priority").value("URGENT"));
+
         // Hard delete snapshots priority and validity window in NoticeHistoryEntity
         mvc.perform(withToken(delete("/admin/notices/{id}", urgentExpiredId)))
                 .andExpect(status().isNoContent());
