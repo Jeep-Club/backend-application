@@ -295,7 +295,17 @@ class PublicationSocialFeedHttpIntegrationTest {
                 .andExpect(jsonPath("$.details.participantsPreview.length()").value(5))
                 .andExpect(jsonPath("$.details.participants.length()").value(5));
 
-        // 3. Invalid filters and conflicts return 400 PUBLICATION_FEED_INVALID
+        // 3. Out-of-range page preserves totalElements and totalPages with empty content (BACK-569)
+        mvc.perform(get("/publications/feed")
+                        .header(AUTHORIZATION, "Bearer social-token")
+                        .param("page", "5")
+                        .param("size", "2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(0))
+                .andExpect(jsonPath("$.totalElements").value(3))
+                .andExpect(jsonPath("$.totalPages").value(2));
+
+        // 4. Invalid filters and conflicts return 400 PUBLICATION_FEED_INVALID
         mvc.perform(get("/publications/feed")
                         .header(AUTHORIZATION, "Bearer social-token")
                         .param("type", "NOTICE")

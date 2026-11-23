@@ -60,14 +60,14 @@ class PublicationFeedServiceTest {
                 new PageImpl<Publication>(List.of(event, other), call.getArgument(3), 2));
         when(social.get(List.of(2L, 3L), 9L)).thenReturn(Map.of(2L, new PublicationSocialSummaryQuery.Summary(0, 0, false),
                 3L, new PublicationSocialSummaryQuery.Summary(0, 0, false)));
-        when(counts.confirmedSummaries(List.of(2L, 3L), 10)).thenReturn(Map.of(
+        when(counts.confirmedSummaries(List.of(2L, 3L), 25)).thenReturn(Map.of(
                 2L, new EventParticipantRepository.ConfirmedSummary(4L, List.of()),
                 3L, new EventParticipantRepository.ConfirmedSummary(0L, List.of())
         ));
         var page = new PublicationFeedService(publications, social, counts).feed(null, null, null, PageRequest.of(0, 20), 9L);
         assertThat(((PublicationFeedDTO.EventDetails) PublicationFeedDTO.Item.from(page.getContent().get(0), NOW).details()).registrationCount()).isEqualTo(4);
         assertThat(((PublicationFeedDTO.EventDetails) PublicationFeedDTO.Item.from(page.getContent().get(1), NOW).details()).registrationCount()).isZero();
-        verify(counts, times(1)).confirmedSummaries(List.of(2L, 3L), 10);
+        verify(counts, times(1)).confirmedSummaries(List.of(2L, 3L), 25);
         verifyNoMoreInteractions(counts);
     }
 
@@ -92,11 +92,11 @@ class PublicationFeedServiceTest {
         when(publications.findById(2L)).thenReturn(Optional.of(event));
         when(social.get(List.of(2L), 9L)).thenReturn(Map.of(2L, new PublicationSocialSummaryQuery.Summary(0, 0, false)));
         var participants = mock(com.jeepclub.backend.publications.core.repository.EventParticipantRepository.class);
-        when(participants.confirmedSummaries(List.of(2L), 10)).thenReturn(Map.of(
+        when(participants.confirmedSummaries(List.of(2L), 25)).thenReturn(Map.of(
                 2L, new EventParticipantRepository.ConfirmedSummary(3L, List.of())
         ));
         var dto = PublicationFeedDTO.Detail.from(new PublicationFeedService(publications, social, participants).detail(2L, 9L), NOW);
-        verify(participants).confirmedSummaries(List.of(2L), 10);
+        verify(participants).confirmedSummaries(List.of(2L), 25);
         assertThat(dto.type()).isEqualTo("EVENT");
         assertThat(dto.details()).isEqualTo(new PublicationFeedDTO.EventDetails(event.getStartsAt(), event.getEndsAt(), "FINISHED", 3L, "Meeting point", 42));
     }
@@ -144,7 +144,7 @@ class PublicationFeedServiceTest {
                 2L, new PublicationSocialSummaryQuery.Summary(2, 1, true)
         ));
         // 7 confirmed total, preview candidate IDs include 1 inactive (12L), 1 duplicate (11L), and 6 active -> preview caps at 5
-        when(participants.confirmedSummaries(List.of(2L), 10)).thenReturn(Map.of(
+        when(participants.confirmedSummaries(List.of(2L), 25)).thenReturn(Map.of(
                 2L, new EventParticipantRepository.ConfirmedSummary(7L, List.of(11L, 12L, 11L, 13L, 14L, 15L, 16L, 17L))
         ));
         when(users.findByIds(anyCollection())).thenReturn(List.of(
@@ -207,6 +207,74 @@ class PublicationFeedServiceTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> service.feed(null, null, null, null, null, null, PageRequest.of(0, 51), 9L))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test void feedPreservesTotalElementsOnOutOfRangeEmptyPage() {
+        var publications = mock(PublicationRepository.class);
+        var social = mock(PublicationSocialSummaryQuery.class);
+        var participants = mock(EventParticipantRepository.class);
+        var users = mock(UserQuery.class);
+
+        Pageable requested = PageRequest.of(5, 2, Sort.by(Sort.Order.desc("publishedAt"), Sort.Order.desc("id")));
+        when(publications.findPublished(isNull(), isNull(), isNull(), any()))
+                .thenReturn(new PageImpl<>(List.of(), requested, 7L));
+
+        var service = new PublicationFeedService(publications, social, participants, users, Clock.fixed(NOW, ZoneOffset.UTC));
+        var result = service.feed(null, null, null, null, null, null, PageRequest.of(5, 2), 9L);
+
+        assertThat(result.getContent()).isEmpty();
+        assertThat(result.getTotalElements()).isEqualTo(7L);
+        assertThat(result.getTotalPages()).isEqualTo(4);
+        assertThat(result.getNumber()).isEqualTo(5);
+        verifyNoInteractions(social, participants, users);
+    }
+
+    @Test void feedBackfillsActiveParticipantsWhenLeadingConfirmedRegistrantsAreInactive() {
+        var publications = mock(PublicationRepository.class);
+        var social = mock(PublicationSocialSummaryQuery.class);
+        var participants = mock(EventParticipantRepository.class);
+        var users = mock(UserQuery.class);
+
+        var event = Event.reconstitute(20L, 7L, "Expedição", "Conteúdo", PublicationStatus.PUBLISHED,
+                NOW.minusSeconds(10), NOW.minusSeconds(10), NOW.minusSeconds(10), null, gallery(),
+                NOW.plusSeconds(3600), null, com.jeepclub.backend.publications.core.domain.enums.EventStatus.OPEN);
+        when(publications.findPublished(isNull(), isNull(), isNull(), any()))
+                .thenReturn(new PageImpl<>(List.of(event), PageRequest.of(0, 20), 1));
+        when(social.get(List.of(20L), 9L))
+                .thenReturn(Map.of(20L, new PublicationSocialSummaryQuery.Summary(0, 0, false)));
+
+        // First 25 candidates are all inactive; total confirmed is 30 (last 5 are active: 126..130)
+        List<Long> firstWindow = java.util.stream.LongStream.rangeClosed(101L, 125L).boxed().toList();
+        List<Long> fullConfirmed = java.util.stream.LongStream.rangeClosed(101L, 130L).boxed().toList();
+        when(participants.confirmedSummaries(List.of(20L), 25))
+                .thenReturn(Map.of(20L, new EventParticipantRepository.ConfirmedSummary(30L, firstWindow)));
+        when(participants.confirmedUserIds(eq(20L), any()))
+                .thenReturn(new PageImpl<>(fullConfirmed, PageRequest.of(0, 50), 30L));
+        when(users.findByIds(anyCollection())).thenAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            var ids = (java.util.Collection<Long>) invocation.getArgument(0);
+            List<UserDetails> list = new java.util.ArrayList<>();
+            for (Long id : ids) {
+                if (id == 7L) {
+                    list.add(activeUser(7L, "Organizador", "profiles/org.jpg"));
+                } else if (id >= 126L && id <= 130L) {
+                    list.add(activeUser(id, "Ativo " + id, null));
+                } else {
+                    list.add(inactiveUser(id, "Inativo " + id));
+                }
+            }
+            return list;
+        });
+
+        var service = new PublicationFeedService(publications, social, participants, users, Clock.fixed(NOW, ZoneOffset.UTC));
+        var result = service.feed(null, null, null, null, null, null, PageRequest.of(0, 20), 9L);
+
+        var eventDto = PublicationFeedDTO.Item.from(result.getContent().get(0), NOW);
+        var details = (PublicationFeedDTO.EventDetails) eventDto.details();
+        assertThat(details.registrationCount()).isEqualTo(30L);
+        assertThat(details.participantsPreview()).hasSize(5)
+                .extracting(PublicationFeedDTO.ParticipantPreview::userId)
+                .containsExactly(126L, 127L, 128L, 129L, 130L);
     }
 
     private static UserDetails activeUser(Long id, String name, String photo) {

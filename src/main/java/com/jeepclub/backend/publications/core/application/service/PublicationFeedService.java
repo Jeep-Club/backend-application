@@ -32,7 +32,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class PublicationFeedService {
     public static final int MAX_PARTICIPANTS_PREVIEW = 5;
-    private static final int PREVIEW_CANDIDATE_LIMIT = 10;
+    private static final int PREVIEW_CANDIDATE_LIMIT = 25;
+    private static final int PARTICIPANT_BACKFILL_PAGE_SIZE = 50;
     private static final int IDENTITY_BATCH_SIZE = 500;
     private static final int MAX_QUERY_LENGTH = 200;
     private static final int MAX_PAGE_SIZE = 50;
@@ -138,8 +139,11 @@ public class PublicationFeedService {
             page = publications.findPublished(effectiveTypes, authorUserId, normalizedQuery, from, to, stable);
         }
 
-        if (page == null || page.isEmpty()) {
+        if (page == null) {
             return Page.empty(stable);
+        }
+        if (page.isEmpty()) {
+            return new org.springframework.data.domain.PageImpl<>(List.of(), stable, page.getTotalElements());
         }
 
         List<Long> publicationIds = page.getContent().stream().map(Publication::getId).toList();
@@ -163,13 +167,15 @@ public class PublicationFeedService {
                 }
             }
         }
-        Map<Long, UserDetails> activeUsers = resolveActiveUsers(userIdsToResolve);
+        Map<Long, UserDetails> activeUsers = new HashMap<>(resolveActiveUsers(userIdsToResolve));
+        Map<Long, List<ParticipantInfo>> resolvedPreviews = resolveParticipantPreviews(eventSummaries, activeUsers);
 
         return page.map(publication -> toItem(
                 publication,
                 summaries.get(publication.getId()),
                 eventSummaries.get(publication.getId()),
-                activeUsers
+                activeUsers,
+                resolvedPreviews.getOrDefault(publication.getId(), List.of())
         ));
     }
 
@@ -201,8 +207,11 @@ public class PublicationFeedService {
                 }
             }
         }
-        Map<Long, UserDetails> activeUsers = resolveActiveUsers(userIdsToResolve);
-        return toItem(publication, summary, eventSummary, activeUsers);
+        Map<Long, UserDetails> activeUsers = new HashMap<>(resolveActiveUsers(userIdsToResolve));
+        Map<Long, EventParticipantRepository.ConfirmedSummary> singleEventMap =
+                eventSummary == null ? Map.of() : Map.of(id, eventSummary);
+        Map<Long, List<ParticipantInfo>> resolvedPreviews = resolveParticipantPreviews(singleEventMap, activeUsers);
+        return toItem(publication, summary, eventSummary, activeUsers, resolvedPreviews.getOrDefault(id, List.of()));
     }
 
     private Map<Long, EventParticipantRepository.ConfirmedSummary> loadEventSummaries(List<Long> eventIds) {
@@ -251,11 +260,96 @@ public class PublicationFeedService {
         return active;
     }
 
+    private Map<Long, List<ParticipantInfo>> resolveParticipantPreviews(
+            Map<Long, EventParticipantRepository.ConfirmedSummary> eventSummaries,
+            Map<Long, UserDetails> activeUsers
+    ) {
+        if (eventSummaries.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, List<ParticipantInfo>> result = new HashMap<>();
+        for (Map.Entry<Long, EventParticipantRepository.ConfirmedSummary> entry : eventSummaries.entrySet()) {
+            Long eventId = entry.getKey();
+            EventParticipantRepository.ConfirmedSummary eventSummary = entry.getValue();
+            if (eventSummary == null || eventSummary.previewUserIds().isEmpty()) {
+                result.put(eventId, List.of());
+                continue;
+            }
+            List<ParticipantInfo> items = new ArrayList<>(MAX_PARTICIPANTS_PREVIEW);
+            Set<Long> seen = new LinkedHashSet<>();
+            collectActiveParticipants(eventSummary.previewUserIds(), activeUsers, seen, items);
+            if (users != null
+                    && items.size() < MAX_PARTICIPANTS_PREVIEW
+                    && eventSummary.count() > eventSummary.previewUserIds().size()) {
+                backfillActiveParticipants(eventId, activeUsers, seen, items);
+            }
+            result.put(eventId, List.copyOf(items));
+        }
+        return result;
+    }
+
+    private void backfillActiveParticipants(
+            Long eventId,
+            Map<Long, UserDetails> activeUsers,
+            Set<Long> seen,
+            List<ParticipantInfo> items
+    ) {
+        int pageNumber = 0;
+        while (items.size() < MAX_PARTICIPANTS_PREVIEW) {
+            Page<Long> nextPage = participants.confirmedUserIds(
+                    eventId,
+                    PageRequest.of(pageNumber, PARTICIPANT_BACKFILL_PAGE_SIZE)
+            );
+            if (nextPage == null || nextPage.isEmpty()) {
+                break;
+            }
+            Set<Long> unseenIds = new LinkedHashSet<>();
+            for (Long userId : nextPage.getContent()) {
+                if (userId != null && userId > 0 && !seen.contains(userId) && !activeUsers.containsKey(userId)) {
+                    unseenIds.add(userId);
+                }
+            }
+            if (!unseenIds.isEmpty()) {
+                activeUsers.putAll(resolveActiveUsers(unseenIds));
+            }
+            collectActiveParticipants(nextPage.getContent(), activeUsers, seen, items);
+            if (!nextPage.hasNext()) {
+                break;
+            }
+            pageNumber++;
+        }
+    }
+
+    private static void collectActiveParticipants(
+            Collection<Long> candidateUserIds,
+            Map<Long, UserDetails> activeUsers,
+            Set<Long> seen,
+            List<ParticipantInfo> items
+    ) {
+        for (Long userId : candidateUserIds) {
+            if (items.size() == MAX_PARTICIPANTS_PREVIEW) {
+                return;
+            }
+            if (userId == null || !seen.add(userId)) {
+                continue;
+            }
+            UserDetails participant = activeUsers.get(userId);
+            if (participant != null) {
+                items.add(new ParticipantInfo(
+                        participant.id(),
+                        participant.name().trim(),
+                        participant.profilePhotoStorageKey()
+                ));
+            }
+        }
+    }
+
     private static Item toItem(
             Publication publication,
             PublicationSocialSummaryQuery.Summary summary,
             EventParticipantRepository.ConfirmedSummary eventSummary,
-            Map<Long, UserDetails> activeUsers
+            Map<Long, UserDetails> activeUsers,
+            List<ParticipantInfo> participantsPreview
     ) {
         UserDetails authorUser = activeUsers.get(publication.getAuthorUserId());
         AuthorInfo author = authorUser == null
@@ -263,28 +357,7 @@ public class PublicationFeedService {
                 : new AuthorInfo(authorUser.id(), authorUser.name().trim(), authorUser.profilePhotoStorageKey());
 
         long registrationCount = eventSummary == null ? 0L : eventSummary.count();
-        List<ParticipantInfo> preview = List.of();
-        if (publication instanceof Event && eventSummary != null && !eventSummary.previewUserIds().isEmpty()) {
-            List<ParticipantInfo> items = new ArrayList<>(MAX_PARTICIPANTS_PREVIEW);
-            Set<Long> seen = new LinkedHashSet<>();
-            for (Long userId : eventSummary.previewUserIds()) {
-                if (userId == null || !seen.add(userId)) {
-                    continue;
-                }
-                UserDetails participant = activeUsers.get(userId);
-                if (participant != null) {
-                    items.add(new ParticipantInfo(
-                            participant.id(),
-                            participant.name().trim(),
-                            participant.profilePhotoStorageKey()
-                    ));
-                    if (items.size() == MAX_PARTICIPANTS_PREVIEW) {
-                        break;
-                    }
-                }
-            }
-            preview = List.copyOf(items);
-        }
+        List<ParticipantInfo> preview = publication instanceof Event ? participantsPreview : List.of();
         return new Item(publication, summary, registrationCount, author, preview);
     }
 
