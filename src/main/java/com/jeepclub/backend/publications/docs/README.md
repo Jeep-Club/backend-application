@@ -528,8 +528,9 @@ autores/revisores ativos em lote via `UserQuery.findByIds` somente quando o admi
 possui `IDENTITY_USER_READ` (`null` caso contrário, sem `403` adicional e sem expor
 `authorName` em `GET /services/{id}`). Pedidos de criação aprovados expõem
 `createdPublicationTitle` e propostas de alteração expõem `servicePublicationTitle` (distinto
-de `proposedTitle`) quando o serviço vinculado está disponível (`PUBLISHED`, ou `ARCHIVED`
-com `PUBLICATIONS_SERVICE_ADMIN_READ`), retornando `null` se o serviço foi excluído. Billing
+de `proposedTitle`) em lote somente quando o administrador possui
+`PUBLICATIONS_SERVICE_ADMIN_READ`, retornando `null` sem `403` adicional quando a permissão
+suplementar está ausente ou quando o serviço foi excluído. Billing
 não participa da request, aprovação ou alteração.
 
 ## Permissions
