@@ -397,6 +397,19 @@ class ServicePublicationHttpIntegrationTest {
                 .andExpect(jsonPath("$.content[0].id").value(service1Id))
                 .andExpect(jsonPath("$.content[0].authorName").value(org.hamcrest.Matchers.nullValue()));
 
+        // Out-of-range page preserves totalElements and totalPages with empty content
+        mvc.perform(token(get("/admin/services").param("page", "5").param("size", "1")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(0))
+                .andExpect(jsonPath("$.totalElements").value(2))
+                .andExpect(jsonPath("$.totalPages").value(2));
+
+        // Missing PUBLICATIONS_SERVICE_ADMIN_READ returns 403
+        authenticate(reviewer, "IDENTITY_USER_READ");
+        mvc.perform(token(get("/admin/services")))
+                .andExpect(status().isForbidden());
+        authenticate(reviewer, "PUBLICATIONS_SERVICE_ADMIN_READ");
+
         // DRAFT is rejected with 400 on GET /admin/services
         for (String[] bad : new String[][]{
                 {"status", "DRAFT"},

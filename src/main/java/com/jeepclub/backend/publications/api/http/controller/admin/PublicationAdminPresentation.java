@@ -142,6 +142,8 @@ public class PublicationAdminPresentation {
         ));
     }
 
+    private static final int IDENTITY_BATCH_SIZE = 500;
+
     Map<Long, String> userNames(Collection<Long> ids) {
         if (!hasAuthority("IDENTITY_USER_READ")) {
             return Map.of();
@@ -154,11 +156,22 @@ public class PublicationAdminPresentation {
         if (distinct.isEmpty()) {
             return Map.of();
         }
-        return users.findByIds(distinct).stream()
-                .filter(UserDetails::administrativelyActive)
-                .filter(user -> user.status() == UserStatus.ACTIVE && user.archivedAt() == null)
-                .filter(user -> user.name() != null && !user.name().isBlank())
-                .collect(Collectors.toMap(UserDetails::id, UserDetails::name, (a, b) -> a));
+        Map<Long, String> resolved = new java.util.HashMap<>();
+        for (int offset = 0; offset < distinct.size(); offset += IDENTITY_BATCH_SIZE) {
+            List<Long> batch = distinct.subList(offset, Math.min(offset + IDENTITY_BATCH_SIZE, distinct.size()));
+            for (UserDetails user : users.findByIds(batch)) {
+                if (user != null
+                        && user.id() != null
+                        && user.administrativelyActive()
+                        && user.status() == UserStatus.ACTIVE
+                        && user.archivedAt() == null
+                        && user.name() != null
+                        && !user.name().isBlank()) {
+                    resolved.putIfAbsent(user.id(), user.name().trim());
+                }
+            }
+        }
+        return resolved;
     }
 
     Map<Long, String> serviceTitles(Collection<Long> ids) {
@@ -170,10 +183,9 @@ public class PublicationAdminPresentation {
         if (distinct.isEmpty()) {
             return Map.of();
         }
-        boolean canReadArchivedService = hasAuthority("PUBLICATIONS_SERVICE_ADMIN_READ");
+        boolean canReadNonPublishedService = hasAuthority("PUBLICATIONS_SERVICE_ADMIN_READ");
         return publications.findServicesByIds(distinct).stream()
-                .filter(service -> service.getStatus() == PublicationStatus.PUBLISHED
-                        || (service.getStatus() == PublicationStatus.ARCHIVED && canReadArchivedService))
+                .filter(service -> service.getStatus() == PublicationStatus.PUBLISHED || canReadNonPublishedService)
                 .filter(service -> service.getTitle() != null && !service.getTitle().isBlank())
                 .collect(Collectors.toMap(ServicePublication::getId, ServicePublication::getTitle, (a, b) -> a));
     }

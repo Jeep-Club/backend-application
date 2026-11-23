@@ -327,6 +327,18 @@ class NoticeHttpIntegrationTest {
                         .param("to", "2026-10-01T00:00:00Z")))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("NOTICE_INVALID_REQUEST"));
+
+        // Out-of-range page preserves totalElements and totalPages with empty content
+        mvc.perform(withToken(get("/admin/notices").param("page", "5").param("size", "2")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(0))
+                .andExpect(jsonPath("$.totalElements").value(4))
+                .andExpect(jsonPath("$.totalPages").value(2));
+
+        // Missing PUBLICATIONS_NOTICE_READ returns 403
+        authenticate(List.of("IDENTITY_USER_READ"));
+        mvc.perform(withToken(get("/admin/notices")))
+                .andExpect(status().isForbidden());
     }
 
     private long persistUser(String name, UserStatus status) {
