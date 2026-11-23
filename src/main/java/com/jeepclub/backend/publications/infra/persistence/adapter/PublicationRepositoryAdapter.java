@@ -84,6 +84,7 @@ public class PublicationRepositoryAdapter implements PublicationRepository {
     private final PublicationMapper mapper;
     private final PublicationHistoryMapper historyMapper;
     private final com.jeepclub.backend.publications.infra.persistence.mapper.CurrentEventMapper currentEventMapper;
+    private final jakarta.persistence.EntityManager entityManager;
     private final java.time.Clock clock;
     @Override
     public org.springframework.data.domain.Page<com.jeepclub.backend.publications.core.domain.model.Event> findEvents(org.springframework.data.domain.Pageable pageable) {
@@ -104,8 +105,104 @@ public class PublicationRepositoryAdapter implements PublicationRepository {
             Pageable pageable
     ) {
         Instant effectiveNow = referenceNow != null ? referenceNow : Instant.now(clock);
-        return publications.findNotices(status, priority == null ? null : priority.name(), expired, effectiveNow, likePattern(query), from, to, publishedFrom, publishedTo, pageable)
-                .map(e -> (com.jeepclub.backend.publications.core.domain.model.Notice) mapper.toDomain(e));
+        String pattern = likePattern(query);
+        var cb = entityManager.getCriteriaBuilder();
+
+        var countQuery = cb.createQuery(Long.class);
+        var countRoot = countQuery.from(NoticeEntity.class);
+        countQuery.select(cb.count(countRoot)).where(noticePredicates(
+                cb, countRoot, status, priority, expired, effectiveNow, pattern, from, to, publishedFrom, publishedTo
+        ));
+        long total = entityManager.createQuery(countQuery).getSingleResult();
+        if (total == 0 || pageable.getOffset() >= total) {
+            return new org.springframework.data.domain.PageImpl<>(java.util.List.of(), pageable, total);
+        }
+
+        var dataQuery = cb.createQuery(NoticeEntity.class);
+        var dataRoot = dataQuery.from(NoticeEntity.class);
+        dataQuery.select(dataRoot).where(noticePredicates(
+                cb, dataRoot, status, priority, expired, effectiveNow, pattern, from, to, publishedFrom, publishedTo
+        ));
+        var orders = new java.util.ArrayList<jakarta.persistence.criteria.Order>();
+        for (org.springframework.data.domain.Sort.Order sortOrder : pageable.getSort()) {
+            jakarta.persistence.criteria.Expression<?> expr;
+            if ("priority".equals(sortOrder.getProperty())) {
+                expr = cb.<String, Integer>selectCase(dataRoot.get("priority"))
+                        .when(NoticePriority.LOW.name(), 1)
+                        .when(NoticePriority.NORMAL.name(), 2)
+                        .when(NoticePriority.HIGH.name(), 3)
+                        .when(NoticePriority.URGENT.name(), 4)
+                        .otherwise(0);
+            } else {
+                expr = dataRoot.get(sortOrder.getProperty());
+            }
+            orders.add(sortOrder.isAscending() ? cb.asc(expr) : cb.desc(expr));
+        }
+        if (!orders.isEmpty()) {
+            dataQuery.orderBy(orders);
+        }
+        var items = entityManager.createQuery(dataQuery)
+                .setFirstResult(Math.toIntExact(pageable.getOffset()))
+                .setMaxResults(pageable.getPageSize())
+                .getResultList()
+                .stream()
+                .map(e -> (com.jeepclub.backend.publications.core.domain.model.Notice) mapper.toDomain(e))
+                .toList();
+        return new org.springframework.data.domain.PageImpl<>(items, pageable, total);
+    }
+
+    private static jakarta.persistence.criteria.Predicate[] noticePredicates(
+            jakarta.persistence.criteria.CriteriaBuilder cb,
+            jakarta.persistence.criteria.Root<NoticeEntity> root,
+            PublicationStatus status,
+            NoticePriority priority,
+            Boolean expired,
+            Instant referenceNow,
+            String pattern,
+            Instant from,
+            Instant to,
+            Instant publishedFrom,
+            Instant publishedTo
+    ) {
+        var predicates = new java.util.ArrayList<jakarta.persistence.criteria.Predicate>();
+        if (status != null) {
+            predicates.add(cb.equal(root.get("status"), status));
+        }
+        if (priority != null) {
+            predicates.add(cb.equal(root.get("priority"), priority.name()));
+        }
+        if (expired != null) {
+            if (expired) {
+                predicates.add(cb.and(
+                        cb.isNotNull(root.get("validUntil")),
+                        cb.lessThan(root.get("validUntil"), referenceNow)
+                ));
+            } else {
+                predicates.add(cb.or(
+                        cb.isNull(root.get("validUntil")),
+                        cb.greaterThanOrEqualTo(root.get("validUntil"), referenceNow)
+                ));
+            }
+        }
+        if (pattern != null) {
+            predicates.add(cb.or(
+                    cb.like(cb.lower(root.get("title")), pattern, '!'),
+                    cb.like(cb.lower(root.get("content")), pattern, '!')
+            ));
+        }
+        if (from != null) {
+            predicates.add(cb.greaterThanOrEqualTo(root.get("createdAt"), from));
+        }
+        if (to != null) {
+            predicates.add(cb.lessThanOrEqualTo(root.get("createdAt"), to));
+        }
+        if (publishedFrom != null) {
+            predicates.add(cb.greaterThanOrEqualTo(root.get("publishedAt"), publishedFrom));
+        }
+        if (publishedTo != null) {
+            predicates.add(cb.lessThanOrEqualTo(root.get("publishedAt"), publishedTo));
+        }
+        return predicates.toArray(jakarta.persistence.criteria.Predicate[]::new);
     }
 
     @Override
