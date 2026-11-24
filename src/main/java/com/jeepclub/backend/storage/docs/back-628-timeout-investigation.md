@@ -20,6 +20,32 @@ O cliente não deve interpretar o 503 como prova de rollback ou autorização de
 
 ## Benchmark por socket e MySQL
 
+### Checkpoint de entrega
+
+Os commits `1f987a99`, `1e7d7e3b`, `37f72cad`, `f8ac98b4` e
+`a2b81b4d` compõem a implementação desta rodada.
+
+| Issue | Entrega e evidência | Aceite |
+| --- | --- | --- |
+| BACK-636 | Inventário de consumidores, contratos, variantes, crops, cache e legado. Frontend `develop` em `5e366e79`, consultado em leitura. Três fotos públicas verificadas. | Parcial. A validação visual e de densidade por superfície fica na integração. |
+| BACK-637 | Testes de 10 MiB, MIME, corrupção, truncamento, streams inconsistentes e dimensões. Rejeições verificadas via HTTP com MySQL. Erros do Storage respeitam a feature flag. | Parcial. Memória e CPU no domínio completo de entradas seguem em avaliação. |
+| BACK-638 | MASTER privada, crops independentes, ausência de upscale e rejeição quando a redução compromete a resolução disponível das derivadas. | Atendido no recorte backend. |
+| BACK-639 | Prazo cooperativo com relógio monotônico, testes de leitura, codec e gravações. Simulação de confirmação perdida após commit real preservou um asset completo, uma cobrança e zero referências operacionais. | Parcial. F-02 em aberto para operações bloqueadas e recuperação de resultado indeterminado. |
+
+No SHA de implementação `a2b81b4d66ee54ca29769cc5a3d5deb729866526`,
+o [CI](https://github.com/Jeep-Club/backend-application/actions/runs/45298645131)
+aprovou 2.742 casos Maven, 625 MySQL e 206 PostgreSQL, zero falhas ou skips.
+Também passaram a validação de schemas históricos, o ensaio V+1 e a auditoria
+de risco das migrations. F2 local passou com 134 casos e um skip de symlink
+no Windows. O benchmark padrão registrou 23 respostas 201 e p95 de 2.295 ms.
+
+Em 512 MiB de heap, o benchmark com servidor e cliente de carga na mesma JVM
+teve um HTTP 500 por falta de heap. Com o cliente em uma JVM separada, o mesmo
+corpus passou com 23 respostas 201, zero falhas e p95 de 2.669 ms. O ensaio
+focal com PNGs transparentes de 20 MP concorrentes segue em execução no
+momento deste checkpoint. As alterações experimentais do diagnóstico ficam
+locais durante a execução. O F-02 permanece aberto e o PR segue em draft.
+
 O diagnóstico opt-in `StorageSocketBenchmarkMySqlIT` mede o POST de perfil
 com dois uploads concorrentes. Em `f8ac98b4ab66e34d0a874519d6faf1a1506994ac`,
 Windows 11, Ryzen 5 PRO 5655GE (12 CPUs lógicas), JDK 17.0.20 e MySQL 8.0.46,
