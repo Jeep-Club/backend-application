@@ -5,7 +5,6 @@ import com.jeepclub.backend.billing.core.domain.enums.assignment.ChargeAudienceT
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.time.Instant;
-import java.util.List;
 import java.util.Objects;
 
 @Schema(description = "Resposta com os dados de uma regra de atribuição de cobrança.")
@@ -41,19 +40,19 @@ public record ChargeAssignmentResponse(
         @Schema(description = "Data da última atualização da atribuição.", nullable = true)
         Instant updatedAt,
 
-        @Schema(description = "Nome cadastral atual de usuário ativo em atribuição USER, visível nos GETs com IDENTITY_USER_READ.", nullable = true)
-        String userName
+        @Schema(description = "Nome cadastral atual de usuário ativo em atribuição USER, visível com IDENTITY_USER_READ.", nullable = true)
+        String userName,
+
+        @Schema(description = "Nome atual da definição de cobrança.", nullable = true)
+        String chargeDefinitionName,
+
+        @Schema(description = "Título do evento, quando autorizado e disponível.", nullable = true)
+        String eventTitle
 ) {
 
-    public static ChargeAssignmentResponse from(ChargeAssignmentResult result) {
-        return from(result, false, null);
-    }
-
-    public static ChargeAssignmentResponse from(ChargeAssignmentResult result, boolean canReadRole, String roleName) {
-        return from(result, canReadRole, roleName, null);
-    }
-
-    public static ChargeAssignmentResponse from(ChargeAssignmentResult result, boolean canReadRole, String roleName, String userName) {
+    public static ChargeAssignmentResponse from(ChargeAssignmentResult result, boolean canReadRole,
+                                                String roleName, String userName, String chargeDefinitionName,
+                                                String eventTitle) {
         Objects.requireNonNull(result, "result cannot be null");
 
         return new ChargeAssignmentResponse(
@@ -67,15 +66,9 @@ public record ChargeAssignmentResponse(
                 result.active(),
                 result.createdAt(),
                 result.updatedAt(),
-                result.audienceType() == ChargeAudienceType.USER ? userName : null
+                result.audienceType() == ChargeAudienceType.USER ? userName : null,
+                chargeDefinitionName,
+                result.audienceType() == ChargeAudienceType.EVENT_PARTICIPANTS ? eventTitle : null
         );
-    }
-
-    public static List<ChargeAssignmentResponse> from(List<ChargeAssignmentResult> results) {
-        Objects.requireNonNull(results, "results cannot be null");
-
-        return results.stream()
-                .map(ChargeAssignmentResponse::from)
-                .toList();
     }
 }

@@ -10,6 +10,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 
 @Repository
@@ -64,6 +66,11 @@ public class ChargeDefinitionAdapter implements ChargeDefinitionRepository {
     public Optional<ChargeDefinition> findById(Long id) {
         return jpa.findById(id)
                 .map(mapper::toDomain);
+    }
+
+    @Override
+    public List<ChargeDefinition> findByIds(Collection<Long> ids) {
+        return jpa.findAllById(ids).stream().map(mapper::toDomain).toList();
     }
 
     @Override
