@@ -22,6 +22,22 @@ usuário do contêiner, portanto o isolamento é de execução e recursos,
 e não constitui uma fronteira de autorização do sistema operacional.
 O heap não representa o RSS máximo do processo.
 
+### Gravação física isolada
+
+O provider privado executa escrita, sincronização, publicação atômica e
+leitura de verificação no mesmo processo filho. Há um escritor ativo,
+heap de 128 MiB e orçamento de quatro segundos para admissão e resposta.
+O catálogo mantém o lock por digest enquanto não houver prova de saída
+do escritor. Bloqueio que sobreviva ao pedido de encerramento mantém o
+slot e o chamador em contenção. O limite transacional existente não é
+prova de término físico.
+
+A falha conserva intents e custódia. Arquivo em estágio permanece
+privado, e um retry pode verificar o objeto canônico sob o lock do
+catálogo. O teste de filesystem bloqueia após escrita e sincronização
+reais, antes do rename. Confirma a saída do filho, a ausência do objeto
+publicado e a capacidade de gravar e verificar em outro processo.
+
 O serviço propaga o mesmo prazo monotônico ao codec síncrono. O processador
 verifica o prazo após decodificar a fonte, antes de novas tentativas de
 compressão da MASTER, antes de decodificar a MASTER e entre as variantes.

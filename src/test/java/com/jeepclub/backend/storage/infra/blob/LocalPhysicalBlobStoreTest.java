@@ -4,9 +4,67 @@ import com.jeepclub.backend.platform.storage.properties.StorageProperties;
 import com.jeepclub.backend.storage.infra.persistence.adapter.BlobCatalogAdapter;
 import org.junit.jupiter.api.Test;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import static org.assertj.core.api.Assertions.*;
 
 class LocalPhysicalBlobStoreTest {
+    public static final class BlockedBeforePublish {
+        public static void main(String[] args) throws Exception {
+            PhysicalBlobWriteWorker.serve(Path.of(args[0]), () -> {
+                try {
+                    Files.writeString(Path.of(args[1]), Long.toString(ProcessHandle.current().pid()));
+                    new java.util.concurrent.CountDownLatch(1).await();
+                } catch (java.io.IOException failure) {
+                    throw new java.io.UncheckedIOException(failure);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(interrupted);
+                }
+            });
+        }
+    }
+
+    @Test void timedOutWriterLeavesPrivateStageAndReleasesCapacityOnlyAfterExit(
+            @org.junit.jupiter.api.io.TempDir Path providerRoot) throws Exception {
+        Path marker = providerRoot.resolve("worker-marker");
+        var starts = new java.util.concurrent.atomic.AtomicInteger();
+        var physical = new LocalPhysicalBlobStore(providerRoot, scratch -> {
+            boolean blocked = starts.incrementAndGet() == 1;
+            var command = com.jeepclub.backend.storage.infra.process.StorageProcessSupervisor.javaWorker(scratch,
+                    blocked ? BlockedBeforePublish.class : PhysicalBlobWriteWorker.class, 128);
+            command.command().add(providerRoot.toString());
+            if (blocked) command.command().add(marker.toString());
+            return command;
+        });
+        byte[] bytes = {4, 7, 11};
+        String digest = BlobCatalogAdapter.digest(bytes);
+        var childPid = new java.util.concurrent.atomic.AtomicLong();
+        assertThatThrownBy(() -> physical.putVerified(digest, bytes, () -> {
+            try {
+                if (Files.exists(marker)) {
+                    String pid = Files.readString(marker);
+                    if (!pid.isBlank()) {
+                        childPid.set(Long.parseLong(pid));
+                        throw new IllegalStateException("fixture storage deadline");
+                    }
+                }
+            } catch (java.io.IOException failure) {
+                throw new java.io.UncheckedIOException(failure);
+            }
+        })).isInstanceOf(IllegalStateException.class).hasMessage("fixture storage deadline");
+        assertThat(childPid.get()).isPositive();
+        assertThat(ProcessHandle.of(childPid.get()).filter(ProcessHandle::isAlive)).isEmpty();
+        Path directory = providerRoot.resolve("storage-blobs");
+        assertThat(directory.resolve(digest + ".bin")).doesNotExist();
+        try (var paths = Files.list(directory)) {
+            assertThat(paths.map(path -> path.getFileName().toString()).toList())
+                    .hasSize(1).allMatch(name -> name.startsWith(digest + ".") && name.endsWith(".pending"));
+        }
+        physical.putVerified(digest, bytes);
+        assertThat(physical.readVerified(digest, bytes.length)).containsExactly(bytes);
+        assertThat(starts.get()).isEqualTo(2);
+    }
+
     @Test void missingBlobIsDistinguishedFromCorruptContent() throws Exception {
         var root=Files.createTempDirectory("storage-missing-fixture-");var properties=new StorageProperties();properties.local().setRootDirectory(root);
         var physical=new LocalPhysicalBlobStore(properties);byte[] bytes={1,2,3};String hash=BlobCatalogAdapter.digest(bytes);
