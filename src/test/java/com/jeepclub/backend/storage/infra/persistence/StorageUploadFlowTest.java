@@ -244,8 +244,10 @@ class StorageUploadFlowTest {
         assertThat(jdbc.queryForObject("select catalog_asset_id from storage_upload_permits where actor_user_id=?",Long.class,actor)).isEqualTo(result.mediaId());
         assertThat(finishCalls.get()).isZero();
     }
-    @Test void catalogCommitWithoutAcknowledgementKeepsOneChargedAssetAndNoReference() throws Exception {
-        long actor = 987629L;
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    void missingCommitAcknowledgementKeepsCustodyWithEitherDatabaseOutcome(boolean committed) throws Exception {
+        long actor = committed ? 987629L : 987630L;
         var uncertainCommit = new org.springframework.transaction.PlatformTransactionManager() {
             @Override
             public org.springframework.transaction.TransactionStatus getTransaction(org.springframework.transaction.TransactionDefinition definition) {
@@ -254,7 +256,11 @@ class StorageUploadFlowTest {
 
             @Override
             public void commit(org.springframework.transaction.TransactionStatus status) {
-                manager.commit(status);
+                if (committed) {
+                    manager.commit(status);
+                } else {
+                    manager.rollback(status);
+                }
                 throw new org.springframework.transaction.TransactionSystemException("Fixture lost commit acknowledgement");
             }
 
@@ -269,15 +275,27 @@ class StorageUploadFlowTest {
         assertThatThrownBy(() -> service.upload(actor, MediaContext.IDENTITY_PROFILE, Long.toString(actor), image(180)))
                 .isInstanceOf(IllegalStateException.class).hasMessage("Upload transaction outcome unavailable");
 
-        long assetId = jdbc.queryForObject("select catalog_asset_id from storage_upload_permits where actor_user_id=? and completed=true and charged=true",
+        Long assetId = jdbc.queryForObject("select catalog_asset_id from storage_upload_permits where actor_user_id=? and completed=true and charged=true",
                 Long.class, actor);
-        assertThat(catalog.findAsset(assetId)).isPresent();
-        assertThat(catalog.findVariant(assetId, "MASTER")).isPresent();
-        assertThat(catalog.findVariant(assetId, "AVATAR_SMALL")).isPresent();
-        assertThat(catalog.findVariant(assetId, "PROFILE_PREVIEW")).isPresent();
-        assertThat(jdbc.queryForObject("select count(*) from storage_media_references where media_id=?", Long.class, assetId)).isZero();
-        assertThatThrownBy(() -> resolution.resolve(actor, assetId, Long.MAX_VALUE, "AVATAR_SMALL"))
-                .isInstanceOf(AccessDeniedException.class);
+        if (committed) {
+            assertThat(assetId).isNotNull();
+            assertThat(catalog.findAsset(assetId)).isPresent();
+            assertThat(catalog.findVariant(assetId, "MASTER")).isPresent();
+            assertThat(catalog.findVariant(assetId, "AVATAR_SMALL")).isPresent();
+            assertThat(catalog.findVariant(assetId, "PROFILE_PREVIEW")).isPresent();
+            assertThat(jdbc.queryForObject("select count(*) from storage_media_references where media_id=?", Long.class, assetId)).isZero();
+            assertThatThrownBy(() -> resolution.resolve(actor, assetId, Long.MAX_VALUE, "AVATAR_SMALL"))
+                    .isInstanceOf(AccessDeniedException.class);
+        } else {
+            assertThat(assetId).isNull();
+            assertThat(jdbc.queryForObject("select count(*) from storage_media_assets where uploaded_by_user_id=?", Long.class, actor)).isZero();
+        }
+        assertThat(jdbc.queryForObject("""
+                select count(*) from storage_upload_planned_blobs p
+                join storage_upload_permits u on u.id=p.permit_id
+                join storage_blobs b on b.sha256=p.sha256
+                where u.actor_user_id=? and b.ready=true and b.size_bytes=p.size_bytes
+                """, Long.class, actor)).isEqualTo(3);
         assertThat(jdbc.queryForObject("select in_flight from storage_upload_budgets where scope_id=?", Integer.class, actor)).isZero();
         assertThat(jdbc.queryForObject("select charged_uploads from storage_upload_budgets where scope_id=?", Long.class, actor)).isEqualTo(1);
         assertThat(jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=?", Long.class, actor))
