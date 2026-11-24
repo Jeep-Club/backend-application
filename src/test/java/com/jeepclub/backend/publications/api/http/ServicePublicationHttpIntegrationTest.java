@@ -85,7 +85,10 @@ class ServicePublicationHttpIntegrationTest {
         authenticate(500L, "PUBLICATIONS_SERVICE_REQUEST_APPROVE");
         MvcResult approval = mvc.perform(token(post("/admin/service-publication-requests/{id}/approve", requestId)))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("APPROVED"))
-                .andExpect(jsonPath("$.reviewedByUserId").value(500)).andReturn();
+                .andExpect(jsonPath("$.reviewedByUserId").value(500))
+                .andExpect(jsonPath("$.reviewedByUserName").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.createdPublicationTitle").value(org.hamcrest.Matchers.nullValue()))
+                .andReturn();
         long serviceId = json.readTree(approval.getResponse().getContentAsString()).get("createdPublicationId").asLong();
         assertThat(serviceId).isPositive();
         mvc.perform(token(post("/admin/service-publication-requests/{id}/approve", requestId)))
@@ -124,10 +127,13 @@ class ServicePublicationHttpIntegrationTest {
         mvc.perform(token(get("/admin/service-publication-change-requests?status=PENDING")))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.content[0].id").value(changeId));
         mvc.perform(token(get("/admin/service-publication-change-requests/{id}", changeId)))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.proposedAmount").value(150));
+                .andExpect(status().isOk()).andExpect(jsonPath("$.proposedAmount").value(150))
+                .andExpect(jsonPath("$.servicePublicationTitle").value(org.hamcrest.Matchers.nullValue()));
         authenticate(500L, "PUBLICATIONS_SERVICE_CHANGE_REQUEST_APPROVE");
         mvc.perform(token(post("/admin/service-publication-change-requests/{id}/approve", changeId)))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("APPROVED"));
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("APPROVED"))
+                .andExpect(jsonPath("$.servicePublicationTitle").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.reviewedByUserName").value(org.hamcrest.Matchers.nullValue()));
         mvc.perform(token(post("/admin/service-publication-change-requests/{id}/approve", changeId)))
                 .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("SERVICE_CHANGE_REQUEST_ALREADY_PROCESSED"));
         authenticate(99L, "PUBLICATIONS_SERVICE_READ");
@@ -161,7 +167,9 @@ class ServicePublicationHttpIntegrationTest {
         mvc.perform(token(post("/admin/service-publication-requests/{id}/reject", initial)
                         .contentType(MediaType.APPLICATION_JSON).content("{\"rejectionReason\":\" no \"}")))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("REJECTED"))
-                .andExpect(jsonPath("$.rejectionReason").value("no"));
+                .andExpect(jsonPath("$.rejectionReason").value("no"))
+                .andExpect(jsonPath("$.createdPublicationTitle").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.reviewedByUserName").value(org.hamcrest.Matchers.nullValue()));
         mvc.perform(token(post("/admin/service-publication-requests/{id}/reject", initial)
                         .contentType(MediaType.APPLICATION_JSON).content("{}")))
                 .andExpect(status().isConflict());
@@ -206,7 +214,19 @@ class ServicePublicationHttpIntegrationTest {
         authenticate(500L, "PUBLICATIONS_SERVICE_CHANGE_REQUEST_REJECT");
         mvc.perform(token(post("/admin/service-publication-change-requests/{id}/reject", rejectedId)
                 .contentType(MediaType.APPLICATION_JSON).content("{\"rejectionReason\":\"no\"}")))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("REJECTED"));
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("REJECTED"))
+                .andExpect(jsonPath("$.servicePublicationTitle").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.reviewedByUserName").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.proposedTitle").value("Rejected title"));
+
+        authenticate(500L, "PUBLICATIONS_SERVICE_CHANGE_REQUEST_ADMIN_READ", "PUBLICATIONS_SERVICE_ADMIN_READ");
+        mvc.perform(token(get("/admin/service-publication-change-requests/{id}", rejectedId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("REJECTED"))
+                .andExpect(jsonPath("$.servicePublicationTitle").value("Original"))
+                .andExpect(jsonPath("$.proposedTitle").value("Rejected title"))
+                .andExpect(jsonPath("$.reviewedByUserName").value(org.hamcrest.Matchers.nullValue()));
+        authenticate(500L, "PUBLICATIONS_SERVICE_CHANGE_REQUEST_REJECT");
         mvc.perform(token(post("/admin/service-publication-change-requests/{id}/reject", rejectedId)
                 .contentType(MediaType.APPLICATION_JSON).content("{}"))).andExpect(status().isConflict());
         authenticate(99L, "PUBLICATIONS_SERVICE_READ");
@@ -462,6 +482,20 @@ class ServicePublicationHttpIntegrationTest {
         assertThat(Sql.statements.get().stream().filter(sql -> sql.contains("publication_services")).count()).isZero();
 
         // 3. Service Change Requests GET/POST /admin/service-publication-change-requests (BACK-729)
+        authenticate(reviewer, "PUBLICATIONS_SERVICE_REQUEST_ADMIN_READ", "PUBLICATIONS_SERVICE_ADMIN_READ");
+        mvc.perform(token(get("/admin/service-publication-requests/{id}", req3)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.createdPublicationTitle").value("Resgate Pesado"))
+                .andExpect(jsonPath("$.requestedByUserName").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.reviewedByUserName").value(org.hamcrest.Matchers.nullValue()));
+
+        authenticate(reviewer, "PUBLICATIONS_SERVICE_REQUEST_ADMIN_READ", "IDENTITY_USER_READ");
+        mvc.perform(token(get("/admin/service-publication-requests/{id}", req3)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.createdPublicationTitle").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.requestedByUserName").value("Guincho Souza"))
+                .andExpect(jsonPath("$.reviewedByUserName").value("Moderador Chefe"));
+
         // Without PUBLICATIONS_SERVICE_ADMIN_READ: servicePublicationTitle is null while proposedTitle remains visible
         authenticate(reviewer, "PUBLICATIONS_SERVICE_CHANGE_REQUEST_ADMIN_READ", "IDENTITY_USER_READ");
         mvc.perform(token(get("/admin/service-publication-change-requests")))
