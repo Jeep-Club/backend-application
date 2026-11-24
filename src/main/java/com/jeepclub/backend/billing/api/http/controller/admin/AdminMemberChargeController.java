@@ -4,6 +4,7 @@ import com.jeepclub.backend.billing.api.http.dto.charge.MemberChargeResponse;
 import com.jeepclub.backend.billing.api.http.dto.BillingPageSchemas;
 import com.jeepclub.backend.billing.api.http.dto.charge.MemberChargeSummaryResponse;
 import com.jeepclub.backend.billing.api.http.dto.charge.UpdateMemberChargeFinalAmountRequest;
+import com.jeepclub.backend.billing.core.application.result.charge.MemberChargeCycleResult;
 import com.jeepclub.backend.billing.core.application.result.charge.MemberChargeResult;
 import com.jeepclub.backend.billing.core.application.service.membercharge.AdminMemberChargeService;
 import com.jeepclub.backend.billing.core.domain.enums.charge.MemberChargeStatus;
@@ -92,11 +93,14 @@ public class AdminMemberChargeController {
     public ResponseEntity<MemberChargeResponse> findById(
             @PathVariable @Positive(message = "ID da cobrança deve ser maior que zero.") Long memberChargeId
     ) {
-        var result = adminMemberChargeService.findById(memberChargeId);
+        return ResponseEntity.ok(present(adminMemberChargeService.findById(memberChargeId)));
+    }
+
+    private MemberChargeResponse present(MemberChargeCycleResult result) {
         var userId = result.charge().userId();
         var ids = List.of(userId);
-        return ResponseEntity.ok(MemberChargeResponse.from(result.charge(), userNames.names(ids).get(userId),
-                membershipNumbers(ids).get(userId), result.chargeDefinitionNameSnapshot(), result.chargeCycleCode()));
+        return MemberChargeResponse.from(result.charge(), userNames.names(ids).get(userId),
+                membershipNumbers(ids).get(userId), result.chargeDefinitionNameSnapshot(), result.chargeCycleCode());
     }
 
     private Map<Long, String> membershipNumbers(List<Long> ids) {
@@ -123,7 +127,7 @@ public class AdminMemberChargeController {
                 request.finalAmount()
         );
 
-        return ResponseEntity.ok(MemberChargeResponse.from(result));
+        return ResponseEntity.ok(present(adminMemberChargeService.present(result)));
     }
 
     @PatchMapping("/billing/member-charges/{memberChargeId}/cancel")
@@ -140,6 +144,6 @@ public class AdminMemberChargeController {
     ) {
         MemberChargeResult result = adminMemberChargeService.cancel(memberChargeId);
 
-        return ResponseEntity.ok(MemberChargeResponse.from(result));
+        return ResponseEntity.ok(present(adminMemberChargeService.present(result)));
     }
 }
