@@ -2,6 +2,13 @@
 
 ## Verificação por etapa e confirmação de commit
 
+O serviço propaga o mesmo prazo monotônico ao codec síncrono. O processador
+verifica o prazo após decodificar a fonte, antes de novas tentativas de
+compressão da MASTER, antes de decodificar a MASTER e entre as variantes.
+A expiração impede o início da próxima transformação e devolve o slot quando
+a chamada corrente retorna. Uma chamada nativa em andamento continua sujeita
+aos limites de cancelamento descritos abaixo.
+
 `MediaUploadCapacityTest.expiredUploadStopsAtNextBoundaryAndPreservesCustody`
 avança o relógio monotônico em leitura, codec, primeiro e segundo `store`.
 Verifica que a próxima etapa fica bloqueada, que a compensação depende de

@@ -83,7 +83,7 @@ public class MediaUploadService {
         requireTimeRemaining(admittedAt);
         byte[] input = content.get();
         requireTimeRemaining(admittedAt);
-        var processed=images.process(input,context,options);
+        var processed=images.process(input,context,options,() -> requireTimeRemaining(admittedAt));
         requireTimeRemaining(admittedAt);
         var planned=processed.images().stream().map(i -> {
             requireTimeRemaining(admittedAt);

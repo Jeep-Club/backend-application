@@ -8,6 +8,21 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.*;
 
 class SynchronousImageProcessorTest {
+    @Test void deadlineAfterDecodeStopsProcessingAndReleasesCapacity() throws Exception {
+        var processor = new SynchronousImageProcessor();
+        byte[] input = image();
+        var checks = new java.util.concurrent.atomic.AtomicInteger();
+        var expiration = new IllegalStateException("expired");
+        for (int attempt = 0; attempt < 3; attempt++) {
+            checks.set(0);
+            assertThatThrownBy(() -> processor.process(input, SynchronousImageProcessor.Category.PROFILE,
+                    List.of(), java.util.Map.of(), () -> {
+                        if (checks.incrementAndGet() == 2) throw expiration;
+                    })).isSameAs(expiration);
+        }
+        assertThat(processor.process(input, SynchronousImageProcessor.Category.PROFILE, List.of()).master()).isNotNull();
+    }
+
     @Test void rejectsReductionBelowAvailableGalleryResolution() throws Exception {
         var source = new BufferedImage(1600, 1200, BufferedImage.TYPE_INT_ARGB);
         var random = new java.util.Random(628);

@@ -36,7 +36,7 @@ class MediaUploadCapacityTest {
             public boolean mayRead(long actor, Reference reference, boolean master) { return false; }
         };
         var processor = mock(MediaImageProcessor.class);
-        when(processor.process(any(), eq(MediaContext.IDENTITY_PROFILE), any())).thenAnswer(invocation -> {
+        when(processor.process(any(), eq(MediaContext.IDENTITY_PROFILE), any(), any())).thenAnswer(invocation -> {
             if (stage == DelayedStage.CODEC) time.addAndGet(Duration.ofSeconds(10).toNanos());
             return new MediaImageProcessor.Processed("source", List.of(
                     new MediaImageProcessor.Representation("MASTER", new byte[]{1}, "image/png", 1, 1),
@@ -81,7 +81,7 @@ class MediaUploadCapacityTest {
         when(admission.reserve(1)).thenReturn(permit);
         doThrow(new IllegalStateException("plan failed")).when(admission).recordPlannedBlobs(eq(permit),anyList());
         var processor=mock(MediaImageProcessor.class);
-        when(processor.process(any(),eq(MediaContext.IDENTITY_PROFILE),any())).thenReturn(
+        when(processor.process(any(),eq(MediaContext.IDENTITY_PROFILE),any(),any())).thenReturn(
             new MediaImageProcessor.Processed("source",List.of(new MediaImageProcessor.Representation("MASTER",new byte[]{1,2,3},"image/png",1,1))));
         var blobs=mock(BlobCatalog.class);
         var policy=new StorageConsumerPolicy() {

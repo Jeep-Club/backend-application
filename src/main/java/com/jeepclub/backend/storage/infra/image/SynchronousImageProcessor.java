@@ -48,14 +48,20 @@ public final class SynchronousImageProcessor {
     }
     public Result process(byte[] input, Category category, List<Preset> presets,
                           java.util.Map<String, com.jeepclub.backend.storage.core.repository.MediaImageProcessor.Crop> crops) throws IOException {
+        return process(input, category, presets, crops, () -> {});
+    }
+    Result process(byte[] input, Category category, List<Preset> presets,
+                   Map<String, MediaImageProcessor.Crop> crops, Runnable checkDeadline) throws IOException {
         if (input == null || input.length == 0 || input.length > MAX_INPUT || category == null || presets == null || presets.size() > 16
                 || crops == null || presets.stream().map(Preset::code).distinct().count() != presets.size()
                 || !presets.stream().map(Preset::code).collect(java.util.stream.Collectors.toSet()).containsAll(crops.keySet()))
             throw new IllegalArgumentException("Invalid upload");
         if (!capacity.tryAcquire()) throw new IllegalStateException("Image processing capacity exceeded");
         try {
+            checkDeadline.run();
             byte[] snapshot = input.clone();
             BufferedImage decoded = decode(snapshot);
+            checkDeadline.run();
             int orientation = ExifOrientation.read(snapshot);
             BufferedImage source = ExifOrientation.apply(decoded, orientation);
             int limit = (category == Category.OTHER ? 5 : 2) * 1024 * 1024;
@@ -63,11 +69,13 @@ public final class SynchronousImageProcessor {
                     ? (isWebp(snapshot) ? sanitizeWebpWithoutRecompression(snapshot)
                         : isJpeg(snapshot) ? sanitizeJpegWithoutRecompression(snapshot,source) : sanitizePngWithoutRecompression(snapshot)) : null;
             if (preserved != null && preserved.length > limit) preserved = null;
+            checkDeadline.run();
             BufferedImage masterImage = resize(source, 4096, 4096);
             int baselineWidth = masterImage.getWidth();
             int baselineHeight = masterImage.getHeight();
             byte[] masterBytes = preserved != null ? preserved : encode(masterImage);
             while(masterBytes.length > limit && Math.max(masterImage.getWidth(),masterImage.getHeight()) > 256) {
+                checkDeadline.run();
                 masterImage=resize(source,Math.max(1,masterImage.getWidth()*3/4),Math.max(1,masterImage.getHeight()*3/4));
                 masterBytes=encode(masterImage);
             }
@@ -79,10 +87,12 @@ public final class SynchronousImageProcessor {
                     : (masterImage.getColorModel().hasAlpha() ? "image/png" : "image/jpeg");
             Image master = image("MASTER", masterImage, masterBytes, mime);
             // Derivatives use the actual persisted, sanitized MASTER, not a parallel source image.
+            checkDeadline.run();
             masterImage = decode(masterBytes);
             var variants = new java.util.ArrayList<Image>();
             long derivedPixels=0,totalBytes=masterBytes.length;
             for (Preset preset : presets) {
+                checkDeadline.run();
                 Crop selected=preset.crop();
                 var normalized = crops.get(preset.code());
                 if (normalized != null) {
@@ -96,11 +106,13 @@ public final class SynchronousImageProcessor {
                 BufferedImage resized = resize(cropped, preset.maxWidth(), preset.maxHeight());
                 derivedPixels+=(long)resized.getWidth()*resized.getHeight();
                 if(derivedPixels>20_000_000L) throw new IllegalArgumentException("Variant pixel budget exceeded");
+                checkDeadline.run();
                 var presentation=encodePresentation(resized);
                 totalBytes+=presentation.bytes().length;
                 if(totalBytes>20L*1024*1024) throw new IllegalArgumentException("Variant byte budget exceeded");
                 variants.add(image(preset.code(), resized, presentation.bytes(), presentation.mime()));
             }
+            checkDeadline.run();
             return new Result(hash(snapshot), master, List.copyOf(variants));
         } finally { capacity.release(); }
     }
