@@ -22,6 +22,7 @@ import org.springframework.stereotype.Repository;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -67,6 +68,15 @@ public class AdminUserJpaQueryRepository {
                 .map(tuple -> toResult(tuple, fields));
     }
 
+    public long countByIds(Collection<Long> userIds) {
+        if (userIds == null || userIds.isEmpty()) {
+            return 0L;
+        }
+        return entityManager.createQuery("select count(u.id) from UserEntity u where u.id in :ids", Long.class)
+                .setParameter("ids", userIds)
+                .getSingleResult();
+    }
+
     private List<Selection<?>> selections(Root<UserEntity> user, Set<AdminUserField> fields) {
         List<Selection<?>> result = new ArrayList<>();
         Set<AdminUserField> persisted = java.util.EnumSet.copyOf(fields);
@@ -87,6 +97,8 @@ public class AdminUserJpaQueryRepository {
         if (filter.membershipNumber() != null) result.add(filter.membershipIdentityId() == null
                 ? cb.disjunction() : cb.equal(user.get("id"), filter.membershipIdentityId()));
         if (filter.id() != null) result.add(cb.equal(user.get("id"), filter.id()));
+        if (filter.ids() != null) result.add(filter.ids().isEmpty()
+                ? cb.disjunction() : user.get("id").in(filter.ids()));
         if (filter.name() != null) result.add(cb.like(cb.lower(user.get("name")), like(filter.name()), '!'));
         if (filter.birthDate() != null) result.add(cb.equal(user.get("birthDate"), filter.birthDate()));
         if (filter.email() != null) result.add(cb.like(cb.lower(user.get("email")), like(filter.email()), '!'));

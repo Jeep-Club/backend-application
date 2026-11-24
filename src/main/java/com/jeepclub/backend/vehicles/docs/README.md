@@ -360,8 +360,8 @@ ainda fizerem sentido, e devem seguir os
 [critérios globais](../../../../../../../../docs/architecture/feature-development-rules.md#testes-m%C3%ADnimos).
 
 
-## Exportações CSV/PDF — BACK-410
+## Exportações CSV/PDF — BACK-410 / BACK-600
 
-VEHICLES_VEHICLE_EXPORT permite ACTIVE, id, ownerId e histórico separado. SOFT_DELETED não é operacional. EventVehicleQuery.findDetailsBatch inclui ID, ownerId, apelido, placa, marca/modelo e capacidade, sem foto/storage, até 500 IDs.
+`VEHICLES_VEHICLE_EXPORT` permite exportar veículos `ACTIVE` por `id`, `vehicleIds` (repetível, máx. 200), `ownerId`, `ownerIds` (repetível, máx. 200) e `towing` (`true`/`false`/omitido), com histórico separado em `/vehicles/admin/history/export`. Listas são deduplicadas, usam `OR` interno e `AND` entre famílias de filtros; combinações ambíguas (`id`+`vehicleIds` ou `ownerId`+`ownerIds`) retornam `400`, e IDs ausentes retornam `404`. `SOFT_DELETED` não é operacional. `EventVehicleQuery.findDetailsBatch` inclui ID, `ownerId`, apelido, placa, marca/modelo e capacidade, sem foto/storage, até 500 IDs.
 
 Contratos HTTP, limites, segurança e evidências estão em `docs/exports/` na raiz do repositório. As exportações são administrativas, sem paginação HTTP, com auditoria síncrona e `Cache-Control: no-store`.

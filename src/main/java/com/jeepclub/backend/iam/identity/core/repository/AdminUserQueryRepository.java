@@ -6,6 +6,7 @@ import com.jeepclub.backend.iam.identity.core.application.result.admin.user.Admi
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
+import java.util.Collection;
 import java.util.Optional;
 import java.util.Set;
 
@@ -17,4 +18,6 @@ public interface AdminUserQueryRepository {
     );
 
     Optional<AdminUserResult> findById(Long userId);
+
+    long countByIds(Collection<Long> userIds);
 }

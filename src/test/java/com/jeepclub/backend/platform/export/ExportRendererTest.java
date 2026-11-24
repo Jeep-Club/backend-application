@@ -4,6 +4,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.apache.pdfbox.text.PDFTextStripper;
 import java.time.*;
 import java.util.*;
@@ -40,10 +42,51 @@ class ExportRendererTest {
         try(var pdf=Loader.loadPDF(file.bytes())) {
             assertThat(pdf.getNumberOfPages()).isGreaterThan(1);
             assertThat(pdf.getDocumentInformation().getTitle()).isEqualTo("Relatório de teste");
-            String text=new PDFTextStripper().getText(pdf);
+            var stripper = new PDFTextStripper();
+            String text=stripper.getText(pdf);
             assertThat(text).contains("Descrição", "Situação: Ativo", "28/09/2026 09:00:00", "Página 2", "Informação clínica");
+            Set<org.apache.pdfbox.cos.COSBase> imageStreams = new HashSet<>();
+            for (int pageNumber = 1; pageNumber <= pdf.getNumberOfPages(); pageNumber++) {
+                PDPage page = pdf.getPage(pageNumber - 1);
+                List<PDImageXObject> images = pageImages(page);
+                assertThat(images).hasSize(1);
+                assertThat(images.get(0).getWidth()).isEqualTo(256);
+                assertThat(images.get(0).getHeight()).isEqualTo(246);
+                imageStreams.add(images.get(0).getCOSObject());
+                stripper.setStartPage(pageNumber);
+                stripper.setEndPage(pageNumber);
+                assertThat(stripper.getText(pdf)).contains("JEEP CLUB | Relatório de teste", "Gerado em 28/09/2026 09:00:00", "Página " + pageNumber);
+            }
+            assertThat(imageStreams).hasSize(1);
         }
         assertThat(ExportDownload.response(file).getHeaders().getFirst("Content-Type")).isEqualTo("application/pdf");
+    }
+
+    @Test void pdfLongTitleWrapsWithoutBreakingInstitutionalSealOrCsv() throws Exception {
+        String longTitle = "Relatório administrativo consolidado de veículos e associados com cabeçalho extenso";
+        var doc = new ExportDocument("titulo-extenso", longTitle, List.of("Campo"), List.of(),
+                sink -> sink.accept(ExportRow.of("Valor legível")));
+        var pdfFile = renderer.render(doc, ExportFormat.PDF);
+        try (var pdf = Loader.loadPDF(pdfFile.bytes())) {
+            assertThat(pdf.getNumberOfPages()).isEqualTo(1);
+            assertThat(pageImages(pdf.getPage(0))).hasSize(1);
+            String text = new PDFTextStripper().getText(pdf).replaceAll("\\s+", " ");
+            assertThat(text).contains("JEEP CLUB |", "Gerado em 28/09/2026 09:00:00", "Campo", "Valor legível", "Página 1");
+        }
+        var csvFile = renderer.render(doc, ExportFormat.CSV);
+        assertThat(new String(csvFile.bytes(), StandardCharsets.UTF_8))
+                .isEqualTo("\uFEFF\"Campo\"\r\n\"Valor legível\"\r\n");
+    }
+
+    private static List<PDImageXObject> pageImages(PDPage page) throws Exception {
+        List<PDImageXObject> images = new ArrayList<>();
+        for (var name : page.getResources().getXObjectNames()) {
+            var xObject = page.getResources().getXObject(name);
+            if (xObject instanceof PDImageXObject image) {
+                images.add(image);
+            }
+        }
+        return images;
     }
     @Test void rowLimitFailsWithoutPartialDownload() {
         var limited=new DefaultExportRenderer(clock,1,1,16777216);

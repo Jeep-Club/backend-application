@@ -4,6 +4,7 @@ import com.jeepclub.backend.iam.identity.api.module.UserStatus;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 
 public record AdminUserFilter(
         Long id,
@@ -21,15 +22,27 @@ public record AdminUserFilter(
         String query,
         String membershipNumber,
         Long membershipIdentityId,
-        Long queryMembershipIdentityId
+        Long queryMembershipIdentityId,
+        List<Long> ids
 ) {
     public AdminUserFilter(Long id, String name, LocalDate birthDate, String email, String cpf, String rg,
             String phoneNumber, UserStatus status, Instant createdFrom, Instant createdTo,
             Instant updatedFrom, Instant updatedTo, String query) {
-        this(id,name,birthDate,email,cpf,rg,phoneNumber,status,createdFrom,createdTo,updatedFrom,updatedTo,query,null,null,null);
+        this(id,name,birthDate,email,cpf,rg,phoneNumber,status,createdFrom,createdTo,updatedFrom,updatedTo,query,null,null,null,null);
+    }
+    public AdminUserFilter(Long id, String name, LocalDate birthDate, String email, String cpf, String rg,
+            String phoneNumber, UserStatus status, Instant createdFrom, Instant createdTo,
+            Instant updatedFrom, Instant updatedTo, String query,
+            String membershipNumber, Long membershipIdentityId, Long queryMembershipIdentityId) {
+        this(id,name,birthDate,email,cpf,rg,phoneNumber,status,createdFrom,createdTo,updatedFrom,updatedTo,query,membershipNumber,membershipIdentityId,queryMembershipIdentityId,null);
     }
     public AdminUserFilter resolvedMembership(Long exactId, Long queryId) {
         return new AdminUserFilter(id,name,birthDate,email,cpf,rg,phoneNumber,status,createdFrom,createdTo,
-                updatedFrom,updatedTo,query,membershipNumber,exactId,queryId);
+                updatedFrom,updatedTo,query,membershipNumber,exactId,queryId,ids);
+    }
+    public AdminUserFilter withIds(List<Long> ids) {
+        return new AdminUserFilter(id,name,birthDate,email,cpf,rg,phoneNumber,status,createdFrom,createdTo,
+                updatedFrom,updatedTo,query,membershipNumber,membershipIdentityId,queryMembershipIdentityId,
+                ids == null ? null : List.copyOf(ids));
     }
 }

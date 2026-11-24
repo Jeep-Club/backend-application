@@ -66,7 +66,11 @@ Arguments.of("/billing/admin/refunds/export","BILLING_EXPORT"));}
                 .andReturn().getResponse();
             assertThat(response.getHeader("Content-Disposition")).startsWith("attachment;");
             assertThat(response.getContentType()).startsWith(format.equals("CSV")?"text/csv":"application/pdf");
-            if(format.equals("PDF"))try(var pdf=org.apache.pdfbox.Loader.loadPDF(response.getContentAsByteArray())){assertThat(pdf.getNumberOfPages()).isPositive();}
+            if(format.equals("PDF"))try(var pdf=org.apache.pdfbox.Loader.loadPDF(response.getContentAsByteArray())){
+                assertThat(pdf.getNumberOfPages()).isPositive();
+                assertThat(new org.apache.pdfbox.text.PDFTextStripper().getText(pdf)).contains("JEEP CLUB |");
+                assertThat(hasInstitutionalSeal(pdf)).isTrue();
+            }
             else assertThat(response.getContentAsString(java.nio.charset.StandardCharsets.UTF_8)).startsWith("\uFEFF").doesNotContain("passwordHash","tokenHash","storageKey");
         }
     }
@@ -102,6 +106,90 @@ Arguments.of("/billing/admin/refunds/export","BILLING_EXPORT"));}
         user("Outro cadastro","11144477735");
         String result=csv("/identity/admin/users/export","IDENTITY_USER_EXPORT","id",id(u).toString());
         assertThat(result).contains("Titular Exportado","52998224725","Possui foto","Sim").doesNotContain("Outro cadastro","SECRET_STORAGE_SENTINEL");
+    }
+    @Test @org.springframework.transaction.annotation.Transactional
+    void identityMultiSelectAndCombinedFiltersPreserveLayoutsWithoutNPlusOne()throws Exception {
+        var u1=user("Ana Selecionada","52998224725");
+        org.springframework.test.util.ReflectionTestUtils.setField(u1,"profilePhotoStorageKey","SECRET_STORAGE_SENTINEL");
+        var u2=user("Bruno Ignorado","11144477735");
+        var u3=user("Carla Selecionada","22233344455");
+        org.springframework.test.util.ReflectionTestUtils.setField(u3,"status",com.jeepclub.backend.iam.identity.api.module.UserStatus.INACTIVE);
+        em.flush();
+        seed("memberships.infra.persistence.entity.MemberEntity","identityUserId",id(u1),"membershipNumber","41","createdAt",FIXTURE_TIME,"updatedAt",FIXTURE_TIME);
+        seed("memberships.infra.persistence.entity.MemberEntity","identityUserId",id(u3),"membershipNumber","43","createdAt",FIXTURE_TIME,"updatedAt",FIXTURE_TIME);
+
+        for(String format:List.of("CSV","PDF")) {
+            // Non-contiguous IDs with duplicate across MEMBER and TECHNICAL layouts
+            String memberExport=download("/identity/admin/users/export","IDENTITY_USER_EXPORT",format,
+                "layout","MEMBER","ids",id(u1).toString(),"ids",id(u3).toString(),"ids",id(u1).toString());
+            assertThat(memberExport).contains("Ana Selecionada","Carla Selecionada","41","43","Matrícula","ID técnico")
+                .doesNotContain("Bruno Ignorado","SECRET_STORAGE_SENTINEL","passwordHash","tokenHash");
+            if(format.equals("CSV")) {
+                List<String> lines=memberExport.lines().toList();
+                assertThat(lines).hasSize(3);
+                assertThat(lines.get(0)).startsWith("\uFEFF\"Matrícula\";").endsWith("\"ID técnico\"");
+                assertThat(lines.get(1)).startsWith("\"41\";\"Ana Selecionada\"").endsWith("\""+id(u1)+"\"");
+            }
+
+            String technicalExport=download("/identity/admin/users/export","IDENTITY_USER_EXPORT",format,
+                "layout","TECHNICAL","ids",id(u1).toString(),"ids",id(u3).toString());
+            assertThat(technicalExport).contains("Ana Selecionada","Carla Selecionada","41","43")
+                .doesNotContain("Bruno Ignorado","SECRET_STORAGE_SENTINEL","ID técnico");
+            if(format.equals("CSV")) {
+                List<String> lines=technicalExport.lines().toList();
+                assertThat(lines).hasSize(3);
+                assertThat(lines.get(0)).startsWith("\uFEFF\"ID\";\"Matrícula\";");
+                assertThat(lines.get(1)).startsWith("\""+id(u1)+"\";\"41\";\"Ana Selecionada\"");
+            }
+
+            // Combined ids + cadastral filters (AND intersection)
+            String filtered=download("/identity/admin/users/export","IDENTITY_USER_EXPORT",format,
+                "ids",id(u1).toString(),"ids",id(u3).toString(),"status","ACTIVE","name","Selecionada","membershipNumber","00041");
+            assertThat(filtered).contains("Ana Selecionada","41").doesNotContain("Carla Selecionada","Bruno Ignorado");
+            if(format.equals("CSV"))assertThat(filtered.lines().count()).isEqualTo(2);
+
+            // Valid combination with 0 matches returns 200 empty export
+            String empty=download("/identity/admin/users/export","IDENTITY_USER_EXPORT",format,
+                "ids",id(u3).toString(),"status","ACTIVE");
+            assertThat(empty).doesNotContain("Ana Selecionada","Carla Selecionada","Bruno Ignorado");
+            if(format.equals("CSV"))assertThat(empty.lines().count()).isEqualTo(1);
+        }
+
+        // 404 Not Found for nonexistent ID alone or mixed with valid ID
+        auth("IDENTITY_USER_EXPORT");
+        mvc.perform(get("/identity/admin/users/export").param("ids","987654321").header("Authorization","Bearer export-test"))
+            .andExpect(status().isNotFound()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+        mvc.perform(get("/identity/admin/users/export").param("ids",id(u1).toString(),"987654321").header("Authorization","Bearer export-test"))
+            .andExpect(status().isNotFound()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+
+        // 400 Bad Request for id+ids, empty/non-positive/invalid/oversized lists
+        mvc.perform(get("/identity/admin/users/export").param("id",id(u1).toString()).param("ids",id(u1).toString()).header("Authorization","Bearer export-test"))
+            .andExpect(status().isBadRequest()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+        String[] oversized=java.util.stream.LongStream.rangeClosed(1,201).mapToObj(Long::toString).toArray(String[]::new);
+        for(String bad:List.of("","0","-1","abc"))
+            mvc.perform(get("/identity/admin/users/export").param("ids",bad).header("Authorization","Bearer export-test"))
+                .andExpect(status().isBadRequest()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+        mvc.perform(get("/identity/admin/users/export").param("ids",oversized).header("Authorization","Bearer export-test"))
+            .andExpect(status().isBadRequest()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+
+        // Bounded SQL across multiple chunks (> 200 users) without N+1
+        List<String> chunkIds=new ArrayList<>();
+        for(int i=0;i<200;i++) {
+            var batchUser=user("Lote Identidade "+i,String.format("90000000%03d",i));
+            chunkIds.add(id(batchUser).toString());
+        }
+        em.flush();em.clear();
+        var stats=em.getEntityManagerFactory().unwrap(org.hibernate.SessionFactory.class).getStatistics();
+        stats.setStatisticsEnabled(true);stats.clear();
+        try {
+            var request=get("/identity/admin/users/export").header("Authorization","Bearer export-test");
+            for(String cid:chunkIds) request.param("ids",cid);
+            String chunkCsv=mvc.perform(request).andExpect(status().isOk()).andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+            assertThat(chunkCsv.lines().count()).isEqualTo(201);
+            assertThat(stats.getPrepareStatementCount()).isLessThanOrEqualTo(8);
+        } finally {
+            stats.setStatisticsEnabled(false);
+        }
     }
     @Test @org.springframework.transaction.annotation.Transactional
     void toolsExportTraversesMultipleChunksAndCombinesOwnerNameStatus()throws Exception {
@@ -629,14 +717,21 @@ Arguments.of("/billing/admin/refunds/export","BILLING_EXPORT"));}
         for(String report:List.of("manifest","transport","financial","access","health-coverage","post-event"))for(String format:List.of("CSV","PDF")){
             auth("PUBLICATIONS_EXPORT");var response=mvc.perform(get("/admin/events/"+id(event)+"/reports/"+report+"/export").param("format",format).header("Authorization","Bearer export-test")).andExpect(status().isOk()).andReturn().getResponse();
             String text=response.getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
-            if(format.equals("PDF"))try(var pdf=org.apache.pdfbox.Loader.loadPDF(response.getContentAsByteArray())){text=new org.apache.pdfbox.text.PDFTextStripper().getText(pdf);}
+            if(format.equals("PDF"))try(var pdf=org.apache.pdfbox.Loader.loadPDF(response.getContentAsByteArray())){
+                assertThat(hasInstitutionalSeal(pdf)).isTrue();
+                text=new org.apache.pdfbox.text.PDFTextStripper().getText(pdf);
+                assertThat(text).contains("JEEP CLUB |");
+            }
             assertThat(text).doesNotContain("INDIVIDUAL_CLINICAL_SENTINEL");
             if(report.equals("access"))assertThat(text).contains("Participante confirmado").doesNotContain("Cobranças","Alergias","Validação");
             if(report.equals("post-event"))assertThat(text).contains("CONFIRMED","REJECTED");
         }
         auth("PUBLICATIONS_EVENT_HEALTH_EMERGENCY_READ");
         var response=mvc.perform(get("/admin/events/"+id(event)+"/health/USER/"+id(u)+"/export").header("Authorization","Bearer export-test")).andExpect(status().isOk()).andReturn().getResponse();
-        try(var pdf=org.apache.pdfbox.Loader.loadPDF(response.getContentAsByteArray())){assertThat(new org.apache.pdfbox.text.PDFTextStripper().getText(pdf)).contains("INDIVIDUAL_CLINICAL_SENTINEL","Participante confirmado");}
+        try(var pdf=org.apache.pdfbox.Loader.loadPDF(response.getContentAsByteArray())){
+            assertThat(hasInstitutionalSeal(pdf)).isTrue();
+            assertThat(new org.apache.pdfbox.text.PDFTextStripper().getText(pdf)).contains("JEEP CLUB |","INDIVIDUAL_CLINICAL_SENTINEL","Participante confirmado");
+        }
         assertThat(csv("/admin/events/export","PUBLICATIONS_EXPORT","id",id(event).toString())).contains("Encontro operacional","Sem regra financeira");
         for(int i=0;i<2001;i++) {
             var guest=new com.jeepclub.backend.publications.infra.persistence.entity.EventGuestRequestEntity();
@@ -647,5 +742,22 @@ Arguments.of("/billing/admin/refunds/export","BILLING_EXPORT"));}
         for(String format:List.of("CSV","PDF"))mvc.perform(get("/admin/events/"+id(event)+"/reports/manifest/export").param("format",format).header("Authorization","Bearer export-test"))
             .andExpect(status().isPayloadTooLarge()).andExpect(content().contentTypeCompatibleWith("application/problem+json"))
             .andExpect(header().doesNotExist("Content-Disposition"));
+    }
+
+    private static boolean hasInstitutionalSeal(org.apache.pdfbox.pdmodel.PDDocument pdf) throws Exception {
+        if (pdf.getNumberOfPages() == 0) return false;
+        for (int i = 0; i < pdf.getNumberOfPages(); i++) {
+            var resources = pdf.getPage(i).getResources();
+            boolean found = false;
+            for (var name : resources.getXObjectNames()) {
+                if (resources.getXObject(name) instanceof org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject img
+                        && img.getWidth() == 256 && img.getHeight() == 246) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return false;
+        }
+        return true;
     }
 }

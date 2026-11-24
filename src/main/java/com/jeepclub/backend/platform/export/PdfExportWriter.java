@@ -3,13 +3,21 @@ import com.jeepclub.backend.shared.export.*;
 import org.apache.pdfbox.pdmodel.*;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.font.PDType0Font;
+import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import java.io.*;
 import java.time.Instant;
 import java.util.*;
-/** A4 report with a repeated masthead and readable field/value tables, including multi-page fields. */
+/** A4 report with a repeated institutional masthead and readable field/value tables, including multi-page fields. */
 final class PdfExportWriter implements AutoCloseable {
+    private static final String SEAL_RESOURCE = "/exports/jeepclube-emblema.png";
+    private static final float MARGIN_X = 40f;
+    private static final float RIGHT_X = 555f;
+    private static final float SEAL_Y = 766f;
+    private static final float SEAL_HEIGHT = 36f;
+
     private final PDDocument pdf = new PDDocument();
     private final PDType0Font font;
+    private final PDImageXObject seal;
     private final ExportDocument document;
     private final Instant generated;
     private PDPageContentStream stream;
@@ -21,6 +29,7 @@ final class PdfExportWriter implements AutoCloseable {
         try (var input = PDType0Font.class.getResourceAsStream("/org/apache/pdfbox/resources/ttf/LiberationSans-Regular.ttf")) {
             font=PDType0Font.load(pdf,input);
         }
+        this.seal = loadSeal(pdf);
         pdf.getDocumentInformation().setTitle(document.title());
         pdf.getDocumentInformation().setCreator("Jeep Club");
         var date=GregorianCalendar.from(generated.atZone(java.time.ZoneOffset.UTC));
@@ -29,14 +38,36 @@ final class PdfExportWriter implements AutoCloseable {
         for (String filter : document.filters()) text("Filtro: " + filter, 10, 500);
         y-=12;
     }
+    private static PDImageXObject loadSeal(PDDocument pdf) throws IOException {
+        try (var input = PdfExportWriter.class.getResourceAsStream(SEAL_RESOURCE)) {
+            if (input == null) {
+                throw new IOException("Missing institutional PDF seal resource: " + SEAL_RESOURCE);
+            }
+            return PDImageXObject.createFromByteArray(pdf, input.readAllBytes(), "jeep-club-seal");
+        }
+    }
     private void page() throws IOException {
         if (pdf.getNumberOfPages()>=1000) throw new ExportException(ExportException.Reason.LIMIT);
         if(stream!=null) stream.close();
         var page=new PDPage(PDRectangle.A4); pdf.addPage(page);
-        stream=new PDPageContentStream(pdf,page); y=790;
-        draw("JEEP CLUB | " + document.title(),40,y,13); y-=20;
-        draw("Gerado em " + ExportValues.text(generated),40,y,9); y-=24;
-        draw("Página " + pdf.getNumberOfPages(),40,28,9);
+        stream=new PDPageContentStream(pdf,page);
+        float sealWidth = SEAL_HEIGHT * seal.getWidth() / (float) seal.getHeight();
+        stream.drawImage(seal, MARGIN_X, SEAL_Y, sealWidth, SEAL_HEIGHT);
+        float headerTextX = MARGIN_X + sealWidth + 10f;
+        int headerTextWidth = (int) Math.floor(RIGHT_X - headerTextX);
+        y = 789f;
+        for (String line : wrap("JEEP CLUB | " + document.title(), headerTextWidth, 13)) {
+            draw(line, headerTextX, y, 13);
+            y -= 17f;
+        }
+        draw("Gerado em " + ExportValues.text(generated), headerTextX, y, 9);
+        y = Math.min(y - 16f, SEAL_Y - 8f);
+        stream.setStrokingColor(0.75f);
+        stream.moveTo(MARGIN_X, y);
+        stream.lineTo(RIGHT_X, y);
+        stream.stroke();
+        y -= 16f;
+        draw("Página " + pdf.getNumberOfPages(), MARGIN_X, 28, 9);
     }
     void row(ExportRow row) throws IOException {
         if (row.group()!=null && !Objects.equals(group,row.group())) {

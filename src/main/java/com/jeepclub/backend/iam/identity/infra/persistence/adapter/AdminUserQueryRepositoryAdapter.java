@@ -11,6 +11,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Component;
 
+import java.util.Collection;
 import java.util.Optional;
 import java.util.Set;
 
@@ -34,5 +35,10 @@ public class AdminUserQueryRepositoryAdapter implements AdminUserQueryRepository
     @Override
     public Optional<AdminUserResult> findById(Long userId) {
         return jpaQueryRepository.findById(userId);
+    }
+
+    @Override
+    public long countByIds(Collection<Long> userIds) {
+        return jpaQueryRepository.countByIds(userIds);
     }
 }

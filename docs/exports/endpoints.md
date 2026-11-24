@@ -20,7 +20,7 @@ Todas as rotas são GET e administrativas. `format=CSV` (padrão) ou `PDF`, tamb
 | iam/authorization | `/authorization/admin/permissions/export` | `AUTHORIZATION_EXPORT` | format, id |
 | iam/authorization | `/authorization/admin/roles/export` | `AUTHORIZATION_EXPORT` | format, id, name, status |
 | iam/authorization | `/authorization/admin/users/export` | `AUTHORIZATION_EXPORT` | userId, format |
-| iam/identity | `/identity/admin/users/export` | `IDENTITY_USER_EXPORT` | format, layout=MEMBER/TECHNICAL, AdminUserFilterDTO incluindo matrícula vigente |
+| iam/identity | `/identity/admin/users/export` | `IDENTITY_USER_EXPORT` | format, layout=MEMBER/TECHNICAL, ids (repetível, máx. 200), AdminUserFilterDTO incluindo matrícula vigente |
 | memberships | `/admin/membership-applications/blocks/export` | `MEMBERSHIP_EXPORT` | format, id, from, to |
 | memberships | `/admin/membership-applications/export` | `MEMBERSHIP_EXPORT` | format, id, name, status, from, to |
 | publications | `/admin/events/{eventId}/reports/manifest/export` | `PUBLICATIONS_EXPORT` | eventId, format, status, type, withVehicle, view |
@@ -40,7 +40,7 @@ Todas as rotas são GET e administrativas. `format=CSV` (padrão) ou `PDF`, tamb
 | publications | `/admin/service-publication-change-requests/export` | `PUBLICATIONS_EXPORT` | format, id, status, from, to |
 | tools | `/admin/tools/export` | `TOOLS_TOOL_EXPORT` | format, id, userId, name, status |
 | tools | `/admin/tools/history/export` | `TOOLS_TOOL_EXPORT` | format |
-| vehicles | `/vehicles/admin/export` | `VEHICLES_VEHICLE_EXPORT` | format, id, ownerId |
+| vehicles | `/vehicles/admin/export` | `VEHICLES_VEHICLE_EXPORT` | format, id, vehicleIds, ownerId, ownerIds, towing |
 | vehicles | `/vehicles/admin/history/export` | `VEHICLES_VEHICLE_EXPORT` | format |
 
 Billing: id, userId, chargeDefinitionId, chargeCycleId, eventId, recurrence, year, month (exige year), status, paymentMethod, chargeStatus, effectiveStatus, dueFrom/dueTo e from/to. Filtros incompatíveis retornam 400. Definition não aceita período de ciclo; Cycle não aceita usuário; paymentMethod só pertence a pagamentos. Em pagamentos, from/to seleciona submittedAt; em refunds, requestedAt; demais produtos usam createdAt. dueFrom/dueTo e ano/mês usam vencimento do ciclo.
@@ -59,7 +59,7 @@ Nas cinco rotas de Billing, eventId é validado por EventChargeContext. Contexto
 
 O financeiro de Event apresenta inscrição, effectiveStatus da cobrança e status do pagamento em colunas independentes. A coluna Situação para participação usa a regra real de confirmação, inclusive o horário de submissão e cutoff. Obrigação satisfeita com PENDING_VALIDATION continua identificando a espera por validação. CANCELED não é sinônimo de PAID e inscrição CONFIRMED não oculta pendências. Regras opcionais são identificadas explicitamente.
 
-OpenAPI é verificado automaticamente nas 38 rotas: 31 cadastrais, seis relatórios e emergência individual. O teste exige permissions, media types exatos, string/binary, Content-Disposition, Cache-Control e respostas 400/401/403/404/413/500 em application/problem+json. Emergência declara somente application/pdf.
+OpenAPI é verificado automaticamente nas 38 rotas: 31 cadastrais, seis relatórios e emergência individual. O teste exige permissions, media types exatos, string/binary, Content-Disposition, Cache-Control e respostas 400/401/403/404/413/500 em application/problem+json. Emergência declara somente application/pdf. Todos os 38 endpoints PDF passam pelo renderizador compartilhado (`DefaultExportRenderer` / `PdfExportWriter`), que inclui o selo institucional empacotado (`src/main/resources/exports/jeepclube-emblema.png`) no cabeçalho de todas as páginas, sem alterar CSV, headers de segurança ou escopo de dados.
 
 
 ### Identificação cadastral de Identity — BACK-526
