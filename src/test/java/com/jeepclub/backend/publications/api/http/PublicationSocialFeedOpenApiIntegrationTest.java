@@ -6,6 +6,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import static org.hamcrest.Matchers.hasItems;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -41,7 +42,18 @@ class PublicationSocialFeedOpenApiIntegrationTest {
                 .andExpect(jsonPath("$['paths']['/events/{id}']['get']['x-required-permissions']").doesNotExist())
                 .andExpect(jsonPath("$['paths']['/services/{id}']['get']['x-required-permissions']").doesNotExist())
                 .andExpect(jsonPath("$['paths']['/publications/feed']['get']['x-requires-membership']").value(true))
+                .andExpect(jsonPath("$['paths']['/publications/feed']['get']['parameters'][*].name")
+                        .value(hasItems("type", "types", "authorUserId", "q", "publishedFrom", "publishedTo", "page", "size", "sort")))
                 .andExpect(jsonPath("$['paths']['/publications/feed']['get']['responses']['200']").exists())
+                .andExpect(jsonPath("$['components']['schemas']['Item']['properties']['authorName']['type']").value(hasItems("string", "null")))
+                .andExpect(jsonPath("$['components']['schemas']['Item']['properties']['authorProfilePhotoStorageKey']['type']").value(hasItems("string", "null")))
+                .andExpect(jsonPath("$['components']['schemas']['Item']['properties']['author']").exists())
+                .andExpect(jsonPath("$['components']['schemas']['Detail']['properties']['authorName']['type']").value(hasItems("string", "null")))
+                .andExpect(jsonPath("$['components']['schemas']['EventDetails']['properties']['participantsPreview']").exists())
+                .andExpect(jsonPath("$['components']['schemas']['EventDetails']['properties']['participants']").exists())
+                .andExpect(jsonPath("$['components']['schemas']['ParticipantPreview']['properties']['userId']").exists())
+                .andExpect(jsonPath("$['components']['schemas']['ParticipantPreview']['properties']['name']").exists())
+                .andExpect(jsonPath("$['components']['schemas']['ParticipantPreview']['properties']['profilePhotoStorageKey']['type']").value(hasItems("string", "null")))
                 .andExpect(jsonPath("$['components']['schemas']['CommentRequest']['properties']['text']['maxLength']").value(10000))
                 .andExpect(jsonPath("$['components']['schemas']['CommentRequest']['properties']['images']['maxItems']").value(10))
                 .andExpect(jsonPath("$['paths']['/publications/{publicationId}/comments']['post']['responses']['201']").exists());

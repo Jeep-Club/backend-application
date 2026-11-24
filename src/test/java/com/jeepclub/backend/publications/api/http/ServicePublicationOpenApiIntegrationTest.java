@@ -6,6 +6,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import static org.hamcrest.Matchers.hasItems;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -41,6 +42,14 @@ class ServicePublicationOpenApiIntegrationTest {
                 .andExpect(jsonPath("$['paths']['/services/{id}']['get']['x-required-permissions']").doesNotExist())
                 .andExpect(jsonPath("$['paths']['/services/{id}']['delete']['x-required-permissions'][0]")
                         .value("PUBLICATIONS_SERVICE_DELETE"))
+                .andExpect(jsonPath("$['paths']['/admin/services']['get']['x-required-permissions'][0]")
+                        .value("PUBLICATIONS_SERVICE_ADMIN_READ"))
+                .andExpect(jsonPath("$['paths']['/admin/services']['get']['parameters'][*].name")
+                        .value(hasItems("status", "q", "from", "to", "publishedFrom", "publishedTo", "page", "size", "sort")))
+                .andExpect(jsonPath("$['paths']['/admin/services']['get']['responses']['200']['content']['application/json']['schema']['$ref']")
+                        .value("#/components/schemas/PageResponseServicePublicationResponseDTO"))
+                .andExpect(jsonPath("$['paths']['/admin/services']['get']['responses']['400']['content']['application/problem+json']['schema']['$ref']")
+                        .value("#/components/schemas/ApiErrorResponse"))
                 .andExpect(jsonPath("$['paths']['/admin/services/{id}']['get']['x-required-permissions'][0]")
                         .value("PUBLICATIONS_SERVICE_ADMIN_READ"))
                 .andExpect(jsonPath("$['paths']['/admin/services/{id}']['delete']['x-required-permissions'][0]")
@@ -56,6 +65,20 @@ class ServicePublicationOpenApiIntegrationTest {
                 .andExpect(jsonPath("$['paths']['/services/{id}']['delete']['responses']['204']").exists())
                 .andExpect(jsonPath("$['components']['schemas']['CreateServicePublicationRequestDTO']['properties']['images']['minItems']").value(1))
                 .andExpect(jsonPath("$['components']['schemas']['CreateServicePublicationRequestDTO']['properties']['images']['maxItems']").value(5))
+                .andExpect(jsonPath("$['components']['schemas']['ServicePublicationResponseDTO']['properties']['authorName']['type']")
+                        .value(hasItems("string", "null")))
+                .andExpect(jsonPath("$['components']['schemas']['AdminServicePublicationRequestResponseDTO']['properties']['requestedByUserName']['type']")
+                        .value(hasItems("string", "null")))
+                .andExpect(jsonPath("$['components']['schemas']['AdminServicePublicationRequestResponseDTO']['properties']['reviewedByUserName']['type']")
+                        .value(hasItems("string", "null")))
+                .andExpect(jsonPath("$['components']['schemas']['AdminServicePublicationRequestResponseDTO']['properties']['createdPublicationTitle']['type']")
+                        .value(hasItems("string", "null")))
+                .andExpect(jsonPath("$['components']['schemas']['AdminServicePublicationChangeRequestResponseDTO']['properties']['servicePublicationTitle']['type']")
+                        .value(hasItems("string", "null")))
+                .andExpect(jsonPath("$['components']['schemas']['AdminServicePublicationChangeRequestResponseDTO']['properties']['requestedByUserName']['type']")
+                        .value(hasItems("string", "null")))
+                .andExpect(jsonPath("$['components']['schemas']['AdminServicePublicationChangeRequestResponseDTO']['properties']['reviewedByUserName']['type']")
+                        .value(hasItems("string", "null")))
                 .andExpect(jsonPath("$['paths']['/admin/service-publication-requests']['get']['responses']['200']").exists())
                 .andExpect(jsonPath("$['paths']['/admin/service-publication-change-requests']['get']['responses']['200']").exists())
                 .andExpect(jsonPath("$['paths']['/admin/service-publication-requests']['get']['responses']['200']['content']['application/json']['schema']['$ref']")

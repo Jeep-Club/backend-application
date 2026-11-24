@@ -223,8 +223,52 @@ permanecer um tipo concreto próprio para evoluir independentemente.
 A BACK-398 expõe uma API administrativa própria de Notice. Cada ação tem authority
 específica de Notice; o controller usa `@PreAuthorize` para enforcement e
 `@RequiredPermission` para OpenAPI. Como a superfície é administrativa e permissionada,
-não exige `@RequiresMembership`. A consulta administrativa por ID pode ler DRAFT,
-PUBLISHED e ARCHIVED; não existe leitura pública ou listagem que antecipe o feed.
+não exige `@RequiresMembership`. `GET /admin/notices` e `GET /admin/notices/{id}` podem ler
+DRAFT, PUBLISHED e ARCHIVED; a listagem paginada aplica filtros opcionais de `status`,
+`priority` (`LOW`, `NORMAL`, `HIGH`, `URGENT`), `expired` (`true` para `validUntil < now`,
+`false` para não vencidos (incluindo agendados com início futuro e avisos sem vencimento), omitido para todos), busca literal `q` por
+título/conteúdo e intervalos `from`/`to` (`createdAt`) ou `publishedFrom`/`publishedTo`
+(`publishedAt`), com allowlist de ordenação (incluindo `priority`, `validFrom`, `validUntil`)
+e `id` como desempate determinístico. Quando o administrador possui `IDENTITY_USER_READ`,
+`authorName` é resolvido em lote para autores ativos (permanecendo `null` sem a permissão
+suplementar ou para usuário inativo/ausente).
+
+### Prioridade e validade temporal — BACK-724 / BACK-571
+
+Todo `Notice` possui prioridade editorial `NoticePriority` (`LOW`, `NORMAL`, `HIGH`, `URGENT`,
+com default `NORMAL` quando omitida na criação ou em registros legados) e limites temporais
+opcionais `validFrom` e `validUntil` (`Instant` UTC, inclusivos). Quando ambos os limites
+são informados, `validFrom <= validUntil` é obrigatório (`400 NOTICE_INVALID_REQUEST` se
+invertidos). No `PATCH /admin/notices/{id}`, omitir `priority`, `validFrom` ou `validUntil`
+preserva o valor atual; `null` explícito é inválido para `priority`, mas permitido em
+`validFrom` e `validUntil` para limpar o respectivo limite temporal.
+
+A expiração temporal (`now > validUntil`) e o agendamento futuro (`now < validFrom`) governam
+exclusivamente a **visibilidade para associados** em `GET /publications/feed` e
+`GET /publications/{publicationId}` (avaliada via `Clock`, com limites inclusivos
+`[validFrom, validUntil]`), **sem alterar o `PublicationStatus` editorial** (`DRAFT`,
+`PUBLISHED`, `ARCHIVED`) e sem criar estado técnico de publicação expirada. Avisos
+`PUBLISHED` fora da janela temporal ficam ocultos no feed (em SQL, antes da paginação e
+contagem) e retornam `404 PUBLICATION_NOT_FOUND` no detalhe do membro, mas continuam
+`PUBLISHED` e integralmente consultáveis/editáveis/arquiváveis na superfície administrativa
+(`/admin/notices`). Na listagem administrativa, `sort=priority,desc` aplica ordenação semântica
+por gravidade (`URGENT > HIGH > NORMAL > LOW`, e inverso em `asc`) com `id` como desempate
+determinístico; `expired=true` filtra exclusivamente `validUntil < now`, enquanto `expired=false`
+inclui avisos vigentes, sem `validUntil` e agendados com início futuro (`validFrom > now`).
+Quando visíveis no feed/detalhe, `NoticeDetails` projeta `priority`, `validFrom` e `validUntil`.
+O snapshot de hard delete (`publication_notice_history`) preserva `priority`, `valid_from` e
+`valid_until`.
+
+**Estratégia de recuperação da migration `V17__notice_priority_and_validity.sql` (MySQL 8):**
+a `V17` executa dois `ALTER TABLE` aditivos (`publication_notices` e `publication_notice_history`)
+com `VARCHAR(20) NOT NULL DEFAULT 'NORMAL'`, `DATETIME(6) NULL` e constraints `CHECK`. Como DDL
+em MySQL dispara commits implícitos (não transacionais), uma falha intermediária pode deixar a
+primeira tabela alterada e a segunda pendente. Em caso de falha: (1) não executar `flyway repair`
+para mascarar divergência nem editar a `V17` após publicação; (2) preferencialmente restaurar o
+snapshot pré-deploy conforme `docs/database/06-vps-runbook.md`; (3) alternativamente, auditar
+`information_schema.COLUMNS` e `information_schema.TABLE_CONSTRAINTS` em ambas as tabelas,
+validar a reconciliação em cópia descartável e, se necessário ajuste físico posterior, criar nova
+migration aditiva versionada.
 
 Na criação, o `authorUserId` vem de `UserPrincipal.userId`, e o domínio cria o Notice em
 DRAFT. O cliente envia apenas título, conteúdo e galeria; estado e timestamps pertencem
@@ -490,8 +534,19 @@ ServicePublication não cria `ChargeDefinition`, `MemberCharge`, `MemberPayment`
 checkout, comissão ou qualquer fluxo financeiro interno.
 
 Os contratos de HTTP, permissions, paginação e erros estão nos controllers/DTOs OpenAPI.
-As listagens administrativas paginadas aceitam filtro opcional por status e retornam
-`PageResponse<T>`. Billing não participa da request, aprovação ou alteração.
+`GET /admin/services` (`PUBLICATIONS_SERVICE_ADMIN_READ`) lista serviços `PUBLISHED` e
+`ARCHIVED` com paginação SQL, busca literal `q` por título/conteúdo, intervalos `from`/`to`
+e `publishedFrom`/`publishedTo`, allowlist de ordenação com `id` de desempate e rejeição
+`400` para `status=DRAFT`. As respostas administrativas de `Notice`, `ServicePublication`,
+`ServicePublicationRequest` e `ServicePublicationChangeRequest` resolvem nomes atuais de
+autores/revisores ativos em lote via `UserQuery.findByIds` somente quando o administrador
+possui `IDENTITY_USER_READ` (`null` caso contrário, sem `403` adicional e sem expor
+`authorName` em `GET /services/{id}`). Pedidos de criação aprovados expõem
+`createdPublicationTitle` e propostas de alteração expõem `servicePublicationTitle` (distinto
+de `proposedTitle`) em lote somente quando o administrador possui
+`PUBLICATIONS_SERVICE_ADMIN_READ`, retornando `null` sem `403` adicional quando a permissão
+suplementar está ausente ou quando o serviço foi excluído. Billing
+não participa da request, aprovação ou alteração.
 
 ## Permissions
 
@@ -659,15 +714,40 @@ Não existe item de Publication genérica.
 apenas Services materializados após aprovação participam da consulta, sempre
 com a última versão aprovada enquanto houver proposta pendente.
 
-`GET /publications/feed` retorna `PageResponse` de Notice, Event e Service publicados,
-ordenados por `publishedAt DESC, id DESC`. Aceita `type=NOTICE|EVENT|SERVICE` e período
-inclusivo `publishedFrom`/`publishedTo`. Rascunhos e arquivados não aparecem. Event
-`FINISHED` continua visível se a Publication permanecer `PUBLISHED`. O item contém
-`authorUserId`, campos editoriais, imagem marcada `primary`, resumo social e `details`
-específico do tipo. `GET /publications/{publicationId}` retorna galeria completa na
-ordem persistida e os mesmos dados públicos, sem DTO administrativo ou dados de
-inscrição, cobrança, saúde ou guest. O feed usa consultas agrupadas de likes/comments,
-consulta de likedByMe por conjunto de IDs e leitura em lote das imagens.
+`GET /publications/feed` retorna `PageResponse` de Notice, Event e Service publicados
+(respeitando também a janela temporal de `Notice`), ordenados por `publishedAt DESC, id DESC`
+como default. Aceita filtro de tipo único (`type=NOTICE|EVENT|SERVICE`) ou múltiplos tipos
+(`types=NOTICE,EVENT,SERVICE`; informar `type` e `types` simultaneamente retorna `400
+PUBLICATION_FEED_INVALID`), filtro por autor (`authorUserId`), busca textual literal
+case-insensitive em título/conteúdo (`q` ou `search`, escape `!` para `%`, `_`, `!`, máx.
+200 caracteres), período inclusivo `publishedFrom`/`publishedTo` e ordenação por allowlist
+(`publishedAt`, `createdAt`, `updatedAt`, `title`, `id`) com `id` como desempate determinístico.
+Rascunhos e arquivados não aparecem. Event `FINISHED` continua visível se a Publication
+permanecer `PUBLISHED`.
+
+### Autoria humana e prévia de inscritos no feed — BACK-715 (`BACK-564`, `BACK-565`, `BACK-569`)
+
+O item do feed e o detalhe (`GET /publications/{publicationId}`) preservam `authorUserId` e
+expõem a representação mínima segura do autor ativo (`authorName`, `authorProfilePhotoStorageKey`
+e `author: {userId, name, profilePhotoStorageKey}`), sem expor CPF, RG, e-mail, telefone ou
+dados administrativos. Autores inativos, arquivados ou ausentes recebem fallback seguro (`null`).
+Em `EventDetails`, além de `registrationCount` (contagem de inscrições `CONFIRMED`, independente
+do limite da prévia e excluindo `PENDING_PAYMENT` e `CANCELLED`), o contrato expõe até 5
+titulares confirmados ativos em ordem de inscrição em `participantsPreview` (e no alias de
+compatibilidade `participants`), cada item com `{userId, name, profilePhotoStorageKey}`, sem
+dependentes, convidados, dados financeiros ou de saúde. A consulta inicial de
+`event_registrations` (`confirmedSummaries`) agrega contagem e janela inicial de 25 candidatos
+por evento em uma única query por página; quando eventos da página possuem inscritos iniciais
+inativos/arquivados e ainda não atingiram 5 participantes ativos, a complementação executa
+rodadas em lote (`confirmedUserIdWindow`, 25 candidatos adicionais por evento/rodada, sem
+`COUNT(*)` e sem loop individual por evento) apenas para os eventos ainda incompletos até
+atingir 5 ativos ou esgotar os confirmados. A resolução em Identity usa `UserQuery.findByIds`
+em lotes de até 500 IDs distintos após a paginação, memorizando no escopo da requisição tanto
+usuários ativos quanto inativos/ausentes para evitar consultas repetidas entre eventos e
+rodadas (sem N+1). As chaves `profilePhotoStorageKey` pertencem ao namespace autenticado
+`images/...` (validadas por `ImageReference`, nunca `private-images/...`) e são servidas por
+`GET /media/images?key=...` apenas a usuários autenticados.
+Autoria de comentários permanece isolada na task `BACK-622`.
 
 ## Interações sociais
 

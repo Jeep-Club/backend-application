@@ -21,6 +21,27 @@ import static org.assertj.core.api.Assertions.*;
 /** Runs only with -Pmysql-migrations; missing Docker is a FAILURE, never a skip. */
 @Testcontainers
 class MySqlMigrationIT {
+    @Test void noticePriorityAndValidityColumnsPreserveLegacyRowsOnUpgrade() throws Exception {
+        String db = database();
+        Flyway.configure().dataSource(url(db), MYSQL.getUsername(), MYSQL.getPassword())
+                .locations("classpath:db/migration").target("16").load().migrate();
+        try (var c = connection(db); var s = c.createStatement()) {
+            s.executeUpdate("INSERT INTO publications(id,author_user_id,created_at,updated_at,title,content,status) VALUES (911,7,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6),'Legacy Notice','Body','DRAFT')");
+            s.executeUpdate("INSERT INTO publication_notices(publication_id) VALUES (911)");
+            s.executeUpdate("INSERT INTO publication_history(id,publication_id,author_user_id,created_at,updated_at,deleted_at,deleted_by_user_id,title,content,status) VALUES (912,913,7,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6),UTC_TIMESTAMP(6),8,'Old Notice','Retained','DRAFT')");
+            s.executeUpdate("INSERT INTO publication_notice_history(history_id) VALUES (912)");
+        }
+        var before = rows(db, "SELECT publication_id FROM publication_notices WHERE publication_id=911");
+        var historyBefore = rows(db, "SELECT history_id FROM publication_notice_history WHERE history_id=912");
+        flyway(db).migrate();
+        assertThat(rows(db, "SELECT publication_id FROM publication_notices WHERE publication_id=911")).isEqualTo(before);
+        assertThat(rows(db, "SELECT history_id FROM publication_notice_history WHERE history_id=912")).isEqualTo(historyBefore);
+        assertThat(rows(db, "SELECT priority, valid_from, valid_until FROM publication_notices WHERE publication_id=911")).containsExactly("[NORMAL, null, null]");
+        assertThat(rows(db, "SELECT priority, valid_from, valid_until FROM publication_notice_history WHERE history_id=912")).containsExactly("[NORMAL, null, null]");
+        validateJpa(db);
+        assertThat(flyway(db).migrate().migrationsExecuted).isZero();
+    }
+
     @Test void eventEditorialColumnsPreserveLegacyRowsOnUpgrade() throws Exception {
         String db = database();
         Flyway.configure().dataSource(url(db), MYSQL.getUsername(), MYSQL.getPassword())
@@ -366,6 +387,7 @@ class MySqlMigrationIT {
         rejectionNotificationPhysicalConstraints(expected);
         retainedReferencePhysicalConstraints(expected);
         storagePhysicalConstraints(expected);
+        noticePriorityPhysicalConstraints(expected);
         assertThat(snapshot(fresh)).containsExactlyElementsOf(snapshot(expected));
         assertThat(flyway(fresh).migrate().migrationsExecuted).isZero();
         assertThat(count(fresh, "flyway_schema_history")).isEqualTo(migrationVersions().size());
@@ -662,6 +684,14 @@ class MySqlMigrationIT {
                 st.execute("ALTER TABLE storage_media_variants MODIFY " + column.getKey() + " VARCHAR(" + column.getValue()
                         + ") CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL");
             }
+        }
+    }
+
+    // Flyway-only default and priority allowlist checks supplement the JPA fixture.
+    private static void noticePriorityPhysicalConstraints(String name) throws Exception {
+        try (var c = connection(name); var st = c.createStatement()) {
+            st.execute("ALTER TABLE publication_notices MODIFY priority VARCHAR(20) NOT NULL DEFAULT 'NORMAL', ADD CONSTRAINT ck_publication_notices_priority CHECK (priority IN ('LOW','NORMAL','HIGH','URGENT'))");
+            st.execute("ALTER TABLE publication_notice_history MODIFY priority VARCHAR(20) NOT NULL DEFAULT 'NORMAL', ADD CONSTRAINT ck_publication_notice_history_priority CHECK (priority IN ('LOW','NORMAL','HIGH','URGENT'))");
         }
     }
 

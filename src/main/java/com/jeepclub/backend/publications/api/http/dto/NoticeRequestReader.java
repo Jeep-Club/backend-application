@@ -12,7 +12,7 @@ import java.util.Set;
 @Component
 @RequiredArgsConstructor
 public class NoticeRequestReader {
-    private static final Set<String> FIELDS = Set.of("title", "content", "images");
+    private static final Set<String> FIELDS = Set.of("title", "content", "images", "priority", "validFrom", "validUntil");
     private static final Set<String> IMAGE_FIELDS = Set.of("storageKey", "position", "primary");
     private final ObjectMapper mapper;
     private final Validator validator;
@@ -36,10 +36,16 @@ public class NoticeRequestReader {
         for (String field : raw.propertyNames()) {
             if (!FIELDS.contains(field)) throw new MalformedNoticePayloadException("Unsupported notice field: " + field);
         }
-        for (String name : new String[]{"title", "content"}) {
+        for (String name : new String[]{"title", "content", "priority"}) {
             JsonNode value = raw.get(name);
             if (value != null && (!value.isString() || value.asString().isBlank())) {
                 throw new MalformedNoticePayloadException(name + " must be non-blank text.");
+            }
+        }
+        for (String name : new String[]{"validFrom", "validUntil"}) {
+            JsonNode value = raw.get(name);
+            if (value != null && !value.isNull() && (!value.isString() || value.asString().isBlank())) {
+                throw new MalformedNoticePayloadException(name + " must be a valid ISO-8601 instant or null.");
             }
         }
         JsonNode images = raw.get("images");

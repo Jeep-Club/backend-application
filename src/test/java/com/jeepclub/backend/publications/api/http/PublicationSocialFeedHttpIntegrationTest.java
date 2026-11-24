@@ -1,6 +1,8 @@
 package com.jeepclub.backend.publications.api.http;
 
 import com.jeepclub.backend.iam.authentication.core.application.service.security.AccessTokenAuthenticationService;
+import com.jeepclub.backend.iam.identity.api.module.UserStatus;
+import com.jeepclub.backend.iam.identity.infra.persistence.entity.UserEntity;
 import com.jeepclub.backend.memberships.api.module.*;
 import com.jeepclub.backend.platform.security.authorization.UserAuthoritiesProvider;
 import com.jeepclub.backend.platform.security.jwt.JwtAuthenticatedUser;
@@ -10,7 +12,9 @@ import com.jeepclub.backend.publications.core.domain.model.*;
 import com.jeepclub.backend.publications.core.repository.PublicationRepository;
 import com.jeepclub.backend.publications.core.repository.ServicePublicationRequestRepository;
 import com.jeepclub.backend.publications.core.application.service.AdminServicePublicationRequestService;
+import com.jeepclub.backend.publications.infra.persistence.entity.EventRegistrationEntity;
 import com.jeepclub.backend.shared.storage.exception.StorageObjectNotFoundException;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -23,19 +27,22 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.UUID;
+import static org.hamcrest.Matchers.*;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.*;
 import static org.springframework.http.HttpHeaders.AUTHORIZATION;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-@SpringBootTest
+@SpringBootTest(properties = "spring.jpa.properties.hibernate.session_factory.statement_inspector=com.jeepclub.backend.publications.api.http.PublicationSocialFeedHttpIntegrationTest$Sql")
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 class PublicationSocialFeedHttpIntegrationTest {
     private static final String KEY = "images/2026/09/27/550e8400-e29b-41d4-a716-446655440000.jpg";
     private static final Instant NOW = Instant.parse("2026-09-27T12:00:00Z");
     @Autowired private MockMvc mvc;
+    @Autowired private EntityManager em;
     @Autowired private PublicationRepository publications;
     @Autowired private ServicePublicationRequestRepository requests;
     @Autowired private AdminServicePublicationRequestService adminRequests;
@@ -210,11 +217,258 @@ class PublicationSocialFeedHttpIntegrationTest {
                 .andExpect(status().isOk()).andExpect(jsonPath("$.likeCount").value(0)).andExpect(jsonPath("$.commentCount").value(0));
     }
 
+    @Test @Transactional void feedHumanizesAuthorsEventParticipantsAndAppliesMultiTypeAuthorTextAndSortFilters() throws Exception {
+        long activeAuthor = persistUser("Autora Feed", "images/2026/09/27/550e8400-e29b-41d4-a716-446655440009.jpg", UserStatus.ACTIVE);
+        long inactiveAuthor = persistUser("Autor Inativo Feed", null, UserStatus.INACTIVE);
+
+        long[] confirmedMembers = new long[6];
+        for (int i = 0; i < 6; i++) {
+            confirmedMembers[i] = persistUser("Confirmado " + (i + 1), i % 2 == 0 ? KEY : null, UserStatus.ACTIVE);
+        }
+        long pendingMember = persistUser("Pendente Pagamento", KEY, UserStatus.ACTIVE);
+        long cancelledMember = persistUser("Cancelado Membro", KEY, UserStatus.ACTIVE);
+
+        var notice = Notice.create(activeAuthor, "Aviso %_! Trilha", "Conteúdo exclusivo", List.of(new PublicationImage(KEY, 0, true)), NOW);
+        notice.publish(NOW.plusSeconds(1));
+        long noticeId = publications.save(notice).getId();
+
+        var event = Event.create(inactiveAuthor, "Expedição Serra", "Evento 4x4", List.of(new PublicationImage(KEY, 0, true)), NOW.plusSeconds(3600), NOW);
+        event.publish(NOW.plusSeconds(2));
+        long eventId = publications.save(event).getId();
+
+        var request = requests.save(ServicePublicationRequest.create(activeAuthor, "Oficina %_! 4x4", "Serviço revisado",
+                new BigDecimal("180.00"), "11999990000", List.of(new PublicationImage(KEY, 0, true)), NOW));
+        long serviceId = adminRequests.approve(request.getId(), activeAuthor).getCreatedPublicationId();
+
+        // Register 6 CONFIRMED, 1 PENDING_PAYMENT, 1 CANCELLED on event
+        for (long memberId : confirmedMembers) {
+            persistRegistration(eventId, memberId, "CONFIRMED");
+        }
+        persistRegistration(eventId, pendingMember, "PENDING_PAYMENT");
+        persistRegistration(eventId, cancelledMember, "CANCELLED");
+        em.flush();
+        em.clear();
+
+        when(membership.evaluate(anyLong())).thenReturn(MembershipAccessResult.ALLOWED);
+        authenticate(confirmedMembers[0]);
+
+        // 1. Multi-type filter + authorUserId + literal q search + sort
+        mvc.perform(get("/publications/feed")
+                        .header(AUTHORIZATION, "Bearer social-token")
+                        .param("types", "NOTICE,SERVICE")
+                        .param("authorUserId", Long.toString(activeAuthor))
+                        .param("q", "%_!")
+                        .param("sort", "title,asc"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(2))
+                .andExpect(jsonPath("$.content[0].id").value(noticeId))
+                .andExpect(jsonPath("$.content[0].authorName").value("Autora Feed"))
+                .andExpect(jsonPath("$.content[0].authorProfilePhotoStorageKey").value("images/2026/09/27/550e8400-e29b-41d4-a716-446655440009.jpg"))
+                .andExpect(jsonPath("$.content[0].author.userId").value(activeAuthor))
+                .andExpect(jsonPath("$.content[0].author.name").value("Autora Feed"))
+                .andExpect(jsonPath("$.content[0].author.cpf").doesNotExist())
+                .andExpect(jsonPath("$.content[1].id").value(serviceId));
+
+        // 2. Event in feed and detail: inactive author -> null fallback; 6 CONFIRMED -> registrationCount=6 and preview capped at 5
+        mvc.perform(get("/publications/feed")
+                        .header(AUTHORIZATION, "Bearer social-token")
+                        .param("type", "EVENT")
+                        .param("authorUserId", Long.toString(inactiveAuthor)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(1))
+                .andExpect(jsonPath("$.content[0].id").value(eventId))
+                .andExpect(jsonPath("$.content[0].authorUserId").value(inactiveAuthor))
+                .andExpect(jsonPath("$.content[0].authorName").value(nullValue()))
+                .andExpect(jsonPath("$.content[0].author").value(nullValue()))
+                .andExpect(jsonPath("$.content[0].details.registrationCount").value(6))
+                .andExpect(jsonPath("$.content[0].details.participantsPreview.length()").value(5))
+                .andExpect(jsonPath("$.content[0].details.participants.length()").value(5))
+                .andExpect(jsonPath("$.content[0].details.participantsPreview[0].userId").value(confirmedMembers[0]))
+                .andExpect(jsonPath("$.content[0].details.participantsPreview[0].name").value("Confirmado 1"))
+                .andExpect(jsonPath("$.content[0].details.participantsPreview[*].name", not(hasItem("Pendente Pagamento"))))
+                .andExpect(jsonPath("$.content[0].details.participantsPreview[*].name", not(hasItem("Cancelado Membro"))));
+
+        mvc.perform(get("/publications/{id}", eventId).header(AUTHORIZATION, "Bearer social-token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.authorName").value(nullValue()))
+                .andExpect(jsonPath("$.details.registrationCount").value(6))
+                .andExpect(jsonPath("$.details.participantsPreview.length()").value(5))
+                .andExpect(jsonPath("$.details.participants.length()").value(5));
+
+        // The same inclusive publication boundary must apply to the count on an empty page.
+        String noticePublishedAt = NOW.plusSeconds(1).toString();
+        mvc.perform(get("/publications/feed")
+                        .header(AUTHORIZATION, "Bearer social-token")
+                        .param("types", "NOTICE,EVENT,SERVICE")
+                        .param("authorUserId", Long.toString(activeAuthor))
+                        .param("q", "%_!")
+                        .param("publishedFrom", noticePublishedAt)
+                        .param("publishedTo", noticePublishedAt)
+                        .param("page", "5")
+                        .param("size", "2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(0))
+                .andExpect(jsonPath("$.totalElements").value(1))
+                .andExpect(jsonPath("$.totalPages").value(1));
+
+        // 4. Invalid filters and conflicts return 400 PUBLICATION_FEED_INVALID
+        mvc.perform(get("/publications/feed")
+                        .header(AUTHORIZATION, "Bearer social-token")
+                        .param("type", "NOTICE")
+                        .param("types", "EVENT"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("PUBLICATION_FEED_INVALID"));
+
+        for (String[] bad : new String[][]{
+                {"types", "INVALID"},
+                {"authorUserId", "0"},
+                {"sort", "amount,asc"},
+                {"size", "51"},
+                {"q", "x".repeat(201)}
+        }) {
+            mvc.perform(get("/publications/feed")
+                            .header(AUTHORIZATION, "Bearer social-token")
+                            .param(bad[0], bad[1]))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("PUBLICATION_FEED_INVALID"));
+        }
+    }
+
+    @Test @Transactional void feedBackfillsActiveParticipantsInBatchAcrossMultipleEventsWithoutNPlus1AndUpdatesAfterCancel() throws Exception {
+        long author = persistUser("Organizador Trilha", KEY, UserStatus.ACTIVE);
+        long[] inactiveUsers = new long[27];
+        for (int i = 0; i < 27; i++) {
+            inactiveUsers[i] = persistUser("Inativo " + (i + 1), null, UserStatus.INACTIVE);
+        }
+        long[] activeUsersA = new long[5];
+        for (int i = 0; i < 5; i++) {
+            activeUsersA[i] = persistUser("AtivoA " + (i + 1), i == 0 ? null : KEY, UserStatus.ACTIVE);
+        }
+        long[] activeUsersB = new long[5];
+        for (int i = 0; i < 5; i++) {
+            activeUsersB[i] = persistUser("AtivoB " + (i + 1), KEY, UserStatus.ACTIVE);
+        }
+
+        var eventA = Event.create(author, "Trilha Lote A", "Evento A", List.of(new PublicationImage(KEY, 0, true)), NOW.plusSeconds(3600), NOW);
+        eventA.publish(NOW.plusSeconds(3));
+        long eventAId = publications.save(eventA).getId();
+
+        var eventB = Event.create(author, "Trilha Lote B", "Evento B", List.of(new PublicationImage(KEY, 0, true)), NOW.plusSeconds(7200), NOW);
+        eventB.publish(NOW.plusSeconds(2));
+        long eventBId = publications.save(eventB).getId();
+
+        var eventEmpty = Event.create(author, "Trilha Sem Inscritos", "Evento C", List.of(new PublicationImage(KEY, 0, true)), NOW.plusSeconds(10800), NOW);
+        eventEmpty.publish(NOW.plusSeconds(1));
+        long eventEmptyId = publications.save(eventEmpty).getId();
+
+        // Both eventA and eventB have 27 leading INACTIVE confirmed registrants followed by 5 ACTIVE confirmed registrants
+        for (long inactiveId : inactiveUsers) {
+            persistRegistration(eventAId, inactiveId, "CONFIRMED");
+            persistRegistration(eventBId, inactiveId, "CONFIRMED");
+        }
+        EventRegistrationEntity firstActiveRegA = null;
+        for (int i = 0; i < activeUsersA.length; i++) {
+            EventRegistrationEntity reg = persistRegistration(eventAId, activeUsersA[i], "CONFIRMED");
+            if (i == 0) firstActiveRegA = reg;
+        }
+        for (long activeId : activeUsersB) {
+            persistRegistration(eventBId, activeId, "CONFIRMED");
+        }
+        em.flush();
+        em.clear();
+
+        when(membership.evaluate(anyLong())).thenReturn(MembershipAccessResult.ALLOWED);
+        authenticate(activeUsersA[0]);
+
+        Sql.statements.get().clear();
+        mvc.perform(get("/publications/feed")
+                        .header(AUTHORIZATION, "Bearer social-token")
+                        .param("type", "EVENT"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(3))
+                .andExpect(jsonPath("$.content[0].id").value(eventAId))
+                .andExpect(jsonPath("$.content[0].details.registrationCount").value(32))
+                .andExpect(jsonPath("$.content[0].details.participantsPreview.length()").value(5))
+                .andExpect(jsonPath("$.content[0].details.participantsPreview[0].userId").value(activeUsersA[0]))
+                .andExpect(jsonPath("$.content[0].details.participantsPreview[0].profilePhotoStorageKey").value(nullValue()))
+                .andExpect(jsonPath("$.content[0].details.participantsPreview[4].userId").value(activeUsersA[4]))
+                .andExpect(jsonPath("$.content[1].id").value(eventBId))
+                .andExpect(jsonPath("$.content[1].details.registrationCount").value(32))
+                .andExpect(jsonPath("$.content[1].details.participantsPreview.length()").value(5))
+                .andExpect(jsonPath("$.content[1].details.participantsPreview[0].userId").value(activeUsersB[0]))
+                .andExpect(jsonPath("$.content[2].id").value(eventEmptyId))
+                .andExpect(jsonPath("$.content[2].details.registrationCount").value(0))
+                .andExpect(jsonPath("$.content[2].details.participantsPreview.length()").value(0));
+
+        // Prove zero N+1: strictly 2 SQL queries on event_registrations (1 confirmedSummaries + 1 batch confirmedUserIdWindow for both events)
+        List<String> regQueries = Sql.statements.get().stream()
+                .filter(sql -> sql.toLowerCase().contains("event_registrations"))
+                .toList();
+        org.assertj.core.api.Assertions.assertThat(regQueries).hasSize(2);
+        // Backfill query has NO count(*)
+        org.assertj.core.api.Assertions.assertThat(regQueries.get(1).toLowerCase()).doesNotContain("count(");
+
+        // Cancel first active registration on eventA -> registrationCount drops 32 -> 31 and preview updates consistently in feed & detail
+        EventRegistrationEntity managed = em.find(EventRegistrationEntity.class, firstActiveRegA.getId());
+        managed.setStatus("CANCELLED");
+        managed.setCancelledAt(NOW.plusSeconds(10));
+        em.flush();
+        em.clear();
+
+        mvc.perform(get("/publications/{id}", eventAId).header(AUTHORIZATION, "Bearer social-token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.details.registrationCount").value(31))
+                .andExpect(jsonPath("$.details.participantsPreview.length()").value(4))
+                .andExpect(jsonPath("$.details.participantsPreview[0].userId").value(activeUsersA[1]));
+    }
+
+    private long persistUser(String name, String photoKey, UserStatus status) {
+        var user = new UserEntity();
+        user.setName(name);
+        user.setCpf(String.format("%011d", Math.abs(UUID.randomUUID().getMostSignificantBits() % 100000000000L)));
+        user.setProfilePhotoStorageKey(photoKey);
+        user.setStatus(status);
+        Instant createdAt = Instant.parse("2026-06-30T12:00:00Z");
+        user.setCreatedAt(createdAt);
+        if (status == UserStatus.INACTIVE) {
+            Instant disabledAt = createdAt.plusSeconds(60);
+            user.setDisabledAt(disabledAt);
+            user.setUpdatedAt(disabledAt);
+        }
+        em.persist(user);
+        em.flush();
+        return user.getId();
+    }
+
+    private EventRegistrationEntity persistRegistration(long eventId, long userId, String status) {
+        var reg = new EventRegistrationEntity();
+        reg.setEventId(eventId);
+        reg.setUserId(userId);
+        reg.setStatus(status);
+        reg.setCreatedAt(NOW);
+        if ("CONFIRMED".equals(status)) reg.setConfirmedAt(NOW);
+        if ("CANCELLED".equals(status)) reg.setCancelledAt(NOW);
+        em.persist(reg);
+        return reg;
+    }
+
     private void authenticate(long userId) {
         when(jwt.parseAndValidate("social-token")).thenReturn(
                 new JwtAuthenticatedUser(userId, 199L, "Member", Instant.now().plusSeconds(3600)));
         when(authorities.findAuthorityCodesByUserId(userId)).thenReturn(List.of(
                 "PUBLICATIONS_INTERACTION_LIKE", "PUBLICATIONS_COMMENT_CREATE", "PUBLICATIONS_COMMENT_READ",
                 "PUBLICATIONS_FEED_READ", "PUBLICATIONS_PUBLICATION_READ"));
+    }
+
+    public static class Sql implements org.hibernate.resource.jdbc.spi.StatementInspector {
+        static final ThreadLocal<List<String>> statements = ThreadLocal.withInitial(java.util.ArrayList::new);
+
+        @Override
+        public String inspect(String sql) {
+            if (sql != null && sql.trim().toLowerCase().startsWith("select ")) {
+                statements.get().add(sql);
+            }
+            return sql;
+        }
     }
 }

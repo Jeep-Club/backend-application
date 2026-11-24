@@ -95,6 +95,11 @@ public abstract class Publication {
         this.updatedAt = now;
     }
 
+    protected final void touchUpdatedAt(Instant now) {
+        requireTransitionTime(now);
+        this.updatedAt = now;
+    }
+
     private void requireTransitionTime(Instant now) {
         Objects.requireNonNull(now, "now");
         if (now.isBefore(updatedAt)) throw new IllegalArgumentException("now cannot precede updatedAt.");

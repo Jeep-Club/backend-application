@@ -32,7 +32,12 @@ public class NoticeExceptionHandler extends ApiExceptionHandler {
         return buildErrorResponse("NOTICE_INVALID_STATE", exception.getMessage(), HttpStatus.CONFLICT);
     }
 
-    @ExceptionHandler({MalformedNoticePayloadException.class, IllegalArgumentException.class})
+    @ExceptionHandler({
+            MalformedNoticePayloadException.class,
+            IllegalArgumentException.class,
+            org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class,
+            org.springframework.data.core.PropertyReferenceException.class
+    })
     public ResponseEntity<ApiErrorResponse> invalidRequest(RuntimeException exception) {
         return buildErrorResponse("NOTICE_INVALID_REQUEST", "Notice request is invalid.", HttpStatus.BAD_REQUEST);
     }

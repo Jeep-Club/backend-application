@@ -10,9 +10,13 @@ public class PublicationMapper {
         var images = entity.getImages().stream()
                 .map(image -> new PublicationImage(image.getStorageKey(), image.getPosition(), image.isPrimary()))
                 .toList();
-        if (entity instanceof NoticeEntity) {
+        if (entity instanceof NoticeEntity notice) {
+            var priority = notice.getPriority() == null || notice.getPriority().isBlank()
+                    ? com.jeepclub.backend.publications.core.domain.enums.NoticePriority.NORMAL
+                    : com.jeepclub.backend.publications.core.domain.enums.NoticePriority.valueOf(notice.getPriority());
             return Notice.reconstitute(entity.getId(), entity.getAuthorUserId(), entity.getTitle(), entity.getContent(),
-                    entity.getStatus(), entity.getCreatedAt(), entity.getUpdatedAt(), entity.getPublishedAt(), entity.getArchivedAt(), images);
+                    entity.getStatus(), entity.getCreatedAt(), entity.getUpdatedAt(), entity.getPublishedAt(), entity.getArchivedAt(),
+                    images, priority, notice.getValidFrom(), notice.getValidUntil());
         }
         if (entity instanceof EventEntity event) {
             var result = Event.reconstitute(entity.getId(), entity.getAuthorUserId(), entity.getTitle(), entity.getContent(),
@@ -40,6 +44,11 @@ public class PublicationMapper {
     }
 
     public void copy(Publication domain, PublicationEntity entity) {
+        if (domain instanceof Notice notice && entity instanceof NoticeEntity target) {
+            target.setPriority(notice.getPriority().name());
+            target.setValidFrom(notice.getValidFrom());
+            target.setValidUntil(notice.getValidUntil());
+        }
         if (domain instanceof Event event && entity instanceof EventEntity target) {
             target.setStartsAt(event.getStartsAt());
             target.setEndsAt(event.getEndsAt());

@@ -35,18 +35,19 @@ import org.springframework.web.bind.annotation.*;
 })
 public class AdminServicePublicationRequestController {
     private final AdminServicePublicationRequestService requests;
+    private final PublicationAdminPresentation presentation;
 
     @GetMapping
     @PreAuthorize("hasAuthority('PUBLICATIONS_SERVICE_REQUEST_ADMIN_READ')")
     @RequiredPermission("PUBLICATIONS_SERVICE_REQUEST_ADMIN_READ")
-    @Operation(summary = "Listar solicitações iniciais", description = "Página administrativa, com filtro opcional por PENDING, APPROVED ou REJECTED.")
+    @Operation(summary = "Listar solicitações iniciais", description = "Página administrativa, com filtro opcional por PENDING, APPROVED ou REJECTED. Resolve requestedByUserName/reviewedByUserName em lote quando o administrador possui IDENTITY_USER_READ e createdPublicationTitle em lote quando aprovado e o administrador possui PUBLICATIONS_SERVICE_ADMIN_READ.")
     @ApiResponse(responseCode = "200", description = "Página de requests.",
             content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE,
                     schema = @Schema(implementation = ServicePublicationRequestPageResponseSchema.class)))
     public PageResponse<AdminServicePublicationRequestResponseDTO> list(
             @RequestParam(required = false) ServicePublicationRequestStatus status,
             @PageableDefault(size = 20, sort = {"requestedAt", "id"}, direction = Sort.Direction.DESC) Pageable pageable) {
-        return PageResponse.from(requests.findAll(status, pageable).map(AdminServicePublicationRequestResponseDTO::from));
+        return PageResponse.from(presentation.requests(requests.findAll(status, pageable)));
     }
 
     @GetMapping("/{id}")
@@ -55,7 +56,7 @@ public class AdminServicePublicationRequestController {
     @Operation(summary = "Consultar solicitação inicial administrativamente")
     @ApiResponse(responseCode = "200", description = "Request encontrada.", content = @Content(schema = @Schema(implementation = AdminServicePublicationRequestResponseDTO.class)))
     public AdminServicePublicationRequestResponseDTO find(@PathVariable Long id) {
-        return AdminServicePublicationRequestResponseDTO.from(requests.findById(id));
+        return presentation.request(requests.findById(id));
     }
 
     @PostMapping("/{id}/approve")
@@ -65,7 +66,7 @@ public class AdminServicePublicationRequestController {
     @ApiResponse(responseCode = "200", description = "Request aprovada e Service criado.", content = @Content(schema = @Schema(implementation = AdminServicePublicationRequestResponseDTO.class)))
     public AdminServicePublicationRequestResponseDTO approve(@PathVariable Long id,
             @AuthenticationPrincipal UserPrincipal principal) {
-        return AdminServicePublicationRequestResponseDTO.from(requests.approve(id, principal.getUserId()));
+        return presentation.request(requests.approve(id, principal.getUserId()));
     }
 
     @PostMapping(value = "/{id}/reject", consumes = MediaType.APPLICATION_JSON_VALUE)
@@ -78,7 +79,7 @@ public class AdminServicePublicationRequestController {
     public AdminServicePublicationRequestResponseDTO reject(@PathVariable Long id,
             @RequestBody(required = false) RejectServiceRequestDTO body,
             @AuthenticationPrincipal UserPrincipal principal) {
-        return AdminServicePublicationRequestResponseDTO.from(requests.reject(id, principal.getUserId(),
+        return presentation.request(requests.reject(id, principal.getUserId(),
                 body == null ? null : body.rejectionReason()));
     }
 }

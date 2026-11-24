@@ -104,6 +104,40 @@ class AdminNoticeServiceTest {
         verify(repository).delete(1L, 9L, NOW);
     }
 
+    @Test void findAllNormalizesQueryAppendsDeterministicIdTieBreakerAndRejectsInvalidFilters() {
+        var notice = draft();
+        var pageable = org.springframework.data.domain.PageRequest.of(
+                0, 10, org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Order.asc("title"))
+        );
+        var expectedPageable = org.springframework.data.domain.PageRequest.of(
+                0, 10, org.springframework.data.domain.Sort.by(
+                        org.springframework.data.domain.Sort.Order.asc("title"),
+                        org.springframework.data.domain.Sort.Order.asc("id")
+                )
+        );
+        when(repository.findNotices(
+                PublicationStatus.DRAFT, "aviso", CREATED, NOW, null, null, expectedPageable
+        )).thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(notice), expectedPageable, 1));
+
+        var page = service.findAll(PublicationStatus.DRAFT, "  aviso  ", CREATED, NOW, null, null, pageable);
+        assertThat(page.getContent()).containsExactly(notice);
+
+        assertThatThrownBy(() -> service.findAll(null, null, NOW, CREATED, null, null, pageable))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.findAll(null, null, null, null, NOW, CREATED, pageable))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.findAll(null, "x".repeat(201), null, null, null, null, pageable))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.findAll(
+                null, null, null, null, null, null,
+                org.springframework.data.domain.PageRequest.of(0, 51)
+        )).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.findAll(
+                null, null, null, null, null, null,
+                org.springframework.data.domain.PageRequest.of(0, 10, org.springframework.data.domain.Sort.by("unknownField"))
+        )).isInstanceOf(IllegalArgumentException.class);
+    }
+
     private static Notice draft() {
         return Notice.reconstitute(1L, 7L, "Original", "Body", PublicationStatus.DRAFT,
                 CREATED, CREATED, null, null, gallery());
