@@ -11,6 +11,9 @@ import com.jeepclub.backend.iam.authorization.api.module.RolePresentationQuery;
 import com.jeepclub.backend.iam.identity.api.module.UserQuery;
 import com.jeepclub.backend.iam.identity.api.module.UserDetails;
 import com.jeepclub.backend.memberships.api.module.MemberRegistrationQuery;
+import com.jeepclub.backend.publications.core.domain.model.Event;
+import com.jeepclub.backend.publications.core.domain.model.PublicationImage;
+import com.jeepclub.backend.publications.core.repository.PublicationRepository;
 import com.jeepclub.backend.shared.storage.*;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -21,6 +24,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.*;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.*;
 import org.springframework.test.web.servlet.request.*;
 import org.springframework.mock.web.MockMultipartFile;
@@ -42,7 +46,8 @@ class BillingHttpWorkflowIntegrationTest {
     @Autowired ObjectMapper json;
     @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
     @Autowired jakarta.persistence.EntityManager entityManager;
-    @Autowired ChargeDefinitionRepository definitions;
+    @MockitoSpyBean ChargeDefinitionRepository definitions;
+    @Autowired PublicationRepository publications;
     @Autowired ChargeCycleRepository cycles;
     @Autowired MemberChargeRepository charges;
     @Autowired MemberPaymentRepository payments;
@@ -805,6 +810,129 @@ class BillingHttpWorkflowIntegrationTest {
             if (cycle != null) jdbc.update("delete from billing_charge_cycles where id = ?", cycle);
             jdbc.update("delete from billing_charge_definitions where id = ?", definition.getId());
         }
+    }
+
+
+    @Test
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    void administrativeLookupFailureRollsBackPaymentAndChargeCommands() throws Exception {
+        var charge = seedCharge();
+        long chargeId = charge.getId();
+        try {
+            auth(99L, "BILLING_MEMBER_CHARGE_UPDATE", "BILLING_MEMBER_CHARGE_CANCEL", "IDENTITY_USER_READ");
+            when(identity.findByIds(anyCollection())).thenThrow(new IllegalStateException("private lookup message"));
+            expectSanitizedLookupFailure(body(patch("/billing/member-charges/{id}/final-amount", chargeId),
+                    """
+                    {"finalAmount":50}
+                    """));
+            assertThat(charges.findById(chargeId).orElseThrow().getFinalAmount()).isEqualByComparingTo(AMOUNT);
+            expectSanitizedLookupFailure(token(patch("/billing/member-charges/{id}/cancel", chargeId)));
+            assertThat(charges.findById(chargeId).orElseThrow().isPending()).isTrue();
+
+            auth(10L);
+            when(storage.store(any(), any())).thenReturn(new StoredFile("billing/payment-receipts/rollback.pdf"));
+            long paymentId = id(mvc.perform(upload("/billing/member-charges/{id}/payments", chargeId, false))
+                    .andExpect(status().isCreated()).andReturn());
+            auth(99L, "BILLING_PAYMENT_CONFIRM", "BILLING_PAYMENT_REJECT", "MEMBERSHIP_MEMBER_READ");
+            when(registrations.currentNumbers(List.of(10L))).thenThrow(new IllegalStateException("private lookup message"));
+            expectSanitizedLookupFailure(token(patch("/billing/member-payments/{id}/confirm", paymentId)));
+            assertThat(payments.findById(paymentId).orElseThrow().isPendingValidation()).isTrue();
+            assertThat(charges.findById(chargeId).orElseThrow().isPending()).isTrue();
+
+            expectSanitizedLookupFailure(body(patch("/billing/member-payments/{id}/reject", paymentId),
+                    """
+                    {"rejectionReason":"invalid receipt"}
+                    """));
+            var payment = payments.findById(paymentId).orElseThrow();
+            assertThat(payment.isPendingValidation()).isTrue();
+            assertThat(payment.getReceiptStorageKey()).isEqualTo("billing/payment-receipts/rollback.pdf");
+        } finally {
+            jdbc.update("delete from billing_member_payments where member_charge_id = ?", chargeId);
+            jdbc.update("delete from billing_member_charges where id = ?", chargeId);
+            jdbc.update("delete from billing_charge_cycles where id = ?", charge.getChargeCycleId());
+            jdbc.update("delete from billing_charge_definitions where id = ?", charge.getChargeDefinitionId());
+        }
+    }
+
+    @Test
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    void definitionLookupFailureRollsBackAllAssignmentCommands() throws Exception {
+        auth(99L, "BILLING_CHARGE_DEFINITION_CREATE", "BILLING_CHARGE_ASSIGNMENT_CREATE",
+                "BILLING_CHARGE_ASSIGNMENT_UPDATE", "AUTHORIZATION_ROLE_READ");
+        when(members.existsActiveMemberByUserIdForUpdate(10L)).thenReturn(true);
+        when(roles.existsActiveRoleByIdForUpdate(20L)).thenReturn(true);
+        when(events.existsEventById(30L)).thenReturn(true);
+        long definitionId = id(mvc.perform(body(post("/billing/charge-definitions"), DEFINITION))
+                .andExpect(status().isCreated()).andReturn());
+        String route = "/billing/charge-definitions/{id}/assignments/";
+        try {
+            doThrow(new IllegalStateException("private lookup message")).when(definitions).findByIds(List.of(definitionId));
+            for (String suffix : List.of("all-members", "users/10", "roles/20", "events/30/participants")) {
+                expectSanitizedLookupFailure(token(post(route + suffix, definitionId)));
+                assertThat(jdbc.queryForObject("select count(*) from billing_charge_assignments where charge_definition_id = ?",
+                        Integer.class, definitionId)).isZero();
+            }
+            doCallRealMethod().when(definitions).findByIds(List.of(definitionId));
+            long assignmentId = id(mvc.perform(token(post(route + "all-members", definitionId)))
+                    .andExpect(status().isCreated()).andReturn());
+            String item = "/billing/charge-assignments/{id}/";
+            doThrow(new IllegalStateException("private lookup message")).when(definitions).findByIds(List.of(definitionId));
+            expectSanitizedLookupFailure(token(patch(item + "deactivate", assignmentId)));
+            assertThat(jdbc.queryForObject("select active from billing_charge_assignments where id = ?",
+                    Boolean.class, assignmentId)).isTrue();
+
+            doCallRealMethod().when(definitions).findByIds(List.of(definitionId));
+            mvc.perform(token(patch(item + "deactivate", assignmentId))).andExpect(status().isOk());
+            doThrow(new IllegalStateException("private lookup message")).when(definitions).findByIds(List.of(definitionId));
+            expectSanitizedLookupFailure(token(patch(item + "activate", assignmentId)));
+            assertThat(jdbc.queryForObject("select active from billing_charge_assignments where id = ?",
+                    Boolean.class, assignmentId)).isFalse();
+        } finally {
+            for (String table : List.of("billing_all_members_charge_assignments", "billing_user_charge_assignments",
+                    "billing_role_charge_assignments", "billing_event_participants_charge_assignments")) {
+                jdbc.update("delete from " + table + " where charge_assignment_id in "
+                        + "(select id from billing_charge_assignments where charge_definition_id = ?)", definitionId);
+            }
+            jdbc.update("delete from billing_charge_assignments where charge_definition_id = ?", definitionId);
+            jdbc.update("delete from billing_charge_definitions where id = ?", definitionId);
+        }
+    }
+
+    @Test
+    void eventAssignmentUsesActualPublicationHistoryAndRespectsIndependentReadPermission() throws Exception {
+        var event = publications.save(Event.create(99L, "Trilha histórica", "Passeio",
+                List.of(new PublicationImage("images/2026/09/01/12345678-1234-1234-1234-123456789abc.jpg", 0, true)), NOW.plusSeconds(3600), NOW));
+        when(events.existsEventById(event.getId())).thenReturn(true);
+        auth(99L, "BILLING_CHARGE_DEFINITION_CREATE", "BILLING_CHARGE_ASSIGNMENT_CREATE",
+                "BILLING_CHARGE_ASSIGNMENT_UPDATE", "PUBLICATIONS_EVENT_READ_ADMIN");
+        long definitionId = id(mvc.perform(body(post("/billing/charge-definitions"), DEFINITION))
+                .andExpect(status().isCreated()).andReturn());
+        String route = "/billing/charge-definitions/{id}/assignments/events/{eventId}/participants";
+        mvc.perform(token(post(route, definitionId, Long.MAX_VALUE))).andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("BILLING_ASSIGNMENT_TARGET_NOT_FOUND"));
+        long assignmentId = id(mvc.perform(token(post(route, definitionId, event.getId())))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.eventTitle").value("Trilha histórica"))
+                .andExpect(jsonPath("$.chargeDefinitionName").value("fee")).andReturn());
+
+        publications.delete(event.getId(), 99L, NOW.plusSeconds(60));
+        entityManager.flush();
+        entityManager.clear();
+        String item = "/billing/charge-assignments/{id}/";
+        mvc.perform(token(patch(item + "deactivate", assignmentId)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.active").value(false))
+                .andExpect(jsonPath("$.eventTitle").value("Trilha histórica"));
+
+        auth(99L, "BILLING_CHARGE_ASSIGNMENT_UPDATE");
+        mvc.perform(token(patch(item + "activate", assignmentId)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.active").value(true))
+                .andExpect(jsonPath("$.eventTitle").value(org.hamcrest.Matchers.nullValue()));
+    }
+
+    private void expectSanitizedLookupFailure(MockHttpServletRequestBuilder request) throws Exception {
+        mvc.perform(request).andExpect(status().isInternalServerError())
+                .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
+                .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("private lookup message"))));
     }
 
     @Test void refundRequestsAndAdministrativeRejectCancelExpireFollowSpecificPermissionsAndStates() throws Exception {

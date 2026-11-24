@@ -5,6 +5,7 @@ import com.jeepclub.backend.billing.api.http.dto.BillingPageSchemas;
 import com.jeepclub.backend.billing.api.http.dto.payment.MemberPaymentSummaryResponse;
 import com.jeepclub.backend.billing.api.http.dto.payment.RejectMemberPaymentRequest;
 import com.jeepclub.backend.billing.core.application.result.MemberPaymentResult;
+import com.jeepclub.backend.billing.core.application.service.AdminBillingCommandService;
 import com.jeepclub.backend.billing.core.application.service.memberpayment.AdminMemberPaymentService;
 import com.jeepclub.backend.billing.core.domain.enums.payment.MemberPaymentStatus;
 import com.jeepclub.backend.platform.security.principal.UserPrincipal;
@@ -48,6 +49,7 @@ import org.springframework.web.bind.annotation.RestController;
 })
 public class AdminMemberPaymentController {
 
+    private final AdminBillingCommandService commands;
     private final AdminMemberPaymentService adminMemberPaymentService;
     private final AdminMemberPaymentPresentation presentation;
 
@@ -99,11 +101,11 @@ public class AdminMemberPaymentController {
             @PathVariable @Positive(message = "ID do pagamento deve ser maior que zero.") Long paymentId,
             Authentication authentication
     ) {
-        MemberPaymentResult result = adminMemberPaymentService.confirm(
+        var response = commands.execute(() -> adminMemberPaymentService.confirm(
                 paymentId,
                 extractUserId(authentication)
-        );
-        return ResponseEntity.ok(presentation.detail(result));
+        ), presentation::detail);
+        return ResponseEntity.ok(response);
     }
 
     @PatchMapping("/billing/member-payments/{paymentId}/reject")
@@ -123,12 +125,12 @@ public class AdminMemberPaymentController {
             @Valid @RequestBody RejectMemberPaymentRequest request,
             Authentication authentication
     ) {
-        MemberPaymentResult result = adminMemberPaymentService.reject(
+        var response = commands.execute(() -> adminMemberPaymentService.reject(
                 paymentId,
                 extractUserId(authentication),
                 request.rejectionReason()
-        );
-        return ResponseEntity.ok(presentation.detail(result));
+        ), presentation::detail);
+        return ResponseEntity.ok(response);
     }
 
     private Long extractUserId(Authentication authentication) {

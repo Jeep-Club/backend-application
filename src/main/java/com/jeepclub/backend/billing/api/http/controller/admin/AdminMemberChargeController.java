@@ -5,7 +5,7 @@ import com.jeepclub.backend.billing.api.http.dto.BillingPageSchemas;
 import com.jeepclub.backend.billing.api.http.dto.charge.MemberChargeSummaryResponse;
 import com.jeepclub.backend.billing.api.http.dto.charge.UpdateMemberChargeFinalAmountRequest;
 import com.jeepclub.backend.billing.core.application.result.charge.MemberChargeCycleResult;
-import com.jeepclub.backend.billing.core.application.result.charge.MemberChargeResult;
+import com.jeepclub.backend.billing.core.application.service.AdminBillingCommandService;
 import com.jeepclub.backend.billing.core.application.service.membercharge.AdminMemberChargeService;
 import com.jeepclub.backend.billing.core.domain.enums.charge.MemberChargeStatus;
 import com.jeepclub.backend.platform.openapi.security.RequiredPermission;
@@ -49,6 +49,7 @@ import org.springframework.web.bind.annotation.RestController;
 })
 public class AdminMemberChargeController {
 
+    private final AdminBillingCommandService commands;
     private final AdminMemberChargeService adminMemberChargeService;
     private final BillingUserNamePresentation userNames;
     private final MemberRegistrationQuery members;
@@ -122,12 +123,10 @@ public class AdminMemberChargeController {
             @PathVariable @Positive(message = "ID da cobrança deve ser maior que zero.") Long memberChargeId,
             @Valid @RequestBody UpdateMemberChargeFinalAmountRequest request
     ) {
-        MemberChargeResult result = adminMemberChargeService.updateFinalAmount(
-                memberChargeId,
-                request.finalAmount()
-        );
-
-        return ResponseEntity.ok(present(adminMemberChargeService.present(result)));
+        var response = commands.execute(
+                () -> adminMemberChargeService.updateFinalAmount(memberChargeId, request.finalAmount()),
+                result -> present(adminMemberChargeService.present(result)));
+        return ResponseEntity.ok(response);
     }
 
     @PatchMapping("/billing/member-charges/{memberChargeId}/cancel")
@@ -142,8 +141,8 @@ public class AdminMemberChargeController {
     public ResponseEntity<MemberChargeResponse> cancel(
             @PathVariable @Positive(message = "ID da cobrança deve ser maior que zero.") Long memberChargeId
     ) {
-        MemberChargeResult result = adminMemberChargeService.cancel(memberChargeId);
-
-        return ResponseEntity.ok(present(adminMemberChargeService.present(result)));
+        var response = commands.execute(() -> adminMemberChargeService.cancel(memberChargeId),
+                result -> present(adminMemberChargeService.present(result)));
+        return ResponseEntity.ok(response);
     }
 }

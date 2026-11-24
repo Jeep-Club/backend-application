@@ -3,6 +3,7 @@ package com.jeepclub.backend.billing.api.http.controller.admin;
 import com.jeepclub.backend.billing.api.http.dto.assignment.ChargeAssignmentResponse;
 import com.jeepclub.backend.billing.api.http.dto.BillingPageSchemas;
 import com.jeepclub.backend.billing.core.application.result.ChargeAssignmentResult;
+import com.jeepclub.backend.billing.core.application.service.AdminBillingCommandService;
 import com.jeepclub.backend.billing.core.application.service.chargeassignment.AdminChargeAssignmentService;
 import com.jeepclub.backend.platform.openapi.security.RequiredPermission;
 import com.jeepclub.backend.platform.web.pagination.PageResponse;
@@ -39,6 +40,7 @@ import java.net.URI;
 })
 public class AdminChargeAssignmentController {
 
+    private final AdminBillingCommandService commands;
     private final AdminChargeAssignmentService adminChargeAssignmentService;
     private final ChargeAssignmentPresentation presentation;
 
@@ -54,11 +56,12 @@ public class AdminChargeAssignmentController {
     public ResponseEntity<ChargeAssignmentResponse> assignToAllMembers(
             @PathVariable @Positive(message = "ID da definição de cobrança deve ser maior que zero.") Long chargeDefinitionId
     ) {
-        ChargeAssignmentResult result = adminChargeAssignmentService.assignToAllMembers(chargeDefinitionId);
+        var response = commands.execute(() -> adminChargeAssignmentService.assignToAllMembers(chargeDefinitionId),
+                presentation::present);
 
         return ResponseEntity
-                .created(URI.create("/billing/charge-definitions/" + chargeDefinitionId + "/assignments/" + result.id()))
-                .body(presentation.present(result));
+                .created(URI.create("/billing/charge-definitions/" + chargeDefinitionId + "/assignments/" + response.id()))
+                .body(response);
     }
 
     @PostMapping("/billing/charge-definitions/{chargeDefinitionId}/assignments/users/{userId}")
@@ -74,14 +77,14 @@ public class AdminChargeAssignmentController {
             @PathVariable @Positive(message = "ID da definição de cobrança deve ser maior que zero.") Long chargeDefinitionId,
             @PathVariable @Positive(message = "ID do usuário deve ser maior que zero.") Long userId
     ) {
-        ChargeAssignmentResult result = adminChargeAssignmentService.assignToUser(
+        var response = commands.execute(() -> adminChargeAssignmentService.assignToUser(
                 chargeDefinitionId,
                 userId
-        );
+        ), presentation::present);
 
         return ResponseEntity
-                .created(URI.create("/billing/charge-definitions/" + chargeDefinitionId + "/assignments/" + result.id()))
-                .body(presentation.present(result));
+                .created(URI.create("/billing/charge-definitions/" + chargeDefinitionId + "/assignments/" + response.id()))
+                .body(response);
     }
 
     @PostMapping("/billing/charge-definitions/{chargeDefinitionId}/assignments/roles/{roleId}")
@@ -97,14 +100,14 @@ public class AdminChargeAssignmentController {
             @PathVariable @Positive(message = "ID da definição de cobrança deve ser maior que zero.") Long chargeDefinitionId,
             @PathVariable @Positive(message = "ID da role deve ser maior que zero.") Long roleId
     ) {
-        ChargeAssignmentResult result = adminChargeAssignmentService.assignToRole(
+        var response = commands.execute(() -> adminChargeAssignmentService.assignToRole(
                 chargeDefinitionId,
                 roleId
-        );
+        ), presentation::present);
 
         return ResponseEntity
-                .created(URI.create("/billing/charge-definitions/" + chargeDefinitionId + "/assignments/" + result.id()))
-                .body(presentation.present(result));
+                .created(URI.create("/billing/charge-definitions/" + chargeDefinitionId + "/assignments/" + response.id()))
+                .body(response);
     }
 
     @PostMapping("/billing/charge-definitions/{chargeDefinitionId}/assignments/events/{eventId}/participants")
@@ -120,14 +123,14 @@ public class AdminChargeAssignmentController {
             @PathVariable @Positive(message = "ID da definição de cobrança deve ser maior que zero.") Long chargeDefinitionId,
             @PathVariable @Positive(message = "ID do evento deve ser maior que zero.") Long eventId
     ) {
-        ChargeAssignmentResult result = adminChargeAssignmentService.assignToEventParticipants(
+        var response = commands.execute(() -> adminChargeAssignmentService.assignToEventParticipants(
                 chargeDefinitionId,
                 eventId
-        );
+        ), presentation::present);
 
         return ResponseEntity
-                .created(URI.create("/billing/charge-definitions/" + chargeDefinitionId + "/assignments/" + result.id()))
-                .body(presentation.present(result));
+                .created(URI.create("/billing/charge-definitions/" + chargeDefinitionId + "/assignments/" + response.id()))
+                .body(response);
     }
 
     @GetMapping("/billing/charge-definitions/{chargeDefinitionId}/assignments")
@@ -178,9 +181,8 @@ public class AdminChargeAssignmentController {
     public ResponseEntity<ChargeAssignmentResponse> activate(
             @PathVariable @Positive(message = "ID da atribuição deve ser maior que zero.") Long assignmentId
     ) {
-        ChargeAssignmentResult result = adminChargeAssignmentService.activate(assignmentId);
-
-        return ResponseEntity.ok(presentation.present(result));
+        return ResponseEntity.ok(commands.execute(() -> adminChargeAssignmentService.activate(assignmentId),
+                presentation::present));
     }
 
     @PatchMapping("/billing/charge-assignments/{assignmentId}/deactivate")
@@ -195,8 +197,7 @@ public class AdminChargeAssignmentController {
     public ResponseEntity<ChargeAssignmentResponse> deactivate(
             @PathVariable @Positive(message = "ID da atribuição deve ser maior que zero.") Long assignmentId
     ) {
-        ChargeAssignmentResult result = adminChargeAssignmentService.deactivate(assignmentId);
-
-        return ResponseEntity.ok(presentation.present(result));
+        return ResponseEntity.ok(commands.execute(() -> adminChargeAssignmentService.deactivate(assignmentId),
+                presentation::present));
     }
 }

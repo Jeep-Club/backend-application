@@ -104,6 +104,9 @@ class ChargeAssignmentPresentationTest {
         assertThat(page.getContent()).extracting("eventTitle").containsExactly("Passeio", "Passeio", null);
         verify(definitions).findByIds(List.of(1L));
         verify(events).findByIds(List.of(10L));
+
+        when(events.findByIds(List.of(10L))).thenReturn(List.of());
+        assertThat(presentation.present(event).eventTitle()).isNull();
     }
 
     private static ChargeAssignmentResult userAssignment(long id, long userId) {
