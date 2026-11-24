@@ -1,5 +1,23 @@
 # BACK-628 — limites do timeout síncrono
 
+## Verificação por etapa e confirmação de commit
+
+`MediaUploadCapacityTest.expiredUploadStopsAtNextBoundaryAndPreservesCustody`
+avança o relógio monotônico em leitura, codec, primeiro e segundo `store`.
+Verifica que a próxima etapa fica bloqueada, que a compensação depende de
+possível I/O e que a capacidade em memória volta após o retorno da chamada.
+O teste cobre o prazo cooperativo. Codec e filesystem ainda ocupam o slot
+enquanto suas chamadas estão em voo.
+
+`StorageUploadFlowTest.catalogCommitWithoutAcknowledgementKeepsOneChargedAssetAndNoReference`
+simula perda da confirmação imediatamente após delegar o commit ao banco.
+Uma falha sistêmica de transação ou de conexão depois da reserva recebe
+`STORAGE_UNAVAILABLE` (503). Se o commit já ocorreu, o permit concluído
+preserva o vínculo e a cobrança sem duplicar estorno ou decremento.
+O asset permanece sem referência operacional. O ensaio simula a observação
+da aplicação após o commit, sem simular o comportamento de rede do driver.
+O cliente não deve interpretar o 503 como prova de rollback ou autorização de retry.
+
 ## Prazo cooperativo após admissão
 
 `MediaUploadService` mede 10 s com relógio monotônico a partir da aquisição

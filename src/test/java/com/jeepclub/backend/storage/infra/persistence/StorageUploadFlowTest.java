@@ -48,6 +48,7 @@ class StorageUploadFlowTest {
         }
         @Bean LegacyFixture legacySource() { return new LegacyFixture(); }
         @Bean SimpleMeterRegistry metrics() { return new SimpleMeterRegistry(); }
+        @Bean java.time.Clock clock() { return java.time.Clock.systemUTC(); }
         @Bean StorageConsumerPolicy policy() { return new StorageConsumerPolicy() {
             public Context context() { return Context.IDENTITY_PROFILE; }
             public boolean mayUpload(long actor,String id) { return Long.toString(actor).equals(id); }
@@ -82,7 +83,7 @@ class StorageUploadFlowTest {
         long globalBefore=jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=0",Long.class);
         var noStore=org.mockito.Mockito.mock(BlobCatalog.class);
         var service=new MediaUploadService(catalog,noStore,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,
-            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),admission);
+            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),admission,java.time.Clock.systemUTC());
         assertThatThrownBy(() -> service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),() -> {throw new IllegalArgumentException("read fixture");}))
             .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),() -> {throw new IllegalArgumentException("read retry fixture");}))
@@ -106,7 +107,7 @@ class StorageUploadFlowTest {
         };
         var noStore=org.mockito.Mockito.mock(BlobCatalog.class);
         var service=new MediaUploadService(catalog,noStore,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,
-            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),failing);
+            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),failing,java.time.Clock.systemUTC());
         var warm=admission.reserve(987718L);admission.finish(warm);
         long before=jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=0",Long.class);
         assertThatThrownBy(() -> service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),image(414)))
@@ -130,7 +131,7 @@ class StorageUploadFlowTest {
         };
         var noStore=org.mockito.Mockito.mock(BlobCatalog.class);
         var service=new MediaUploadService(catalog,noStore,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,
-            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),failing);
+            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),failing,java.time.Clock.systemUTC());
         assertThatThrownBy(() -> service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),image(415)))
             .isInstanceOf(IllegalStateException.class).hasMessage("plan response lost");
         org.mockito.Mockito.verifyNoInteractions(noStore);
@@ -155,7 +156,7 @@ class StorageUploadFlowTest {
         var noWrite=org.mockito.Mockito.mock(BlobCatalog.class);
         org.mockito.Mockito.when(noWrite.store(org.mockito.ArgumentMatchers.any())).thenThrow(new IllegalStateException("before write fixture"));
         var service=new MediaUploadService(catalog,noWrite,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,
-            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),admission);
+            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),admission,java.time.Clock.systemUTC());
         long before=jdbc.queryForObject("select count(*) from storage_blobs",Long.class);
         assertThatThrownBy(() -> service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),image(411)))
             .isInstanceOf(IllegalStateException.class).hasMessage("before write fixture");
@@ -174,7 +175,7 @@ class StorageUploadFlowTest {
             public byte[] read(Blob blob) {return blobs.read(blob);}
         };
         var service=new MediaUploadService(catalog,uncertain,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,
-            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),admission);
+            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),admission,java.time.Clock.systemUTC());
         assertThatThrownBy(() -> service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),image(412)))
             .isInstanceOf(IllegalStateException.class).hasMessage("after write fixture");
         assertThat(saved.get()).isNotNull();assertThat(blobs.read(saved.get())).isNotEmpty();
@@ -187,7 +188,7 @@ class StorageUploadFlowTest {
         org.mockito.Mockito.doThrow(new IllegalStateException("provider fixture")).when(provider).putVerified(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.any());
         var adapter=new BlobCatalogAdapter(quotaEntityManager,provider,manager);
         var service=new MediaUploadService(catalog,adapter,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,
-            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),admission);
+            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),admission,java.time.Clock.systemUTC());
         long before=jdbc.queryForObject("select count(*) from storage_blobs where ready=false",Long.class);
         assertThatThrownBy(() -> service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),image(413)))
             .isInstanceOf(IllegalStateException.class).hasMessage("provider fixture");
@@ -207,7 +208,7 @@ class StorageUploadFlowTest {
             public void finish(Permit permit) { admission.finish(permit); }
         };
         var service=new MediaUploadService(catalog,blobs,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,
-            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),failing);
+            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),failing,java.time.Clock.systemUTC());
         byte[] bytes=image(17);
         assertThatThrownBy(() -> service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),bytes)).isInstanceOf(IllegalStateException.class).hasMessage("finish fixture");
         assertThat(jdbc.queryForObject("select count(*) from storage_media_assets where uploaded_by_user_id=?",Long.class,actor)).isZero();
@@ -235,7 +236,7 @@ class StorageUploadFlowTest {
             public void finish(Permit permit) { finishCalls.incrementAndGet(); throw new IllegalStateException("post commit fixture"); }
         };
         var service=new MediaUploadService(catalog,blobs,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,
-            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),observed);
+            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),observed,java.time.Clock.systemUTC());
         var result=service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),image(18));
         assertThat(catalog.findAsset(result.mediaId())).isPresent();
         assertThat(catalog.findVariant(result.mediaId(),"MASTER")).isPresent();
@@ -243,6 +244,46 @@ class StorageUploadFlowTest {
         assertThat(jdbc.queryForObject("select catalog_asset_id from storage_upload_permits where actor_user_id=?",Long.class,actor)).isEqualTo(result.mediaId());
         assertThat(finishCalls.get()).isZero();
     }
+    @Test void catalogCommitWithoutAcknowledgementKeepsOneChargedAssetAndNoReference() throws Exception {
+        long actor = 987629L;
+        var uncertainCommit = new org.springframework.transaction.PlatformTransactionManager() {
+            @Override
+            public org.springframework.transaction.TransactionStatus getTransaction(org.springframework.transaction.TransactionDefinition definition) {
+                return manager.getTransaction(definition);
+            }
+
+            @Override
+            public void commit(org.springframework.transaction.TransactionStatus status) {
+                manager.commit(status);
+                throw new org.springframework.transaction.TransactionSystemException("Fixture lost commit acknowledgement");
+            }
+
+            @Override
+            public void rollback(org.springframework.transaction.TransactionStatus status) {
+                manager.rollback(status);
+            }
+        };
+        var service = new MediaUploadService(catalog, blobs, new MediaImageProcessingAdapter(new SimpleMeterRegistry()),
+                governance, List.of(new Configuration().policy()), uncertainCommit, new SimpleMeterRegistry(),
+                admission, java.time.Clock.systemUTC());
+        assertThatThrownBy(() -> service.upload(actor, MediaContext.IDENTITY_PROFILE, Long.toString(actor), image(180)))
+                .isInstanceOf(IllegalStateException.class).hasMessage("Upload transaction outcome unavailable");
+
+        long assetId = jdbc.queryForObject("select catalog_asset_id from storage_upload_permits where actor_user_id=? and completed=true and charged=true",
+                Long.class, actor);
+        assertThat(catalog.findAsset(assetId)).isPresent();
+        assertThat(catalog.findVariant(assetId, "MASTER")).isPresent();
+        assertThat(catalog.findVariant(assetId, "AVATAR_SMALL")).isPresent();
+        assertThat(catalog.findVariant(assetId, "PROFILE_PREVIEW")).isPresent();
+        assertThat(jdbc.queryForObject("select count(*) from storage_media_references where media_id=?", Long.class, assetId)).isZero();
+        assertThatThrownBy(() -> resolution.resolve(actor, assetId, Long.MAX_VALUE, "AVATAR_SMALL"))
+                .isInstanceOf(AccessDeniedException.class);
+        assertThat(jdbc.queryForObject("select in_flight from storage_upload_budgets where scope_id=?", Integer.class, actor)).isZero();
+        assertThat(jdbc.queryForObject("select charged_uploads from storage_upload_budgets where scope_id=?", Long.class, actor)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=?", Long.class, actor))
+                .isEqualTo(jdbc.queryForObject("select accounted_bytes from storage_upload_permits where actor_user_id=?", Long.class, actor));
+    }
+
     @Test void concurrentUploadsCompleteTheirOwnPermitsWhileSharingBytes() throws Exception {
         byte[] bytes=image(19);
         var start=new CountDownLatch(1);var pool=Executors.newFixedThreadPool(2);
@@ -267,7 +308,7 @@ class StorageUploadFlowTest {
             public void finish(Permit permit) { throw new IllegalStateException("cleanup fixture"); }
         };
         var service=new MediaUploadService(catalog,blobs,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,
-            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),failing);
+            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),failing,java.time.Clock.systemUTC());
         try {
             assertThatThrownBy(() -> service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),() -> {throw new IllegalArgumentException("read fixture");}))
                 .isInstanceOf(IllegalArgumentException.class).hasMessage("read fixture")
@@ -532,7 +573,7 @@ class StorageUploadFlowTest {
         byte[] bytes=image(77);
         var image=new MediaImageProcessor.Representation("MASTER",bytes,"image/png",80,60);
         MediaImageProcessor broken=(input,context) -> new MediaImageProcessor.Processed(BlobCatalogAdapter.digest(input),List.of(image,image));
-        var service=new MediaUploadService(catalog,blobs,broken,governance,List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),admission);
+        var service=new MediaUploadService(catalog,blobs,broken,governance,List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),admission,java.time.Clock.systemUTC());
         assertThatThrownBy(() -> service.upload(77,MediaContext.IDENTITY_PROFILE,"77",bytes)).isInstanceOf(RuntimeException.class);
         assertThat(jdbc.queryForObject("select count(*) from storage_media_assets where owner_user_id=77",Long.class)).isZero();
         var hash=BlobCatalogAdapter.digest(bytes);

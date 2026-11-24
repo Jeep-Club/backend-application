@@ -5,13 +5,18 @@ import com.jeepclub.backend.storage.core.repository.*;
 import com.jeepclub.backend.storage.core.domain.model.*;
 import com.jeepclub.backend.storage.core.domain.enums.*;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionSystemException;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.security.access.AccessDeniedException;
 import java.time.Instant;
 import java.time.Duration;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.LongSupplier;
 
 @Service
 public class MediaUploadService {
@@ -30,8 +35,20 @@ public class MediaUploadService {
     private final List<StorageConsumerPolicy> policies; private final TransactionTemplate transaction;private final io.micrometer.core.instrument.MeterRegistry metrics;
     // Bound admitted uploads from payload buffering through physical writes and completion.
     private final java.util.concurrent.Semaphore inFlight = new java.util.concurrent.Semaphore(2, true);
+    private final Clock clock;
+    private final LongSupplier monotonicTime;
+
+    @Autowired
     public MediaUploadService(MediaCatalogRepository catalog,BlobCatalog blobs,MediaImageProcessor images,MediaGovernance governance,
-        List<StorageConsumerPolicy> policies,PlatformTransactionManager manager,io.micrometer.core.instrument.MeterRegistry metrics,UploadAdmission admission) {
+        List<StorageConsumerPolicy> policies,PlatformTransactionManager manager,io.micrometer.core.instrument.MeterRegistry metrics,UploadAdmission admission,Clock clock) {
+        this(catalog, blobs, images, governance, policies, manager, metrics, admission, clock, System::nanoTime);
+    }
+
+    MediaUploadService(MediaCatalogRepository catalog,BlobCatalog blobs,MediaImageProcessor images,MediaGovernance governance,
+        List<StorageConsumerPolicy> policies,PlatformTransactionManager manager,io.micrometer.core.instrument.MeterRegistry metrics,
+        UploadAdmission admission,Clock clock,LongSupplier monotonicTime) {
+        this.clock = clock;
+        this.monotonicTime = monotonicTime;
         this.admission=admission;this.metrics=metrics;this.catalog=catalog;this.blobs=blobs;this.images=images;this.governance=governance;this.policies=List.copyOf(policies);transaction=new TransactionTemplate(manager);
         transaction.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         // The quota refresh following a locking read must see the latest committed counters on MySQL.
@@ -46,15 +63,21 @@ public class MediaUploadService {
         return upload(actor,context,consumerId,content,MediaImageProcessor.Options.defaults());
     }
     public Uploaded upload(long actor,MediaContext context,String consumerId,java.util.function.Supplier<byte[]> content,MediaImageProcessor.Options options) {
-        long started=System.nanoTime();try {
+        long started=monotonicTime.getAsLong();try {
         if(actor<=0) throw new AccessDeniedException("Media unavailable");
         var policy=policies.stream().filter(p -> StoragePolicyViews.matches(p,context) && p.mayUpload(actor,consumerId)).findFirst()
             .orElseThrow(() -> new AccessDeniedException("Media unavailable"));
         var identity=policy.uploadIdentity(actor,consumerId);
         if (!inFlight.tryAcquire()) throw new IllegalStateException("Upload capacity exceeded");
-        long admittedAt = System.nanoTime();
+        long admittedAt = monotonicTime.getAsLong();
         try {
-        var permit=admission.reserve(actor);
+        UploadAdmission.Permit permit;
+        try {
+            permit = admission.reserve(actor);
+        } catch (TransactionSystemException | DataAccessResourceFailureException failure) {
+            // Without a returned permit, the reservation may already exist and must remain in custody.
+            throw new IllegalStateException("Upload transaction outcome unavailable", failure);
+        }
         boolean storeStarted=false;
         try {
         requireTimeRemaining(admittedAt);
@@ -85,7 +108,7 @@ public class MediaUploadService {
         requireTimeRemaining(admittedAt);
         return transaction.execute(status -> {
             requireTimeRemaining(admittedAt);
-            Instant now=Instant.now(); var audit=new MediaAuditContext(MediaActorKind.USER,actor,now,null);
+            Instant now=clock.instant(); var audit=new MediaAuditContext(MediaActorKind.USER,actor,now,null);
             var asset=catalog.registerAsset(new MediaAsset(null,MediaOrigin.UPLOAD,context,consumerId,actor,identity.ownerUserId(),MediaSubjectType.valueOf(identity.subjectType().name()),identity.subjectId(),
                 "PHOTO",MediaClassification.CLASSIFIED,MediaPhysicalState.PRESENT,now,now,null),audit);
             for(int i=0;i<processed.images().size();i++) {
@@ -106,14 +129,17 @@ public class MediaUploadService {
         } catch (RuntimeException | Error failure) {
             try { if(storeStarted) admission.finish(permit); else admission.abortBeforeStore(permit); }
             catch (RuntimeException cleanup) { failure.addSuppressed(cleanup); }
+            if (failure instanceof TransactionSystemException || failure instanceof DataAccessResourceFailureException) {
+                throw new IllegalStateException("Upload transaction outcome unavailable", failure);
+            }
             throw failure;
         }
         } finally {inFlight.release();}
-        } finally { metrics.timer("storage.upload.duration").record(System.nanoTime()-started,java.util.concurrent.TimeUnit.NANOSECONDS); }
+        } finally { metrics.timer("storage.upload.duration").record(monotonicTime.getAsLong()-started,java.util.concurrent.TimeUnit.NANOSECONDS); }
     }
 
-    private static void requireTimeRemaining(long admittedAt) {
-        if (System.nanoTime() - admittedAt >= PROCESSING_BUDGET_NANOS) {
+    private void requireTimeRemaining(long admittedAt) {
+        if (monotonicTime.getAsLong() - admittedAt >= PROCESSING_BUDGET_NANOS) {
             throw new ProcessingDeadlineExceeded();
         }
     }
