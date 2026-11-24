@@ -3,9 +3,11 @@ package com.jeepclub.backend.storage.api.http;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.http.*;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
 @org.springframework.core.annotation.Order(org.springframework.core.Ordered.HIGHEST_PRECEDENCE)
 @RestControllerAdvice(assignableTypes={StorageMediaController.class,StorageAdminController.class})
+@ConditionalOnProperty(name="storage.media.enabled",havingValue="true")
 public class StorageMediaErrors {
     private final com.jeepclub.backend.platform.web.exception.ApiProblemFactory problems;
     public StorageMediaErrors(com.jeepclub.backend.platform.web.exception.ApiProblemFactory problems) {this.problems=problems;}
