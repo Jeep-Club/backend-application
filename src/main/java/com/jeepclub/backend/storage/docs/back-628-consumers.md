@@ -1,5 +1,38 @@
 # BACK-628 — evidências de consumidores e variantes
 
+## Inventário de referência
+
+Consulta somente de código em `Jeep-Club/front-end-web-application`, branch
+`develop`, SHA `5e366e79015be2472a16dfbe5d435528884f637a`. Contratos
+backend conferidos a partir de `4ca93e106b637a50e15b619d83949991fad8c176`.
+As notas abaixo da matriz preservam o histórico das medições anteriores.
+
+| Superfície e owner | HTTP e legado | Variante, dimensão e enquadramento | ACL/cache e prova |
+| --- | --- | --- | --- |
+| Navbar e perfil, Identity | `GET /identity/me`, `CurrentUserResponseDTO.profilePhotoStorageKey`. Avatar 36 CSS px em `common/avatar/index.tsx`. | `AVATAR_SMALL` 144² e `PROFILE_PREVIEW` 320². Crop quadrado explícito. | Resolução por referência contextual, respeitando privacidade e moderação. `MediaImageProcessingAdapterTest` cobre tamanho e ausência de upscale. |
+| Perfil administrativo, Identity | `GET /identity/admin/users/{userId}`, `AdminUserResponseDTO.profilePhotoStorageKey`. | `PROFILE_PREVIEW` 320² candidata. | Permissão administrativa do owner e revalidação. Medida da superfície e testes de integração pendentes. |
+| Carteirinha e exportação, Identity | Foto de perfil legada, `MembershipCard.tsx` e `card-export/exportCard.ts`. | `CARD_PORTRAIT` até 4096² com crop vertical independente. Foto de 240×345 no SVG de 856×540. Exportação a 300 DPI precisa de aproximadamente 283×408 px nessa caixa. | Foto privada por referência, `no-store`. Processador testa crops independentes. Prova visual da exportação fica na integração. |
+| Feed e galeria, Publications | `GET /publications/feed`, `PublicationFeedDTO`, galeria legada ordenada por posição. | `GALLERY` até 1600×1200, sem crop implícito. `PublicationPhotoCarousel.tsx` declara 720 CSS px e `object-contain`. `THUMBNAIL` até 240×180 candidata para miniatura administrativa. | Revalidar ACL e moderação da publicação. Testar cache e equivalência do legado na integração. |
+| Comentários e autores, Publications e Identity | `GET /publications/{publicationId}/comments`, autoria por `authorUserId`. `PublicationCommentAuthor.tsx` admite nome/foto e tem fallback por ID. | `AVATAR_SMALL` 144², crop quadrado sob autorização contextual. | Resolver o lote de autores sem N+1 e sem ampliar acesso por meio da foto. Testes do contrato de leitura e do lote pendentes. |
+| Capas, galerias e participantes, Publications (Events) e Identity | `GET /events/{id}/participants`, `EventParticipantResponseDTO.profilePhotoStorageKey`. `FeedSidebar.tsx` usa capa de 64×56 CSS px. | `THUMBNAIL` 240×180 na lista, `GALLERY` até 1600×1200 no detalhe, `AVATAR_SMALL` 144² para participantes. Preservar proporção do arquivo. | Aplicar membritude no contexto do evento quando exigida e revalidar ACL da referência. Testes de integração pendentes. |
+| Galeria e capa, Vehicles | `GET /vehicles/detail/member/{vehicleId}`, `DetailResponseDTO.images`, `photo` como alias da principal. `VehiclePhotoCarousel.tsx` usa até cinco fotos. | `THUMBNAIL` 240×180 e `GALLERY` 1600×1200, sem aplicar um crop comum a caixas diferentes. | Ownership e permissão de Vehicles. Testar ordenação, alias legado e cache na integração. |
+| Foto, Tools | `/tools`, `/admin/tools`, `ToolResponseDTO.photoStorageKey`. `ToolDetailModal.tsx` exibe 16:9 com `object-cover`. | `THUMBNAIL` 240×180 e `GALLERY` 1600×1200. Crop de paisagem a confirmar no contrato consumidor. | ACL de Tools com revalidação, sem presumir acesso público. Testes de integração pendentes. |
+| Foto de dependente, Dependents | `GET /dependents/{id}/photo`, `DependentResponseDTO`. `DependentPhoto.tsx` declara 48×48 CSS px. | `AVATAR_SMALL` 144² cobre até 3× e `PROFILE_PREVIEW` 320² atende a exibição maior. Crop quadrado explícito. | Titularidade, estado e `no-store`. Prova do novo acesso por referência fica na integração. |
+| Históricos, Storage e owners de referência | Histórico de referências e auditoria do catálogo. Legado permanece sob o contrato de origem. | Preservar variante e referência históricas. | Referência encerrada não concede acesso operacional. `MediaResolutionServiceTest` e `StorageUploadFlowTest` exercitam o catálogo e a resolução. |
+
+D06–D08 governam dimensões, processamento e crops. D03, D09 e D13
+governam autorização, moderação e cache. D12 e D14 limitam a leitura do legado
+e do frontend. A precedência registrada em BACK-626 #10524 aplica também as
+retificações BACK-547 #10368, #10434, #10445 e #10521. Billing está fora do MVP.
+
+Quando a MASTER precisa reduzir resolução para caber no teto de bytes, o
+processador compara os pixels disponíveis de cada crop com os necessários para
+o preset, limitados à resolução disponível antes da redução. Para a carteirinha
+usa a caixa de exportação de 283×408 px como piso, mantendo o teto de 4096²
+para a derivada. Fontes menores continuam sem upscale. A rejeição é anterior
+à persistência. Esse critério mede resolução disponível, não fidelidade
+perceptual de fotos nem adequação de todas as superfícies responsivas.
+
 Inventário parcial de código, sem execução ou homologação visual. Backend: base
 `f66839f6f6004f7c267d554e5857eca924ccceca`. Frontend: repositório
 `Jeep-Club/frontend-application`, `develop` em
