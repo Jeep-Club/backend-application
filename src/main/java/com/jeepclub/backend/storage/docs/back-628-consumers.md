@@ -7,6 +7,21 @@ Consulta somente de código em `Jeep-Club/front-end-web-application`, branch
 backend conferidos a partir de `4ca93e106b637a50e15b619d83949991fad8c176`.
 As notas abaixo da matriz preservam o histórico das medições anteriores.
 
+### Fundamentação dos presets
+
+| Preset | Evidência na superfície de referência | Decisão técnica |
+| --- | --- | --- |
+| `AVATAR_SMALL` 144² | Avatar de 36 CSS px e foto de dependente de 48 CSS px. | Um crop quadrado com 144 px cobre 3× nas duas caixas. Uma fonte menor mantém sua resolução. |
+| `PROFILE_PREVIEW` 320² | Cartão de perfil de 96 CSS px. | 288 px cobrem 3× na caixa observada. O limite deixa margem para variações pequenas de layout. |
+| `THUMBNAIL` 240×180 | Miniatura de 72² CSS px e capa de evento de 64×56 CSS px. | 216² ou 192×168 px são as referências 3×; o eixo de 180 px cobre a capa e 2,5× na miniatura quando o enquadramento é compatível. |
+| `GALLERY` até 1600×1200 | Carrossel com `sizes` de até 720 CSS px e `object-contain`. | Para 16:9, 1440×810 px cobrem 2× e cabem no preset. Outras proporções podem usar menos largura para preservar o enquadramento. |
+| `CARD_PORTRAIT` até 4096² | Caixa de foto de aproximadamente 283×408 px no export de 300 DPI. | Crop vertical independente. As três fotos públicas produziram retratos acima da caixa; o teto permite preservar resolução útil sem upscale. |
+
+As dimensões medem o suporte técnico dos presets para as caixas identificadas.
+DPR variável, renderização final, testes de UI e integração dos consumidores
+pertencem às entregas de integração. A escolha de variante em uma superfície
+sem caixa conhecida permanece uma hipótese dessa integração.
+
 | Superfície e owner | HTTP e legado | Variante, dimensão e enquadramento | ACL/cache e prova |
 | --- | --- | --- | --- |
 | Navbar e perfil, Identity | `GET /identity/me`, `CurrentUserResponseDTO.profilePhotoStorageKey`. Avatar 36 CSS px em `common/avatar/index.tsx`. | `AVATAR_SMALL` 144² e `PROFILE_PREVIEW` 320². Crop quadrado explícito. | Resolução por referência contextual, respeitando privacidade e moderação. `MediaImageProcessingAdapterTest` cobre tamanho e ausência de upscale. |
@@ -24,6 +39,15 @@ D06–D08 governam dimensões, processamento e crops. D03, D09 e D13
 governam autorização, moderação e cache. D12 e D14 limitam a leitura do legado
 e do frontend. A precedência registrada em BACK-626 #10524 aplica também as
 retificações BACK-547 #10368, #10434, #10445 e #10521. Billing está fora do MVP.
+
+Rastreio adicional da [decisão consolidada](https://jeep-club-developers.atlassian.net/browse/BACK-626)
+para a matriz: D01–D02 separam o catálogo Storage, o provider e os
+consumidores; D04–D05 mantêm vínculo por contexto, identidades distintas,
+custódia do objeto e histórico. D10–D11 regem descarte e retenção em
+entregas próprias, inclusive a prevalência de SENSITIVE para histórico
+sensível. D15 preserva trilha e reconciliação conservadora, sem liberar
+purge físico. As linhas da matriz indicam os contratos legados e a
+validação de cada owner sem antecipar cutover ou integração.
 
 Quando a MASTER precisa reduzir resolução para caber no teto de bytes, o
 processador compara os pixels disponíveis de cada crop com os necessários para
