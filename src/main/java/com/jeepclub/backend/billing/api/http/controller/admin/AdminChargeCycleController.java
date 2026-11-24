@@ -51,6 +51,7 @@ public class AdminChargeCycleController {
     @PostMapping("/billing/charge-definitions/{chargeDefinitionId}/cycles")
     @PreAuthorize("hasAuthority('BILLING_CHARGE_CYCLE_GENERATE')")
     @RequiredPermission("BILLING_CHARGE_CYCLE_GENERATE")
+    @ApiResponse(responseCode = "201", description = "Ciclo gerado.", content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = GenerateChargeCycleResponse.class)))
     @ApiResponse(responseCode = "400", description = "Payload inválido.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class)))
     @ApiResponse(responseCode = "404", description = "Definição não encontrada.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class)))
     @ApiResponse(responseCode = "409", description = "Definição inativa, ciclo duplicado ou nenhum usuário elegível resolvido.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class)))
@@ -99,6 +100,7 @@ public class AdminChargeCycleController {
     @GetMapping("/billing/charge-cycles/{cycleId}")
     @PreAuthorize("hasAuthority('BILLING_CHARGE_CYCLE_READ')")
     @RequiredPermission("BILLING_CHARGE_CYCLE_READ")
+    @ApiResponse(responseCode = "200", description = "Ciclo retornado.", content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ChargeCycleResponse.class)))
     @ApiResponse(responseCode = "404", description = "Ciclo não encontrado.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class)))
     @Operation(
             summary = "Buscar ciclo de cobrança por ID",
@@ -115,6 +117,7 @@ public class AdminChargeCycleController {
     @PatchMapping("/billing/charge-cycles/{cycleId}/cancel")
     @PreAuthorize("hasAuthority('BILLING_CHARGE_CYCLE_CANCEL')")
     @RequiredPermission("BILLING_CHARGE_CYCLE_CANCEL")
+    @ApiResponse(responseCode = "200", description = "Ciclo retornado.", content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ChargeCycleResponse.class)))
     @ApiResponse(responseCode = "404", description = "Ciclo não encontrado.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class)))
     @ApiResponse(responseCode = "409", description = "Estado do ciclo não permite cancelamento.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class)))
     @Operation(
@@ -132,6 +135,7 @@ public class AdminChargeCycleController {
     @PatchMapping("/billing/charge-cycles/{cycleId}/finish")
     @PreAuthorize("hasAuthority('BILLING_CHARGE_CYCLE_FINISH')")
     @RequiredPermission("BILLING_CHARGE_CYCLE_FINISH")
+    @ApiResponse(responseCode = "200", description = "Ciclo retornado.", content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ChargeCycleResponse.class)))
     @ApiResponse(responseCode = "404", description = "Ciclo não encontrado.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class)))
     @ApiResponse(responseCode = "409", description = "Estado do ciclo não permite finalização.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class)))
     @Operation(
@@ -149,6 +153,7 @@ public class AdminChargeCycleController {
     @PatchMapping("/billing/charge-cycles/{cycleId}/archive")
     @PreAuthorize("hasAuthority('BILLING_CHARGE_CYCLE_ARCHIVE')")
     @RequiredPermission("BILLING_CHARGE_CYCLE_ARCHIVE")
+    @ApiResponse(responseCode = "200", description = "Ciclo retornado.", content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ChargeCycleResponse.class)))
     @ApiResponse(responseCode = "404", description = "Ciclo não encontrado.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class)))
     @ApiResponse(responseCode = "409", description = "Somente ciclos finalizados ou cancelados podem ser arquivados.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class)))
     @Operation(
