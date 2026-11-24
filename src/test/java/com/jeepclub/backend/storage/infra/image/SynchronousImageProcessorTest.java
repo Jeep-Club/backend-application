@@ -8,6 +8,30 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.*;
 
 class SynchronousImageProcessorTest {
+    @Test void rejectsReductionBelowAvailableGalleryResolution() throws Exception {
+        var source = new BufferedImage(1600, 1200, BufferedImage.TYPE_INT_ARGB);
+        var random = new java.util.Random(628);
+        for (int y = 0; y < source.getHeight(); y++) {
+            for (int x = 0; x < source.getWidth(); x++) {
+                source.setRGB(x, y, random.nextInt());
+            }
+        }
+        var output = new ByteArrayOutputStream();
+        ImageIO.write(source, "png", output);
+        assertThat(output.size()).isBetween(5 * 1024 * 1024 + 1, SynchronousImageProcessor.MAX_INPUT);
+        var processor = new SynchronousImageProcessor();
+        var thumbnail = new SynchronousImageProcessor.Preset("THUMBNAIL", 240, 180, null);
+        var gallery = new SynchronousImageProcessor.Preset("GALLERY", 1600, 1200, null);
+        byte[] input = output.toByteArray();
+
+        var reduced = processor.process(input, SynchronousImageProcessor.Category.OTHER, List.of(thumbnail));
+        assertThat(reduced.master().bytes().length).isLessThanOrEqualTo(5 * 1024 * 1024);
+        assertThat(reduced.variants().get(0).width()).isEqualTo(240);
+        assertThatThrownBy(() -> processor.process(input, SynchronousImageProcessor.Category.OTHER, List.of(thumbnail, gallery)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("MASTER cannot preserve variant resolution within category limit");
+    }
+
     private byte[] image() throws Exception {
         var img = new BufferedImage(120, 80, BufferedImage.TYPE_INT_RGB);
         var out = new ByteArrayOutputStream(); ImageIO.write(img, "png", out); return out.toByteArray();
@@ -87,6 +111,22 @@ class SynchronousImageProcessorTest {
         byte[] valid = image();
         assertThatThrownBy(() -> processor.process(java.util.Arrays.copyOf(valid, valid.length - 12),
                 SynchronousImageProcessor.Category.PROFILE, List.of())).isInstanceOf(IllegalArgumentException.class);
+    }
+    @Test void rejectsOverBudgetPngHeadersBeforeReadingPixels() throws Exception {
+        var processor = new SynchronousImageProcessor();
+        for (int[] dimensions : new int[][]{{10_001, 1}, {1, 10_001}, {5_001, 4_000}}) {
+            byte[] png = image();
+            // Keep the small IDAT and repair the header CRC so the dimension check must reject it.
+            var header = java.nio.ByteBuffer.wrap(png);
+            header.putInt(16, dimensions[0]);
+            header.putInt(20, dimensions[1]);
+            var crc = new java.util.zip.CRC32();
+            crc.update(png, 12, 17);
+            header.putInt(29, (int) crc.getValue());
+            assertThatThrownBy(() -> processor.process(png, SynchronousImageProcessor.Category.PROFILE, List.of()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("Image dimensions exceed limits");
+        }
     }
     @Test void pngMasterDropsTextWithoutRecompressingPixelsOrLosingTransparency() throws Exception {
         var input = new BufferedImage(12, 8, BufferedImage.TYPE_INT_ARGB);
