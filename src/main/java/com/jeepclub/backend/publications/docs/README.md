@@ -226,7 +226,7 @@ específica de Notice; o controller usa `@PreAuthorize` para enforcement e
 não exige `@RequiresMembership`. `GET /admin/notices` e `GET /admin/notices/{id}` podem ler
 DRAFT, PUBLISHED e ARCHIVED; a listagem paginada aplica filtros opcionais de `status`,
 `priority` (`LOW`, `NORMAL`, `HIGH`, `URGENT`), `expired` (`true` para `validUntil < now`,
-`false` para vigentes/sem vencimento, omitido para todos), busca literal `q` por
+`false` para não vencidos (incluindo agendados com início futuro e avisos sem vencimento), omitido para todos), busca literal `q` por
 título/conteúdo e intervalos `from`/`to` (`createdAt`) ou `publishedFrom`/`publishedTo`
 (`publishedAt`), com allowlist de ordenação (incluindo `priority`, `validFrom`, `validUntil`)
 e `id` como desempate determinístico. Quando o administrador possui `IDENTITY_USER_READ`,

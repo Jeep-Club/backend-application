@@ -57,7 +57,7 @@ public class AdminNoticeController {
             @RequestParam(required = false) PublicationStatus status,
             @Parameter(description = "Filtro por prioridade editorial (LOW, NORMAL, HIGH, URGENT).")
             @RequestParam(required = false) NoticePriority priority,
-            @Parameter(description = "Filtro por expiração temporal (true apenas vencidos em relação ao Clock; false apenas vigentes/sem vencimento; omitido retorna todos).")
+            @Parameter(description = "Filtro por expiração temporal (true apenas vencidos em relação ao Clock; false para não vencidos (incluindo avisos agendados com início futuro e avisos sem vencimento); omitido retorna todos).")
             @RequestParam(required = false) Boolean expired,
             @Parameter(description = "Busca textual literal case-insensitive em título ou conteúdo (máximo 200 caracteres).")
             @RequestParam(required = false) String q,
