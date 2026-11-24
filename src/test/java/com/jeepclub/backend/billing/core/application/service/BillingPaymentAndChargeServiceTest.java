@@ -50,6 +50,34 @@ class BillingPaymentAndChargeServiceTest {
     private MemberPaymentService memberPayments(Clock clock) {
         return new MemberPaymentService(payments, charges, new PaymentReceiptValidator(new PaymentReceiptValidationProperties()), lifecycle, storage, clock);
     }
+    @Test void paymentContextLooksUpDistinctCyclesInOneBatchAndKeepsLegacyCharges() {
+        var first = charge();
+        var second = mock(MemberCharge.class);
+        when(second.getId()).thenReturn(5L);
+        when(second.getChargeCycleId()).thenReturn(4L);
+        when(second.getChargeDefinitionId()).thenReturn(8L);
+        when(second.getUserId()).thenReturn(11L);
+        when(second.getDueDate()).thenReturn(DUE);
+        assertThat(adminPayments.chargeContexts(List.of())).isEmpty();
+        verifyNoInteractions(charges, cycles);
+        when(charges.findByIds(List.of(2L, 5L, 80L))).thenReturn(List.of(first, second));
+        when(cycles.findByIds(List.of(4L))).thenReturn(List.of(cycle()));
+
+        var contexts = adminPayments.chargeContexts(List.of(2L, 5L, 80L));
+
+        assertThat(contexts).containsOnlyKeys(2L, 5L);
+        assertThat(contexts.get(2L).chargeDefinitionNameSnapshot()).isEqualTo("monthly fee");
+        assertThat(contexts.get(2L).chargeCycleCode()).isEqualTo("2026-09");
+        assertThat(contexts.get(5L).userId()).isEqualTo(11L);
+        assertThat(contexts.get(5L).chargeDefinitionId()).isEqualTo(8L);
+        assertThat(contexts.get(5L).dueDate()).isEqualTo(DUE);
+        assertThat(contexts.get(5L).chargeDefinitionNameSnapshot()).isNull();
+        assertThat(contexts.get(5L).chargeCycleCode()).isNull();
+        verify(charges).findByIds(List.of(2L, 5L, 80L));
+        verify(cycles).findByIds(List.of(4L));
+        verifyNoMoreInteractions(charges, cycles);
+    }
+
     @Test void confirmationUsesCycleThenPaymentThenChargeLockWithoutRecheckingExpiredWindow() {
         var p = payment(); var c = charge();
         adminPayments = new AdminMemberPaymentService(payments, charges, Clock.offset(CLOCK, Duration.ofDays(1)), cycles, refunds);

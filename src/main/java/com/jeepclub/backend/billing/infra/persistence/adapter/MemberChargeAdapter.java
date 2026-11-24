@@ -11,6 +11,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -38,6 +39,11 @@ public class MemberChargeAdapter implements MemberChargeRepository {
     public Optional<MemberCharge> findById(Long id) {
         return jpa.findById(id)
                 .map(mapper::toDomain);
+    }
+
+    @Override
+    public List<MemberCharge> findByIds(Collection<Long> ids) {
+        return ids.isEmpty() ? List.of() : jpa.findAllById(ids).stream().map(mapper::toDomain).toList();
     }
 
     @Override

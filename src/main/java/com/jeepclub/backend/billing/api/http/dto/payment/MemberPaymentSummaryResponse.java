@@ -1,5 +1,6 @@
 package com.jeepclub.backend.billing.api.http.dto.payment;
 
+import com.jeepclub.backend.billing.core.application.result.MemberPaymentChargeContext;
 import com.jeepclub.backend.billing.core.application.result.MemberPaymentResult;
 import com.jeepclub.backend.billing.core.domain.enums.payment.MemberPaymentStatus;
 import com.jeepclub.backend.billing.core.domain.enums.payment.PaymentMethod;
@@ -7,6 +8,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.Objects;
 
 @Schema(description = "Resumo de um pagamento de membro para listagem.")
@@ -34,10 +36,28 @@ public record MemberPaymentSummaryResponse(
         String receiptUrl,
 
         @Schema(description = "Data de criação do pagamento.")
-        Instant createdAt
+        Instant createdAt,
+
+        @Schema(description = "Titular da cobrança vinculada.", nullable = true)
+        Long userId,
+        @Schema(description = "Nome atual do titular, quando autorizado e disponível.", nullable = true)
+        String userName,
+        @Schema(description = "Matrícula vigente do titular, quando autorizada e disponível.", nullable = true)
+        String membershipNumber,
+        @Schema(nullable = true)
+        Long chargeDefinitionId,
+        @Schema(nullable = true)
+        Long chargeCycleId,
+        @Schema(description = "Nome histórico da definição no ciclo.", nullable = true)
+        String chargeDefinitionNameSnapshot,
+        @Schema(description = "Referência histórica do ciclo.", nullable = true)
+        String chargeCycleCode,
+        @Schema(description = "Vencimento da cobrança vinculada.", nullable = true)
+        LocalDate dueDate
 ) {
 
-    public static MemberPaymentSummaryResponse from(MemberPaymentResult result) {
+    public static MemberPaymentSummaryResponse from(MemberPaymentResult result, MemberPaymentChargeContext charge,
+                                                    String userName, String membershipNumber) {
         Objects.requireNonNull(result, "result cannot be null");
 
         return new MemberPaymentSummaryResponse(
@@ -48,7 +68,9 @@ public record MemberPaymentSummaryResponse(
                 result.status(),
                 result.paidAt(),
                 "/billing/member-payments/" + result.id() + "/receipt",
-                result.createdAt()
+                result.createdAt(),
+                charge.userId(), userName, membershipNumber, charge.chargeDefinitionId(), charge.chargeCycleId(),
+                charge.chargeDefinitionNameSnapshot(), charge.chargeCycleCode(), charge.dueDate()
         );
     }
 }
