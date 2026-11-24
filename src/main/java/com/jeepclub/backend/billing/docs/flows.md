@@ -102,3 +102,14 @@ O histórico de exclusão da definição preserva o snapshot e o ID do autor. A
 resposta HTTP inclui o nome cadastral atual do autor ativo quando o solicitante
 possui `IDENTITY_USER_READ`. A consulta exige
 `BILLING_CHARGE_DEFINITION_HISTORY_READ`, é auditada e usa `Cache-Control: no-store`.
+
+### Operadores de ciclos e consistência das transições
+
+Os detalhes e as respostas de geração, cancelamento, finalização e arquivamento
+do ciclo incluem os nomes atuais dos operadores autorizados, resolvidos em
+um lote pelos IDs preservados. A listagem de ciclos conserva o contrato resumido.
+
+Nas mutações administrativas de ciclos e reembolsos, a composição da resposta
+participa da transação do comando. Falha técnica na apresentação resulta em
+rollback e erro HTTP sanitizado. Ausência cadastral ou de permissão auxiliar
+continua produzindo nomes nulos.

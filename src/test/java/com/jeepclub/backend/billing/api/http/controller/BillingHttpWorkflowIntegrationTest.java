@@ -171,6 +171,14 @@ class BillingHttpWorkflowIntegrationTest {
 
         when(identity.findByIds(anyCollection())).thenReturn(List.of(billingUser(10L, "Titular"), billingUser(99L, "Operador")));
         when(registrations.currentNumbers(List.of(10L))).thenReturn(Map.of(10L, "00042"));
+        auth(99L, "BILLING_REFUND_READ", "IDENTITY_USER_READ");
+        mvc.perform(token(get(detail))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.userName").value("Titular"))
+                .andExpect(jsonPath("$.membershipNumber").value(org.hamcrest.Matchers.nullValue()));
+        auth(99L, "BILLING_REFUND_READ", "MEMBERSHIP_MEMBER_READ");
+        mvc.perform(token(get(detail))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.userName").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.membershipNumber").value("00042"));
         auth(99L, "BILLING_REFUND_APPROVE", "BILLING_REFUND_MARK_AS_REFUNDED", "BILLING_REFUND_READ",
                 "IDENTITY_USER_READ", "MEMBERSHIP_MEMBER_READ");
         mvc.perform(token(patch("/billing/member-refunds/{id}/approve", refund))).andExpect(status().isOk())
@@ -670,20 +678,153 @@ class BillingHttpWorkflowIntegrationTest {
         return new UserDetails(userId, name, null, null, null, null, null, null, true, null, null, null);
     }
 
+    @Test void refundListsKeepPagingAndHistoricalLabelsForSharedChargeContext() throws Exception {
+        var charge = seedCharge();
+        var cycle = cycles.findById(charge.getChargeCycleId()).orElseThrow();
+        cycle.finish(99L, NOW);
+        cycle.archive(99L, NOW);
+        cycles.save(cycle);
+        jdbc.update("update billing_charge_definitions set name = ? where id = ?", "renamed", charge.getChargeDefinitionId());
+        entityManager.clear();
+        for (long paymentId = 100; paymentId < 105; paymentId++) {
+            refunds.save(MemberRefund.createMemberRequest(charge.getId(), paymentId, cycle.getId(), 10L, AMOUNT, 10L, NOW));
+        }
+        auth(99L, "BILLING_REFUND_READ", "IDENTITY_USER_READ", "MEMBERSHIP_MEMBER_READ");
+        when(identity.findByIds(List.of(10L))).thenReturn(List.of(billingUser(10L, "Holder")));
+        when(registrations.currentNumbers(List.of(10L))).thenReturn(Map.of(10L, "00042"));
+
+        for (String endpoint : List.of("/billing/member-refunds?status=REQUESTED",
+                "/billing/charge-cycles/" + cycle.getId() + "/member-refunds")) {
+            clearInvocations(identity, registrations);
+            mvc.perform(token(get(endpoint).param("size", "3"))).andExpect(status().isOk())
+                    .andExpect(jsonPath("$.totalElements").value(5))
+                    .andExpect(jsonPath("$.content.length()").value(3))
+                    .andExpect(jsonPath("$.content[0].userName").value("Holder"))
+                    .andExpect(jsonPath("$.content[1].membershipNumber").value("00042"))
+                    .andExpect(jsonPath("$.content[2].chargeDefinitionNameSnapshot").value("seed"))
+                    .andExpect(jsonPath("$.content[2].chargeCycleCode").value("seed-cycle"));
+            verify(identity).findByIds(List.of(10L));
+            verify(registrations).currentNumbers(List.of(10L));
+            clearInvocations(identity, registrations);
+            mvc.perform(token(get(endpoint).param("page", "2").param("size", "3"))).andExpect(status().isOk())
+                    .andExpect(jsonPath("$.totalElements").value(5))
+                    .andExpect(jsonPath("$.content.length()").value(0));
+            verifyNoInteractions(identity, registrations);
+        }
+    }
+
+    @Test void cyclePresentationReturnsAuthorizedActorsOnGenerationAndTransitions() throws Exception {
+        auth(99L, "BILLING_CHARGE_DEFINITION_CREATE", "BILLING_CHARGE_ASSIGNMENT_CREATE",
+                "BILLING_CHARGE_CYCLE_GENERATE", "IDENTITY_USER_READ");
+        when(members.existsActiveMemberByUserId(10L)).thenReturn(true);
+        when(members.existsActiveMemberByUserIdForUpdate(10L)).thenReturn(true);
+        when(identity.findByIds(List.of(99L))).thenReturn(List.of(billingUser(99L, "Generator")));
+        long definition = id(mvc.perform(body(post("/billing/charge-definitions"), DEFINITION))
+                .andExpect(status().isCreated()).andReturn());
+        mvc.perform(token(post("/billing/charge-definitions/{id}/assignments/users/10", definition)))
+                .andExpect(status().isCreated());
+        var generated = mvc.perform(body(post("/billing/charge-definitions/{id}/cycles", definition),
+                        "{\"code\":\"actor-test\",\"dueDate\":\"2026-09-15\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.chargeCycle.generatedByUserId").value(99))
+                .andExpect(jsonPath("$.chargeCycle.generatedByUserName").value("Generator"))
+                .andExpect(jsonPath("$.chargeCycle.canceledByUserName").value(org.hamcrest.Matchers.nullValue()))
+                .andReturn();
+        long cycle = json.readTree(generated.getResponse().getContentAsString()).get("chargeCycle").get("id").asLong();
+        String detail = "/billing/charge-cycles/{id}";
+
+        auth(99L, "BILLING_CHARGE_CYCLE_FINISH", "IDENTITY_USER_READ");
+        clearInvocations(identity);
+        mvc.perform(token(patch(detail + "/finish", cycle))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.finishedByUserName").value("Generator"));
+        verify(identity).findByIds(List.of(99L));
+
+        auth(98L, "BILLING_CHARGE_CYCLE_ARCHIVE", "BILLING_CHARGE_CYCLE_READ", "IDENTITY_USER_READ");
+        when(identity.findByIds(List.of(99L, 98L))).thenReturn(List.of(billingUser(99L, "Generator"), billingUser(98L, "Archivist")));
+        mvc.perform(token(patch(detail + "/archive", cycle))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.archivedByUserName").value("Archivist"));
+        mvc.perform(token(get(detail, cycle))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.generatedByUserName").value("Generator"))
+                .andExpect(jsonPath("$.finishedByUserName").value("Generator"))
+                .andExpect(jsonPath("$.archivedByUserName").value("Archivist"))
+                .andExpect(jsonPath("$.chargeDefinitionNameSnapshot").value("fee"))
+                .andExpect(jsonPath("$.code").value("actor-test"));
+        mvc.perform(token(get("/billing/charge-definitions/{id}/cycles", definition))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].archivedByUserName").doesNotHaveJsonPath());
+        when(identity.findByIds(List.of(99L, 98L))).thenReturn(List.of(new UserDetails(
+                98L, "Inactive", null, null, null, null, null, null, false, null, null, null)));
+        mvc.perform(token(get(detail, cycle))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.generatedByUserName").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.archivedByUserName").value(org.hamcrest.Matchers.nullValue()));
+
+        auth(98L, "BILLING_CHARGE_CYCLE_READ");
+        clearInvocations(identity);
+        mvc.perform(token(get(detail, cycle))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.archivedByUserName").value(org.hamcrest.Matchers.nullValue()));
+        verifyNoInteractions(identity);
+        mvc.perform(get(detail, cycle)).andExpect(status().isUnauthorized());
+        auth(98L, "IDENTITY_USER_READ");
+        mvc.perform(token(get(detail, cycle))).andExpect(status().isForbidden());
+
+        var automatic = ChargeCycle.generate(definitions.findById(definition).orElseThrow(), "automatic", DUE, null, NOW);
+        long automaticId = cycles.save(automatic).getId();
+        auth(98L, "BILLING_CHARGE_CYCLE_CANCEL", "IDENTITY_USER_READ");
+        when(identity.findByIds(List.of(98L))).thenReturn(List.of(billingUser(98L, "Archivist")));
+        mvc.perform(token(patch(detail + "/cancel", automaticId))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.generatedByUserName").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.canceledByUserName").value("Archivist"));
+    }
+
+    @Test
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    void actorLookupFailureRollsBackRefundAndCycleCommands() throws Exception {
+        var definition = definitions.save(ChargeDefinition.create("rollback fixture", null, AMOUNT,
+                com.jeepclub.backend.billing.core.domain.enums.ChargeRecurrenceType.ONE_TIME,
+                true, PaymentAcceptancePolicy.AFTER_DUE_DATE, null, NOW));
+        Long cycle = null;
+        Long refund = null;
+        try {
+            cycle = cycles.save(ChargeCycle.generate(definition, "rollback", DUE, 99L, NOW)).getId();
+            refund = refunds.save(com.jeepclub.backend.billing.support.BillingFixtures.request()).getId();
+            auth(99L, "BILLING_CHARGE_CYCLE_FINISH", "BILLING_REFUND_APPROVE", "IDENTITY_USER_READ");
+            when(identity.findByIds(anyCollection())).thenThrow(new IllegalStateException("private lookup message"));
+
+            mvc.perform(token(patch("/billing/charge-cycles/{id}/finish", cycle)))
+                    .andExpect(status().isInternalServerError())
+                    .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
+                    .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("private lookup message"))));
+            assertThat(cycles.findById(cycle).orElseThrow().isGenerated()).isTrue();
+
+            mvc.perform(token(patch("/billing/member-refunds/{id}/approve", refund)))
+                    .andExpect(status().isInternalServerError())
+                    .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
+                    .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("private lookup message"))));
+            assertThat(refunds.findById(refund).orElseThrow().getStatus().name()).isEqualTo("REQUESTED");
+        } finally {
+            if (refund != null) jdbc.update("delete from billing_member_refunds where id = ?", refund);
+            if (cycle != null) jdbc.update("delete from billing_charge_cycles where id = ?", cycle);
+            jdbc.update("delete from billing_charge_definitions where id = ?", definition.getId());
+        }
+    }
+
     @Test void refundRequestsAndAdministrativeRejectCancelExpireFollowSpecificPermissionsAndStates() throws Exception {
-        var request = refunds.save(com.jeepclub.backend.billing.support.BillingFixtures.request());
+        var charge = seedCharge();
+        var request = refunds.save(MemberRefund.createMemberRequest(charge.getId(), 1L, charge.getChargeCycleId(), 10L, AMOUNT, 10L, NOW));
         when(identity.findByIds(anyCollection())).thenReturn(List.of(billingUser(99L, "Operador")));
         auth(99L, "BILLING_REFUND_REJECT", "BILLING_REFUND_CANCEL", "BILLING_REFUND_EXPIRE", "IDENTITY_USER_READ");
         mvc.perform(body(patch("/billing/member-refunds/{id}/reject", request.getId()), "{\"rejectionReason\":\" \"}")).andExpect(status().isBadRequest());
         mvc.perform(body(patch("/billing/member-refunds/{id}/reject", request.getId()), "{\"rejectionReason\":\"not refundable\"}"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("REJECTED"))
-                .andExpect(jsonPath("$.rejectedByUserName").value("Operador"));
-        var canceled = refunds.save(com.jeepclub.backend.billing.support.BillingFixtures.request());
+                .andExpect(jsonPath("$.rejectedByUserName").value("Operador"))
+                .andExpect(jsonPath("$.chargeDefinitionNameSnapshot").value("seed"));
+        var canceled = refunds.save(MemberRefund.createMemberRequest(charge.getId(), 2L, charge.getChargeCycleId(), 10L, AMOUNT, 10L, NOW));
         mvc.perform(token(patch("/billing/member-refunds/{id}/cancel", canceled.getId()))).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("CANCELED"))
-                .andExpect(jsonPath("$.canceledByUserName").value("Operador"));
-        var expired = refunds.save(MemberRefund.createEligibilityForCanceledCycle(2L, 1L, 4L, 10L, AMOUNT, 99L, NOW.minusSeconds(100), NOW, NOW));
+                .andExpect(jsonPath("$.canceledByUserName").value("Operador"))
+                .andExpect(jsonPath("$.chargeCycleCode").value("seed-cycle"));
+        var expired = refunds.save(MemberRefund.createEligibilityForCanceledCycle(charge.getId(), 3L, charge.getChargeCycleId(), 10L, AMOUNT, 99L, NOW.minusSeconds(100), NOW, NOW));
         mvc.perform(token(patch("/billing/member-refunds/{id}/expire", expired.getId()))).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("EXPIRED"))
                 .andExpect(jsonPath("$.createdByUserName").value("Operador"))
+                .andExpect(jsonPath("$.chargeCycleCode").value("seed-cycle"))
                 .andExpect(jsonPath("$.canceledByUserName").value(org.hamcrest.Matchers.nullValue()));
         var eligible = refunds.save(eligibility()); auth(20L);
         mvc.perform(token(patch("/billing/member-refunds/{id}/request", eligible.getId()))).andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("MEMBER_REFUND_ACCESS_DENIED"));
