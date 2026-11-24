@@ -6,7 +6,6 @@ import com.jeepclub.backend.billing.api.http.dto.cycle.ChargeCycleSummaryRespons
 import com.jeepclub.backend.billing.api.http.dto.cycle.GenerateChargeCycleRequest;
 import com.jeepclub.backend.billing.api.http.dto.cycle.GenerateChargeCycleResponse;
 import com.jeepclub.backend.billing.core.application.result.cycle.ChargeCycleResult;
-import com.jeepclub.backend.billing.core.application.result.cycle.GenerateChargeCycleResult;
 import com.jeepclub.backend.billing.core.application.service.chargecycle.AdminChargeCycleService;
 import com.jeepclub.backend.platform.security.principal.UserPrincipal;
 import com.jeepclub.backend.platform.openapi.security.RequiredPermission;
@@ -47,6 +46,7 @@ import java.net.URI;
 public class AdminChargeCycleController {
 
     private final AdminChargeCycleService adminChargeCycleService;
+    private final AdminChargeCyclePresentation presentation;
 
     @PostMapping("/billing/charge-definitions/{chargeDefinitionId}/cycles")
     @PreAuthorize("hasAuthority('BILLING_CHARGE_CYCLE_GENERATE')")
@@ -63,16 +63,16 @@ public class AdminChargeCycleController {
             @Valid @RequestBody GenerateChargeCycleRequest request,
             @AuthenticationPrincipal UserPrincipal principal
     ) {
-        GenerateChargeCycleResult result = adminChargeCycleService.generate(
+        var response = presentation.generate(() -> adminChargeCycleService.generate(
                 chargeDefinitionId,
                 request.code(),
                 request.dueDate(),
                 principal.getUserId()
-        );
+        ));
 
         return ResponseEntity
-                .created(URI.create("/billing/charge-cycles/" + result.chargeCycle().id()))
-                .body(GenerateChargeCycleResponse.from(result));
+                .created(URI.create("/billing/charge-cycles/" + response.chargeCycle().id()))
+                .body(response);
     }
 
     @GetMapping("/billing/charge-definitions/{chargeDefinitionId}/cycles")
@@ -109,7 +109,7 @@ public class AdminChargeCycleController {
     ) {
         ChargeCycleResult result = adminChargeCycleService.findById(cycleId);
 
-        return ResponseEntity.ok(ChargeCycleResponse.from(result));
+        return ResponseEntity.ok(presentation.detail(result));
     }
 
     @PatchMapping("/billing/charge-cycles/{cycleId}/cancel")
@@ -125,12 +125,8 @@ public class AdminChargeCycleController {
             @PathVariable @Positive(message = "ID do ciclo deve ser maior que zero.") Long cycleId,
             @AuthenticationPrincipal UserPrincipal principal
     ) {
-        ChargeCycleResult result = adminChargeCycleService.cancel(
-                cycleId,
-                principal.getUserId()
-        );
-
-        return ResponseEntity.ok(ChargeCycleResponse.from(result));
+        return ResponseEntity.ok(presentation.transition(
+                () -> adminChargeCycleService.cancel(cycleId, principal.getUserId())));
     }
 
     @PatchMapping("/billing/charge-cycles/{cycleId}/finish")
@@ -146,12 +142,8 @@ public class AdminChargeCycleController {
             @PathVariable @Positive(message = "ID do ciclo deve ser maior que zero.") Long cycleId,
             @AuthenticationPrincipal UserPrincipal principal
     ) {
-        ChargeCycleResult result = adminChargeCycleService.finish(
-                cycleId,
-                principal.getUserId()
-        );
-
-        return ResponseEntity.ok(ChargeCycleResponse.from(result));
+        return ResponseEntity.ok(presentation.transition(
+                () -> adminChargeCycleService.finish(cycleId, principal.getUserId())));
     }
 
     @PatchMapping("/billing/charge-cycles/{cycleId}/archive")
@@ -167,11 +159,7 @@ public class AdminChargeCycleController {
             @PathVariable @Positive(message = "ID do ciclo deve ser maior que zero.") Long cycleId,
             @AuthenticationPrincipal UserPrincipal principal
     ) {
-        ChargeCycleResult result = adminChargeCycleService.archive(
-                cycleId,
-                principal.getUserId()
-        );
-
-        return ResponseEntity.ok(ChargeCycleResponse.from(result));
+        return ResponseEntity.ok(presentation.transition(
+                () -> adminChargeCycleService.archive(cycleId, principal.getUserId())));
     }
 }

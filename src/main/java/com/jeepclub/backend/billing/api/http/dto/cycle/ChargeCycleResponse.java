@@ -9,6 +9,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.Map;
 import java.util.Objects;
 
 @Schema(description = "Resposta com dados de um ciclo de cobrança.")
@@ -78,10 +79,22 @@ public record ChargeCycleResponse(
         Instant createdAt,
 
         @Schema(description = "Data da última atualização do registro.", nullable = true)
-        Instant updatedAt
+        Instant updatedAt,
+
+        @Schema(nullable = true)
+        String generatedByUserName,
+
+        @Schema(nullable = true)
+        String canceledByUserName,
+
+        @Schema(nullable = true)
+        String finishedByUserName,
+
+        @Schema(nullable = true)
+        String archivedByUserName
 ) {
 
-    public static ChargeCycleResponse from(ChargeCycleResult result) {
+    public static ChargeCycleResponse from(ChargeCycleResult result, Map<Long, String> names) {
         Objects.requireNonNull(result, "result cannot be null");
 
         return new ChargeCycleResponse(
@@ -106,7 +119,15 @@ public record ChargeCycleResponse(
                 result.archivedAt(),
                 result.archivedByUserId(),
                 result.createdAt(),
-                result.updatedAt()
+                result.updatedAt(),
+                name(names, result.generatedByUserId()),
+                name(names, result.canceledByUserId()),
+                name(names, result.finishedByUserId()),
+                name(names, result.archivedByUserId())
         );
+    }
+
+    private static String name(Map<Long, String> names, Long id) {
+        return id == null ? null : names.get(id);
     }
 }
