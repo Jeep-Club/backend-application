@@ -246,6 +246,53 @@ class StorageUploadFlowTest {
     }
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    void missingReservationAcknowledgementRecoversOnlyTheConfirmedReservation(boolean committed) {
+        long actor = committed ? 987631L : 987632L;
+        admission.abortBeforeStore(admission.reserve(actor));
+        long usedBefore = jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=0", Long.class);
+        var commits = new java.util.concurrent.atomic.AtomicInteger();
+        var uncertainReservation = new org.springframework.transaction.PlatformTransactionManager() {
+            @Override
+            public org.springframework.transaction.TransactionStatus getTransaction(org.springframework.transaction.TransactionDefinition definition) {
+                return manager.getTransaction(definition);
+            }
+
+            @Override
+            public void commit(org.springframework.transaction.TransactionStatus status) {
+                // Two independent budget checks precede the reservation transaction.
+                if (commits.incrementAndGet() != 3) {
+                    manager.commit(status);
+                    return;
+                }
+                if (committed) manager.commit(status);
+                else manager.rollback(status);
+                throw new org.springframework.transaction.TransactionSystemException("Fixture lost reservation acknowledgement");
+            }
+
+            @Override
+            public void rollback(org.springframework.transaction.TransactionStatus status) {
+                manager.rollback(status);
+            }
+        };
+        var uncertainAdmission = new SqlUploadAdmission(emForQuota(), uncertainReservation,
+                64L * 1024 * 1024, 10L * 1024 * 1024 * 1024, 30, 2, 1000);
+        assertThatThrownBy(() -> uncertainAdmission.reserve(actor))
+                .isInstanceOf(org.springframework.transaction.TransactionSystemException.class)
+                .hasMessage("Fixture lost reservation acknowledgement");
+        assertThat(commits.get()).isEqualTo(4);
+        assertThat(jdbc.queryForObject("select count(*) from storage_upload_permits where actor_user_id=? and completed=true and charged=false and accounted_bytes=0",
+                Long.class, actor)).isEqualTo(committed ? 2 : 1);
+        assertThat(jdbc.queryForObject("select in_flight from storage_upload_budgets where scope_id=?", Integer.class, actor)).isZero();
+        assertThat(jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=?", Long.class, actor)).isZero();
+        assertThat(jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=0", Long.class)).isEqualTo(usedBefore);
+        assertThat(jdbc.queryForObject("""
+                select count(*) from storage_upload_planned_blobs p join storage_upload_permits u on u.id=p.permit_id
+                where u.actor_user_id=?
+                """, Long.class, actor)).isZero();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
     void missingCommitAcknowledgementKeepsCustodyWithEitherDatabaseOutcome(boolean committed) throws Exception {
         long actor = committed ? 987629L : 987630L;
         var uncertainCommit = new org.springframework.transaction.PlatformTransactionManager() {

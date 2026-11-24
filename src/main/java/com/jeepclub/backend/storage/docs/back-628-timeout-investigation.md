@@ -25,6 +25,22 @@ O asset permanece sem referência operacional. O ensaio simula a observação
 da aplicação após o commit, sem simular o comportamento de rede do driver.
 O cliente não deve interpretar o 503 como prova de rollback ou autorização de retry.
 
+A admissão SQL gera o UUID do permit antes de iniciar a reserva. Se a
+transação falhar com confirmação indeterminada, o adapter tenta compensar
+em uma transação nova. Ela adquire os locks global e do ator na mesma ordem
+da reserva antes de ler o permit. Sem permit, a reserva não alterou os
+contadores. Com permit confirmado e ainda sem cobrança, a compensação
+devolve os bytes reservados e o slot SQL. A tentativa continua contabilizada
+na janela de admissão. O upload ainda não recebeu o permit nessa fase, logo
+nenhum store físico pode ter começado. Uma falha de compensação preserva a
+falha original e exige investigação do estado persistido.
+
+`StorageUploadFlowTest` verifica commit e rollback reais seguidos de perda
+simulada da confirmação da reserva. No mesmo teste de fluxo, os dois
+resultados do catálogo preservam a custódia e uma cobrança, e apenas o
+commit confirmado no banco preserva o vínculo com o asset. Esses ensaios
+não simulam a indisponibilidade prolongada do banco ou a falha de rede.
+
 ## Benchmark por socket e MySQL
 
 ### Checkpoint de entrega

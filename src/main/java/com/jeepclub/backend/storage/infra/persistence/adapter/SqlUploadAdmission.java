@@ -4,6 +4,7 @@ import com.jeepclub.backend.storage.core.repository.UploadAdmission;
 import com.jeepclub.backend.storage.infra.persistence.entity.*;
 import org.springframework.stereotype.Repository;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.transaction.*;
 import org.springframework.transaction.support.TransactionTemplate;
 import jakarta.persistence.*;
@@ -58,16 +59,27 @@ public class SqlUploadAdmission implements UploadAdmission {
     }
     @Override public Permit reserve(long actor) {
         if(actor<=0) throw new IllegalArgumentException("Invalid actor");ensure(0);ensure(actor);
-        return tx.execute(status -> {
-            var global=lock(0);var user=lock(actor);Instant now=Instant.now();
-            if(!now.isBefore(user.getWindowStart().plusSeconds(3600))) {user.setWindowStart(now);user.setWindowAttempts(0);}
-            if(user.getWindowAttempts()>=hourly || user.getInFlight()>=concurrent || user.getChargedUploads()>=maxUploads
-                || user.getUsedBytes()>userBytes-MAX_RESERVATION || global.getUsedBytes()>globalBytes-MAX_RESERVATION) throw new LimitExceeded();
-            user.setWindowAttempts(user.getWindowAttempts()+1);user.setInFlight(user.getInFlight()+1);
-            user.setUsedBytes(user.getUsedBytes()+MAX_RESERVATION);global.setUsedBytes(global.getUsedBytes()+MAX_RESERVATION);
-            var permit=new UploadPermitEntity();permit.setId(UUID.randomUUID().toString());permit.setActorUserId(actor);permit.setAccountedBytes(MAX_RESERVATION);permit.setCreatedAt(now);em.persist(permit);em.flush();
-            return new Permit(permit.getId(),actor);
-        });
+        var permit = new Permit(UUID.randomUUID().toString(), actor);
+        try {
+            return tx.execute(status -> {
+                var global=lock(0);var user=lock(actor);Instant now=Instant.now();
+                if(!now.isBefore(user.getWindowStart().plusSeconds(3600))) {user.setWindowStart(now);user.setWindowAttempts(0);}
+                if(user.getWindowAttempts()>=hourly || user.getInFlight()>=concurrent || user.getChargedUploads()>=maxUploads
+                    || user.getUsedBytes()>userBytes-MAX_RESERVATION || global.getUsedBytes()>globalBytes-MAX_RESERVATION) throw new LimitExceeded();
+                user.setWindowAttempts(user.getWindowAttempts()+1);user.setInFlight(user.getInFlight()+1);
+                user.setUsedBytes(user.getUsedBytes()+MAX_RESERVATION);global.setUsedBytes(global.getUsedBytes()+MAX_RESERVATION);
+                var row=new UploadPermitEntity();row.setId(permit.id());row.setActorUserId(actor);row.setAccountedBytes(MAX_RESERVATION);row.setCreatedAt(now);em.persist(row);em.flush();
+                return permit;
+            });
+        } catch (TransactionSystemException | DataAccessResourceFailureException failure) {
+            // The permit never reached the upload pipeline, so it could not start a physical write.
+            try {
+                abortBeforeStore(permit, true);
+            } catch (RuntimeException recoveryFailure) {
+                failure.addSuppressed(recoveryFailure);
+            }
+            throw failure;
+        }
     }
     @Override public void charge(Permit permit,long bytes) {
         if(bytes<=0 || bytes>MAX_RESERVATION) throw new IllegalArgumentException("Invalid representation budget");
@@ -98,10 +110,18 @@ public class SqlUploadAdmission implements UploadAdmission {
         });
     }
     @Override public void abortBeforeStore(Permit permit) {
+        abortBeforeStore(permit, false);
+    }
+    private void abortBeforeStore(Permit permit, boolean recoveringReservation) {
         tx.executeWithoutResult(status -> {
             var global=lock(0);var user=lock(permit.actor());var row=lockPermit(permit.id());
+            // The same budget locks serialize this check with the original reservation.
+            if (row == null && recoveringReservation) return;
             if(row==null || row.getActorUserId()!=permit.actor()) throw new IllegalArgumentException("Invalid upload permit");
             if(row.isCompleted()) return;
+            if (recoveringReservation && (row.isCharged() || row.getAccountedBytes() != MAX_RESERVATION)) {
+                throw new IllegalStateException("Unexpected reservation state");
+            }
             global.setUsedBytes(global.getUsedBytes()-row.getAccountedBytes());
             user.setUsedBytes(user.getUsedBytes()-row.getAccountedBytes());
             if(row.isCharged()) user.setChargedUploads(user.getChargedUploads()-1);
