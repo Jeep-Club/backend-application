@@ -1,5 +1,25 @@
 # BACK-637 — limites HTTP verificados
 
+## Contenção do raster antes do decode
+
+O codec reserva unidades de raster depois de inspecionar as dimensões e
+antes da decodificação. O teto compartilhado equivale a duas imagens de
+20 MP de profundidade comum. Amostras de 16 bits e tipos desconhecidos
+pesam o dobro. As unidades ficam reservadas até o processamento retornar,
+inclusive em erro. O limite é uma estimativa de custo de entrada, pois
+orientação, resize, MASTER e codecs também alocam memória. A rejeição por
+capacidade usa 503 antes de qualquer gravação física.
+
+No ensaio por socket com cliente em JVM separada, servidor com heap de
+512 MiB, MySQL 8.0.46 e concorrência 2, PNGs RGBA de 16 bits de 5000×4000
+e aproximadamente 2 MB provocaram OOM durante resize antes do ajuste.
+Com o limite ponderado, dois aquecimentos receberam 201. Entre quatro
+requisições medidas houve um 201 e três 503, sem falha de transporte ou
+500. P95 de 3.317 ms nessa amostra, incluindo rejeições. O diagnóstico
+verificou custódia, cobrança só nos casos bem-sucedidos e liberação dos
+slots. O ensaio caracteriza um caso adverso local, sem determinar o
+consumo máximo de todo input permitido ou do ambiente alvo.
+
 O controller do Storage rejeita parte vazia ou maior que 10 MiB e lê até o
 tamanho informado pelo multipart mais um byte. Leitura curta ou excedente
 recebe 400 antes de validar MIME ou decodificar; exceção de I/O recebe 503

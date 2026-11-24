@@ -28,6 +28,28 @@ public final class SynchronousImageProcessor {
     private static final long MAX_PIXELS = 20_000_000L;
     private static final int MAX_SIDE = 10_000;
     private final Semaphore capacity = new Semaphore(2, true);
+    private final Semaphore rasterCapacity;
+
+    public SynchronousImageProcessor() {
+        this(Math.toIntExact(2 * MAX_PIXELS));
+    }
+
+    SynchronousImageProcessor(int rasterBudget) {
+        rasterCapacity = new Semaphore(rasterBudget, true);
+    }
+
+    private final class RasterReservation implements AutoCloseable {
+        private int units;
+
+        void reserve(int required) {
+            if (!rasterCapacity.tryAcquire(required)) throw new IllegalStateException("Image raster capacity exceeded");
+            units = required;
+        }
+
+        @Override public void close() {
+            rasterCapacity.release(units);
+        }
+    }
     public enum Category { PROFILE, DEPENDENT, OTHER }
     public record Crop(int x, int y, int width, int height) {}
     public record Preset(String code, int maxWidth, int maxHeight, Crop crop) {
@@ -57,10 +79,10 @@ public final class SynchronousImageProcessor {
                 || !presets.stream().map(Preset::code).collect(java.util.stream.Collectors.toSet()).containsAll(crops.keySet()))
             throw new IllegalArgumentException("Invalid upload");
         if (!capacity.tryAcquire()) throw new IllegalStateException("Image processing capacity exceeded");
-        try {
+        try (var raster = new RasterReservation()) {
             checkDeadline.run();
             byte[] snapshot = input.clone();
-            BufferedImage decoded = decode(snapshot);
+            BufferedImage decoded = decode(snapshot, raster::reserve);
             checkDeadline.run();
             int orientation = ExifOrientation.read(snapshot);
             BufferedImage source = ExifOrientation.apply(decoded, orientation);
@@ -239,12 +261,16 @@ public final class SynchronousImageProcessor {
         return out.toByteArray();
     }
     private static BufferedImage decode(byte[] bytes) throws IOException {
+        return decode(bytes, null);
+    }
+    private static BufferedImage decode(byte[] bytes, java.util.function.IntConsumer reserveRaster) throws IOException {
         validateContainer(bytes);
         if (isWebp(bytes)) {
             if (!dev.matrixlab.webp4j.WebPCodec.isAvailable()) throw new IllegalStateException("WebP decoder unavailable");
             int[] dimensions=dev.matrixlab.webp4j.WebPCodec.getWebPInfo(bytes);
             if (dimensions==null || dimensions.length<2) throw new IllegalArgumentException("Invalid WebP dimensions");
             validateDimensions(dimensions[0],dimensions[1]);
+            if (reserveRaster != null) reserveRaster.accept(dimensions[0] * dimensions[1]);
             return requireDecodedDimensions(dev.matrixlab.webp4j.WebPCodec.decodeImage(bytes), dimensions[0], dimensions[1]);
         }
         try (ImageInputStream stream = ImageIO.createImageInputStream(new ByteArrayInputStream(bytes))) {
@@ -260,6 +286,13 @@ public final class SynchronousImageProcessor {
                 reader.addIIOReadWarningListener((ignored, message) -> warning[0] = true);
                 int width = reader.getWidth(0), height = reader.getHeight(0);
                 validateDimensions(width,height);
+                if (reserveRaster != null) {
+                    var rawType = reader.getRawImageType(0);
+                    // High-depth or unknown rasters can use double the normal decoded working space.
+                    boolean wideSamples = rawType == null
+                            || rawType.getSampleModel().getDataType() == java.awt.image.DataBuffer.TYPE_USHORT;
+                    reserveRaster.accept(width * height * (wideSamples ? 2 : 1));
+                }
                 BufferedImage image = reader.read(0);
                 if (warning[0]) throw new IllegalArgumentException("Invalid image");
                 return requireDecodedDimensions(image, width, height);

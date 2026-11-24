@@ -8,6 +8,40 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.*;
 
 class SynchronousImageProcessorTest {
+    @Test void highDepthSourceReservesDoubleRasterCapacityUntilProcessingReturns() throws Exception {
+        var processor = new SynchronousImageProcessor(120 * 80 * 2);
+        var output = new ByteArrayOutputStream();
+        assertThat(ImageIO.write(new BufferedImage(120, 80, BufferedImage.TYPE_USHORT_GRAY), "png", output)).isTrue();
+        byte[] highDepth = output.toByteArray();
+        byte[] ordinary = image();
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var checks = new java.util.concurrent.atomic.AtomicInteger();
+        var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            var first = executor.submit(() -> processor.process(highDepth, SynchronousImageProcessor.Category.PROFILE,
+                    List.of(), java.util.Map.of(), () -> {
+                        if (checks.incrementAndGet() != 2) return;
+                        entered.countDown();
+                        try {
+                            if (!release.await(8, java.util.concurrent.TimeUnit.SECONDS)) throw new IllegalStateException("Fixture timeout");
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                            throw new IllegalStateException(interrupted);
+                        }
+                    }));
+            assertThat(entered.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            assertThatThrownBy(() -> processor.process(ordinary, SynchronousImageProcessor.Category.PROFILE, List.of()))
+                    .isInstanceOf(IllegalStateException.class).hasMessage("Image raster capacity exceeded");
+            release.countDown();
+            assertThat(first.get(10, java.util.concurrent.TimeUnit.SECONDS).master()).isNotNull();
+            assertThat(processor.process(ordinary, SynchronousImageProcessor.Category.PROFILE, List.of()).master()).isNotNull();
+        } finally {
+            release.countDown();
+            executor.shutdownNow();
+        }
+    }
+
     @Test void deadlineAfterDecodeStopsProcessingAndReleasesCapacity() throws Exception {
         var processor = new SynchronousImageProcessor();
         byte[] input = image();
