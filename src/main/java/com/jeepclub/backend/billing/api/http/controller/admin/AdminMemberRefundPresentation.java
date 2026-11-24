@@ -9,12 +9,14 @@ import com.jeepclub.backend.memberships.api.module.MemberRegistrationQuery;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
-import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
-@Component
+@Service
 @RequiredArgsConstructor
 class AdminMemberRefundPresentation {
     private static final MemberPaymentChargeContext MISSING_CHARGE =
@@ -37,6 +39,12 @@ class AdminMemberRefundPresentation {
                     label(numbers, refund.userId()), charge.chargeDefinitionId(),
                     charge.chargeDefinitionNameSnapshot(), charge.chargeCycleCode());
         });
+    }
+
+    // Keep the command and its response lookup inside the same transaction.
+    @Transactional
+    public AdminMemberRefundResponse transition(Supplier<MemberRefundResult> command) {
+        return detail(command.get());
     }
 
     AdminMemberRefundResponse detail(MemberRefundResult refund) {

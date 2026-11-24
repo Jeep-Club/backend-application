@@ -114,9 +114,8 @@ public class AdminMemberRefundController {
             @PathVariable @Positive(message = "ID do reembolso deve ser maior que zero.") Long refundId,
             Authentication authentication
     ) {
-        return ResponseEntity.ok(presentation.detail(
-                adminMemberRefundService.approve(refundId, extractUserId(authentication))
-        ));
+        return ResponseEntity.ok(presentation.transition(
+                () -> adminMemberRefundService.approve(refundId, extractUserId(authentication))));
     }
 
     @PatchMapping("/billing/member-refunds/{refundId}/reject")
@@ -136,13 +135,8 @@ public class AdminMemberRefundController {
             @Valid @RequestBody RejectMemberRefundRequest request,
             Authentication authentication
     ) {
-        return ResponseEntity.ok(presentation.detail(
-                adminMemberRefundService.reject(
-                        refundId,
-                        extractUserId(authentication),
-                        request.rejectionReason()
-                )
-        ));
+        return ResponseEntity.ok(presentation.transition(
+                () -> adminMemberRefundService.reject(refundId, extractUserId(authentication), request.rejectionReason())));
     }
 
     @PatchMapping("/billing/member-refunds/{refundId}/mark-as-refunded")
@@ -160,9 +154,8 @@ public class AdminMemberRefundController {
             @PathVariable @Positive(message = "ID do reembolso deve ser maior que zero.") Long refundId,
             Authentication authentication
     ) {
-        return ResponseEntity.ok(presentation.detail(
-                adminMemberRefundService.markAsRefunded(refundId, extractUserId(authentication))
-        ));
+        return ResponseEntity.ok(presentation.transition(
+                () -> adminMemberRefundService.markAsRefunded(refundId, extractUserId(authentication))));
     }
 
     @PatchMapping("/billing/member-refunds/{refundId}/expire")
@@ -179,7 +172,7 @@ public class AdminMemberRefundController {
     public ResponseEntity<AdminMemberRefundResponse> expire(
             @PathVariable @Positive(message = "ID do reembolso deve ser maior que zero.") Long refundId
     ) {
-        return ResponseEntity.ok(presentation.detail(adminMemberRefundService.expire(refundId)));
+        return ResponseEntity.ok(presentation.transition(() -> adminMemberRefundService.expire(refundId)));
     }
 
     @PatchMapping("/billing/member-refunds/{refundId}/cancel")
@@ -197,9 +190,8 @@ public class AdminMemberRefundController {
             @PathVariable @Positive(message = "ID do reembolso deve ser maior que zero.") Long refundId,
             Authentication authentication
     ) {
-        return ResponseEntity.ok(presentation.detail(
-                adminMemberRefundService.cancel(refundId, extractUserId(authentication))
-        ));
+        return ResponseEntity.ok(presentation.transition(
+                () -> adminMemberRefundService.cancel(refundId, extractUserId(authentication))));
     }
 
     private Long extractUserId(Authentication authentication) {
