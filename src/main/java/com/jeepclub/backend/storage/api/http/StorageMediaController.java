@@ -22,10 +22,13 @@ public class StorageMediaController {
     @io.swagger.v3.oas.annotations.responses.ApiResponses({
         @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400",description="Arquivo ou requisição inválida",content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/problem+json",schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.jeepclub.backend.platform.web.exception.ApiErrorResponse.class))),
         @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="413",description="Limite multipart excedido; a conexão pode ser encerrada durante o envio",content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/problem+json",schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.jeepclub.backend.platform.web.exception.ApiErrorResponse.class))),
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="409",description="A chave de idempotência já está vinculada a outro arquivo ou opções de crop",content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/problem+json",schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.jeepclub.backend.platform.web.exception.ApiErrorResponse.class))),
         @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="503",description="Prazo de processamento excedido ou capacidade de upload ou armazenamento indisponível",content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/problem+json",schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.jeepclub.backend.platform.web.exception.ApiErrorResponse.class)))
     })
     public ResponseEntity<MediaUploadService.Uploaded> upload(@AuthenticationPrincipal UserPrincipal user,@RequestPart("file") MultipartFile file,
-        @RequestPart(value="options",required=false) com.jeepclub.backend.storage.core.repository.MediaImageProcessor.Options options) throws IOException {
+        @RequestPart(value="options",required=false) com.jeepclub.backend.storage.core.repository.MediaImageProcessor.Options options,
+        @io.swagger.v3.oas.annotations.Parameter(description="Chave opcional por ator e operação. Use 1–128 caracteres ASCII alfanuméricos ou . _ ~ -. Uma repetição idêntica recupera o 201 confirmado; resultado incerto recebe 503.")
+        @RequestHeader(value="Idempotency-Key",required=false) String idempotencyKey) throws IOException {
         if(user==null) throw new AccessDeniedException("Media unavailable");
         long expectedSize = file.getSize();
         if(expectedSize<=0 || expectedSize>MAX_UPLOAD_BYTES) throw new IllegalArgumentException("Invalid upload size");
@@ -37,7 +40,7 @@ public class StorageMediaController {
                 return bytes;
             }
             catch(IOException failure) {throw new java.io.UncheckedIOException(failure);}
-        },options == null ? com.jeepclub.backend.storage.core.repository.MediaImageProcessor.Options.defaults() : options));
+        },options == null ? com.jeepclub.backend.storage.core.repository.MediaImageProcessor.Options.defaults() : options,idempotencyKey));
     }
     private static void validateDeclaredType(String declared,byte[] bytes) {
         String actual;

@@ -4,5 +4,11 @@
     "tests": [
       "StorageUploadPlanUpgradeMySqlIT#v25PreservesExistingBudgetsAndPermitsAndEnforcesPlanConstraints"
     ]
+  },
+  "e344a53d5bebdc1eb5b92c81a56de39b1039985031dd698cce489f5cc35cbab7": {
+    "reason": "DDL aditivo sobre V25. Preserva permits anteriores e verifica a unicidade por ator e contexto e a integridade dos campos da identidade.",
+    "tests": [
+      "StorageUploadIdempotencyUpgradeMySqlIT#v26PreservesPermitsAndEnforcesScopedKeys"
+    ]
   }
 }

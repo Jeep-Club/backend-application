@@ -12,6 +12,7 @@ public class StorageMediaErrors {
     private final com.jeepclub.backend.platform.web.exception.ApiProblemFactory problems;
     public StorageMediaErrors(com.jeepclub.backend.platform.web.exception.ApiProblemFactory problems) {this.problems=problems;}
     @ExceptionHandler(com.jeepclub.backend.storage.core.repository.UploadAdmission.LimitExceeded.class) public ResponseEntity<ProblemDetail> limited() {return error(429);}
+    @ExceptionHandler(com.jeepclub.backend.storage.core.repository.UploadAdmission.PayloadConflict.class) public ResponseEntity<ProblemDetail> conflict() {return error(409);}
     @ExceptionHandler({org.springframework.dao.PessimisticLockingFailureException.class,
         com.jeepclub.backend.storage.core.application.MediaUploadService.ProcessingDeadlineExceeded.class,
         org.springframework.dao.QueryTimeoutException.class,org.springframework.transaction.TransactionTimedOutException.class,
@@ -24,7 +25,7 @@ public class StorageMediaErrors {
     @ExceptionHandler(IllegalArgumentException.class) public ResponseEntity<ProblemDetail> invalid() { return error(400); }
     @ExceptionHandler({IllegalStateException.class,java.io.IOException.class,java.io.UncheckedIOException.class,com.jeepclub.backend.shared.storage.exception.StorageException.class}) public ResponseEntity<ProblemDetail> failed() { return error(503); }
     private ResponseEntity<ProblemDetail> error(int status) {
-        String code=switch(status) {case 400 -> "INVALID_MEDIA_REQUEST";case 403 -> "PERMISSION_DENIED";case 404 -> "CONTENT_UNAVAILABLE";case 429 -> "STORAGE_UPLOAD_LIMIT";default -> "STORAGE_UNAVAILABLE";};
+        String code=switch(status) {case 400 -> "INVALID_MEDIA_REQUEST";case 403 -> "PERMISSION_DENIED";case 404 -> "CONTENT_UNAVAILABLE";case 409 -> "STORAGE_UPLOAD_KEY_CONFLICT";case 429 -> "STORAGE_UPLOAD_LIMIT";default -> "STORAGE_UNAVAILABLE";};
         var problem=problems.create(HttpStatus.valueOf(status),code,org.springframework.context.i18n.LocaleContextHolder.getLocale());
         if(status==404) problem.setProperty("reasonCode","CONTENT_UNAVAILABLE");
         return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,"private, no-store").body(problem);

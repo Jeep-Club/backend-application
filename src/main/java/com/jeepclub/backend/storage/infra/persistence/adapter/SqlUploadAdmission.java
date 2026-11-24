@@ -10,6 +10,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import jakarta.persistence.*;
 import java.time.*;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** Storage custody budgets, not a generic request limiter. Unknown/crashed reservations remain charged for review. */
 @Repository
@@ -58,28 +59,75 @@ public class SqlUploadAdmission implements UploadAdmission {
         return row;
     }
     @Override public Permit reserve(long actor) {
+        return reserve(actor, null).permit();
+    }
+    @Override public KeyedReservation reserve(long actor, RequestIdentity identity) {
         if(actor<=0) throw new IllegalArgumentException("Invalid actor");ensure(0);ensure(actor);
         var permit = new Permit(UUID.randomUUID().toString(), actor);
+        var provisional = new AtomicReference<>(permit);
         try {
             return tx.execute(status -> {
                 var global=lock(0);var user=lock(actor);Instant now=Instant.now();
+                UploadPermitEntity prior = identity == null ? null : findRequest(actor, identity);
+                if (prior != null) {
+                    if (!identity.fingerprint().equals(prior.getRequestFingerprint())) throw new PayloadConflict();
+                    if (!canReadmit(prior)) return replay(prior);
+                }
                 if(!now.isBefore(user.getWindowStart().plusSeconds(3600))) {user.setWindowStart(now);user.setWindowAttempts(0);}
                 if(user.getWindowAttempts()>=hourly || user.getInFlight()>=concurrent || user.getChargedUploads()>=maxUploads
                     || user.getUsedBytes()>userBytes-MAX_RESERVATION || global.getUsedBytes()>globalBytes-MAX_RESERVATION) throw new LimitExceeded();
                 user.setWindowAttempts(user.getWindowAttempts()+1);user.setInFlight(user.getInFlight()+1);
                 user.setUsedBytes(user.getUsedBytes()+MAX_RESERVATION);global.setUsedBytes(global.getUsedBytes()+MAX_RESERVATION);
-                var row=new UploadPermitEntity();row.setId(permit.id());row.setActorUserId(actor);row.setAccountedBytes(MAX_RESERVATION);row.setCreatedAt(now);em.persist(row);em.flush();
-                return permit;
+                if (prior != null) {
+                    // A completed, uncharged permit cannot have reached physical storage.
+                    var retry = new Permit(prior.getId(), actor);
+                    provisional.set(retry);
+                    prior.setCompleted(false);
+                    prior.setAccountedBytes(MAX_RESERVATION);
+                    em.flush();
+                    return new KeyedReservation(retry, null);
+                }
+                var row=new UploadPermitEntity();row.setId(permit.id());row.setActorUserId(actor);row.setAccountedBytes(MAX_RESERVATION);row.setCreatedAt(now);
+                if (identity != null) {
+                    row.setRequestScopeHash(identity.scopeHash());
+                    row.setRequestKeyHash(identity.keyHash());
+                    row.setRequestFingerprint(identity.fingerprint());
+                }
+                em.persist(row);em.flush();
+                return new KeyedReservation(permit, null);
             });
         } catch (TransactionSystemException | DataAccessResourceFailureException failure) {
             // The permit never reached the upload pipeline, so it could not start a physical write.
             try {
-                abortBeforeStore(permit, true);
+                abortBeforeStore(provisional.get(), true);
             } catch (RuntimeException recoveryFailure) {
                 failure.addSuppressed(recoveryFailure);
             }
             throw failure;
         }
+    }
+    private UploadPermitEntity findRequest(long actor, RequestIdentity identity) {
+        var rows = em.createQuery("""
+                select p from UploadPermitEntity p
+                where p.actorUserId=:actor and p.requestScopeHash=:scope and p.requestKeyHash=:key
+                """, UploadPermitEntity.class)
+                .setParameter("actor", actor)
+                .setParameter("scope", identity.scopeHash())
+                .setParameter("key", identity.keyHash())
+                .getResultList();
+        if (rows.isEmpty()) return null;
+        var row = rows.get(0);
+        em.refresh(row, LockModeType.PESSIMISTIC_WRITE);
+        return row;
+    }
+    private boolean canReadmit(UploadPermitEntity row) {
+        return row.isCompleted() && !row.isCharged() && row.getAccountedBytes() == 0 && row.getCatalogAssetId() == null;
+    }
+    private KeyedReservation replay(UploadPermitEntity row) {
+        if (!row.isCompleted() || !row.isCharged() || row.getCatalogAssetId() == null) {
+            throw new IllegalStateException("Upload transaction outcome unavailable");
+        }
+        return new KeyedReservation(null, row.getCatalogAssetId());
     }
     @Override public void charge(Permit permit,long bytes) {
         if(bytes<=0 || bytes>MAX_RESERVATION) throw new IllegalArgumentException("Invalid representation budget");

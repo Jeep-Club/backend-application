@@ -25,6 +25,38 @@ O asset permanece sem referência operacional. O ensaio simula a observação
 da aplicação após o commit, sem simular o comportamento de rede do driver.
 O cliente não deve interpretar o 503 como prova de rollback ou autorização de retry.
 
+### Retry com chave de idempotência
+
+O POST de perfil aceita `Idempotency-Key` opcional, com 1 a 128 caracteres
+ASCII alfanuméricos, ponto, sublinhado, til ou hífen. Autorização e limites
+continuam aplicáveis. A identidade persistida vincula o ator à operação
+versionada, ao contexto, ao consumidor e à chave. A impressão inclui todos
+os bytes da imagem e os crops ordenados pelo nome da variante. Campos
+multipart que não alteram o comportamento, como o nome do arquivo, não
+compõem a identidade. A chave original não é armazenada.
+
+A V26 vincula a identidade ao permit com unicidade SQL. Uma repetição
+idêntica só recebe 201 quando o permit tem um asset vinculado pelo commit
+do catálogo. Payload divergente recebe 409 RFC 9457. Enquanto a primeira
+tentativa está ativa ou o resultado não pode ser confirmado, o mesmo
+payload recebe 503 sem iniciar outro codec, store ou cobrança. A resposta
+de sucesso é uma confirmação de upload. A leitura continua sujeita à
+autorização e moderação da referência.
+
+Quando o banco confirma compensação antes da cobrança e da primeira
+gravação, o mesmo payload pode readmitir o permit sob os locks originais
+e os limites vigentes. A chave permanece vinculada ao payload. O caminho
+com chave lê e identifica o conteúdo antes de consultar o ledger, sob o
+semáforo local e o limite de bytes. A comparação da identidade é necessária
+mesmo no replay de um 201. A janela SQL contabiliza novas admissões,
+incluindo readmissões, sem cobrar de novo uma resposta recuperada.
+
+O vínculo da chave é retido com o permit, sem vencimento ou reuso
+automático. A política abrange tentativas indeterminadas, inclusive quando
+o banco posteriormente mostra que o catálogo foi revertido. Um 503 não
+autoriza iniciar outra tentativa com uma chave nova. Não há reconciliação
+agendada nem purge nesta entrega.
+
 A admissão SQL gera o UUID do permit antes de iniciar a reserva. Se a
 transação falhar com confirmação indeterminada, o adapter tenta compensar
 em uma transação nova. Ela adquire os locks global e do ator na mesma ordem

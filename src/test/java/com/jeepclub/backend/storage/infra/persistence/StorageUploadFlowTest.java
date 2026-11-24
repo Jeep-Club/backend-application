@@ -276,7 +276,8 @@ class StorageUploadFlowTest {
         };
         var uncertainAdmission = new SqlUploadAdmission(emForQuota(), uncertainReservation,
                 64L * 1024 * 1024, 10L * 1024 * 1024 * 1024, 30, 2, 1000);
-        assertThatThrownBy(() -> uncertainAdmission.reserve(actor))
+        var identity = new UploadAdmission.RequestIdentity("a".repeat(64), "b".repeat(64), "c".repeat(64));
+        assertThatThrownBy(() -> uncertainAdmission.reserve(actor, identity))
                 .isInstanceOf(org.springframework.transaction.TransactionSystemException.class)
                 .hasMessage("Fixture lost reservation acknowledgement");
         assertThat(commits.get()).isEqualTo(4);
@@ -289,6 +290,13 @@ class StorageUploadFlowTest {
                 select count(*) from storage_upload_planned_blobs p join storage_upload_permits u on u.id=p.permit_id
                 where u.actor_user_id=?
                 """, Long.class, actor)).isZero();
+        var retry = admission.reserve(actor, identity);
+        assertThat(retry.confirmedMediaId()).isNull();
+        assertThat(retry.permit()).isNotNull();
+        assertThat(jdbc.queryForObject("select count(*) from storage_upload_permits where actor_user_id=? and request_key_hash=?",
+                Long.class, actor, identity.keyHash())).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select in_flight from storage_upload_budgets where scope_id=?", Integer.class, actor)).isEqualTo(1);
+        admission.abortBeforeStore(retry.permit());
     }
 
     @org.junit.jupiter.params.ParameterizedTest
@@ -319,7 +327,10 @@ class StorageUploadFlowTest {
         var service = new MediaUploadService(catalog, blobs, new MediaImageProcessingAdapter(new SimpleMeterRegistry()),
                 governance, List.of(new Configuration().policy()), uncertainCommit, new SimpleMeterRegistry(),
                 admission, java.time.Clock.systemUTC());
-        assertThatThrownBy(() -> service.upload(actor, MediaContext.IDENTITY_PROFILE, Long.toString(actor), image(180)))
+        byte[] bytes = image(180);
+        var options = MediaImageProcessor.Options.defaults();
+        String key = "missing-catalog-ack";
+        assertThatThrownBy(() -> service.upload(actor, MediaContext.IDENTITY_PROFILE, Long.toString(actor), () -> bytes, options, key))
                 .isInstanceOf(IllegalStateException.class).hasMessage("Upload transaction outcome unavailable");
 
         Long assetId = jdbc.queryForObject("select catalog_asset_id from storage_upload_permits where actor_user_id=? and completed=true and charged=true",
@@ -333,7 +344,11 @@ class StorageUploadFlowTest {
             assertThat(jdbc.queryForObject("select count(*) from storage_media_references where media_id=?", Long.class, assetId)).isZero();
             assertThatThrownBy(() -> resolution.resolve(actor, assetId, Long.MAX_VALUE, "AVATAR_SMALL"))
                     .isInstanceOf(AccessDeniedException.class);
+            assertThat(upload.upload(actor, MediaContext.IDENTITY_PROFILE, Long.toString(actor), () -> bytes, options, key).mediaId())
+                    .isEqualTo(assetId);
         } else {
+            assertThatThrownBy(() -> upload.upload(actor, MediaContext.IDENTITY_PROFILE, Long.toString(actor), () -> bytes, options, key))
+                    .isInstanceOf(IllegalStateException.class).hasMessage("Upload transaction outcome unavailable");
             assertThat(assetId).isNull();
             assertThat(jdbc.queryForObject("select count(*) from storage_media_assets where uploaded_by_user_id=?", Long.class, actor)).isZero();
         }
@@ -347,6 +362,49 @@ class StorageUploadFlowTest {
         assertThat(jdbc.queryForObject("select charged_uploads from storage_upload_budgets where scope_id=?", Long.class, actor)).isEqualTo(1);
         assertThat(jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=?", Long.class, actor))
                 .isEqualTo(jdbc.queryForObject("select accounted_bytes from storage_upload_permits where actor_user_id=?", Long.class, actor));
+    }
+
+    @Test void concurrentIdenticalKeyStartsOnlyOneCodecAndReturnsTheConfirmedAsset() throws Exception {
+        long actor = 987633L;
+        byte[] bytes = image(181);
+        var options = MediaImageProcessor.Options.defaults();
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        var processor = new MediaImageProcessingAdapter(new SimpleMeterRegistry());
+        MediaImageProcessor blocked = (input, context) -> {
+            calls.incrementAndGet();
+            entered.countDown();
+            try {
+                if (!release.await(8, java.util.concurrent.TimeUnit.SECONDS)) throw new IllegalStateException("Fixture codec timeout");
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(interrupted);
+            }
+            return processor.process(input, context);
+        };
+        var service = new MediaUploadService(catalog, blobs, blocked, governance, List.of(new Configuration().policy()),
+                manager, new SimpleMeterRegistry(), admission, java.time.Clock.systemUTC());
+        var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            var original = executor.submit(() -> service.upload(actor, MediaContext.IDENTITY_PROFILE, Long.toString(actor),
+                    () -> bytes, options, "concurrent-key"));
+            assertThat(entered.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            assertThatThrownBy(() -> service.upload(actor, MediaContext.IDENTITY_PROFILE, Long.toString(actor),
+                    () -> bytes, options, "concurrent-key"))
+                    .isInstanceOf(IllegalStateException.class).hasMessage("Upload transaction outcome unavailable");
+            release.countDown();
+            var result = original.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            assertThat(service.upload(actor, MediaContext.IDENTITY_PROFILE, Long.toString(actor),
+                    () -> bytes, options, "concurrent-key")).isEqualTo(result);
+            assertThat(calls.get()).isEqualTo(1);
+            assertThat(jdbc.queryForObject("select count(*) from storage_upload_permits where actor_user_id=?", Long.class, actor)).isEqualTo(1);
+            assertThat(jdbc.queryForObject("select count(*) from storage_media_assets where uploaded_by_user_id=?", Long.class, actor)).isEqualTo(1);
+            assertThat(jdbc.queryForObject("select charged_uploads from storage_upload_budgets where scope_id=?", Long.class, actor)).isEqualTo(1);
+        } finally {
+            release.countDown();
+            executor.shutdownNow();
+        }
     }
 
     @Test void concurrentUploadsCompleteTheirOwnPermitsWhileSharingBytes() throws Exception {

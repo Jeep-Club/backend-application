@@ -17,6 +17,15 @@ import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.LongSupplier;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+import java.security.DigestOutputStream;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
+import java.util.TreeMap;
 
 @Service
 public class MediaUploadService {
@@ -63,6 +72,10 @@ public class MediaUploadService {
         return upload(actor,context,consumerId,content,MediaImageProcessor.Options.defaults());
     }
     public Uploaded upload(long actor,MediaContext context,String consumerId,java.util.function.Supplier<byte[]> content,MediaImageProcessor.Options options) {
+        return upload(actor, context, consumerId, content, options, null);
+    }
+    public Uploaded upload(long actor, MediaContext context, String consumerId,
+                           java.util.function.Supplier<byte[]> content, MediaImageProcessor.Options options, String idempotencyKey) {
         long started=monotonicTime.getAsLong();try {
         if(actor<=0) throw new AccessDeniedException("Media unavailable");
         var policy=policies.stream().filter(p -> StoragePolicyViews.matches(p,context) && p.mayUpload(actor,consumerId)).findFirst()
@@ -72,8 +85,28 @@ public class MediaUploadService {
         long admittedAt = monotonicTime.getAsLong();
         try {
         UploadAdmission.Permit permit;
+        byte[] keyedInput = null;
         try {
-            permit = admission.reserve(actor);
+            if (idempotencyKey == null) {
+                permit = admission.reserve(actor);
+            } else {
+                if (!idempotencyKey.matches("[A-Za-z0-9._~-]{1,128}")) {
+                    throw new IllegalArgumentException("Invalid upload idempotency key");
+                }
+                keyedInput = content.get();
+                if (keyedInput == null || keyedInput.length == 0 || options == null) {
+                    throw new IllegalArgumentException("Invalid image upload");
+                }
+                requireTimeRemaining(admittedAt);
+                var identityKey = requestIdentity(context, consumerId, idempotencyKey, keyedInput, options);
+                requireTimeRemaining(admittedAt);
+                var reservation = admission.reserve(actor, identityKey);
+                if (reservation.confirmedMediaId() != null) {
+                    requireTimeRemaining(admittedAt);
+                    return new Uploaded(reservation.confirmedMediaId(), null);
+                }
+                permit = reservation.permit();
+            }
         } catch (TransactionSystemException | DataAccessResourceFailureException failure) {
             // Without a returned permit, the reservation may already exist and must remain in custody.
             throw new IllegalStateException("Upload transaction outcome unavailable", failure);
@@ -81,7 +114,7 @@ public class MediaUploadService {
         boolean storeStarted=false;
         try {
         requireTimeRemaining(admittedAt);
-        byte[] input = content.get();
+        byte[] input = keyedInput == null ? content.get() : keyedInput;
         requireTimeRemaining(admittedAt);
         var processed=images.process(input,context,options,() -> requireTimeRemaining(admittedAt));
         requireTimeRemaining(admittedAt);
@@ -136,6 +169,40 @@ public class MediaUploadService {
         }
         } finally {inFlight.release();}
         } finally { metrics.timer("storage.upload.duration").record(monotonicTime.getAsLong()-started,java.util.concurrent.TimeUnit.NANOSECONDS); }
+    }
+
+    private static UploadAdmission.RequestIdentity requestIdentity(MediaContext context, String consumerId, String key,
+            byte[] image, MediaImageProcessor.Options options) {
+        try {
+            var digest = MessageDigest.getInstance("SHA-256");
+            var hex = HexFormat.of();
+            try (var data = new DataOutputStream(new DigestOutputStream(OutputStream.nullOutputStream(), digest))) {
+                writeField(data, "storage-media-upload-v1");
+                writeField(data, context.name());
+                writeField(data, consumerId);
+                String scopeHash = hex.formatHex(digest.digest());
+                String keyHash = hex.formatHex(digest.digest(key.getBytes(StandardCharsets.US_ASCII)));
+                data.writeInt(image.length);
+                data.write(image);
+                data.writeInt(options.crops().size());
+                for (var crop : new TreeMap<>(options.crops()).entrySet()) {
+                    writeField(data, crop.getKey());
+                    data.writeDouble(crop.getValue().x());
+                    data.writeDouble(crop.getValue().y());
+                    data.writeDouble(crop.getValue().width());
+                    data.writeDouble(crop.getValue().height());
+                }
+                return new UploadAdmission.RequestIdentity(scopeHash, keyHash, hex.formatHex(digest.digest()));
+            }
+        } catch (NoSuchAlgorithmException | IOException failure) {
+            throw new IllegalStateException("Cannot identify upload request", failure);
+        }
+    }
+
+    private static void writeField(DataOutputStream target, String value) throws IOException {
+        byte[] encoded = value.getBytes(StandardCharsets.UTF_8);
+        target.writeInt(encoded.length);
+        target.write(encoded);
     }
 
     private void requireTimeRemaining(long admittedAt) {

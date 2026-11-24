@@ -67,6 +67,9 @@ class StorageHttpFlowTest {
     }
     @Test void openApiPublishesAdministrativeDetailAndFilters() throws Exception {
         mvc.perform(get("/v3/api-docs")).andExpect(status().isOk())
+            .andExpect(jsonPath("$['paths']['/storage/media/profile']['post']['parameters'][*].name")
+                .value(org.hamcrest.Matchers.hasItem("Idempotency-Key")))
+            .andExpect(jsonPath("$['paths']['/storage/media/profile']['post']['responses']['409']").exists())
             .andExpect(jsonPath("$['paths']['/admin/storage/media/{mediaId}']['get']['responses']['401']").exists())
             .andExpect(jsonPath("$['paths']['/admin/storage/media/{mediaId}']['get']['responses']['403']").exists())
             .andExpect(jsonPath("$['paths']['/admin/storage/media/{mediaId}']['get']['responses']['404']").exists())
@@ -74,6 +77,51 @@ class StorageHttpFlowTest {
                 .value(org.hamcrest.Matchers.hasItem("STORAGE_MEDIA_PREVIEW")))
             .andExpect(jsonPath("$['paths']['/admin/storage/media']['get']['parameters'][*].name")
                 .value(org.hamcrest.Matchers.hasItems("uploader","owner","createdFrom","createdBefore","context","mime","usage","moderation","physicalState","afterId","limit")));
+    }
+
+    @Test void idempotencyHeaderReplaysConfirmedUploadAndRejectsDifferentCrop() throws Exception {
+        var owner = users.registerAndAuthenticate(new UserRegistrationData("Idempotency fixture", null,
+                "idempotency-fixture@example.com", "39053344705", null, null, null, Instant.now()), "Password@123");
+        var other = users.registerAndAuthenticate(new UserRegistrationData("Other idempotency fixture", null,
+                "idempotency-other-fixture@example.com", "61038274699", null, null, null, Instant.now()), "Password@123");
+        var output = new ByteArrayOutputStream();
+        var pixels = new BufferedImage(32, 32, BufferedImage.TYPE_INT_RGB);
+        ImageIO.write(pixels, "png", output);
+        var image = new MockMultipartFile("file", "image.png", "image/png", output.toByteArray());
+        String auth = "Bearer " + owner.accessToken();
+        String key = "fixture-idempotency-key";
+        String original = mvc.perform(multipart("/storage/media/profile").file(image)
+                .header("Authorization", auth).header("Idempotency-Key", key))
+            .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        mvc.perform(multipart("/storage/media/profile").file(image)
+                .header("Authorization", auth).header("Idempotency-Key", key))
+            .andExpect(status().isCreated()).andExpect(content().json(original));
+        var crop = new MockMultipartFile("options", "", "application/json", """
+                {"crops":{"AVATAR_SMALL":{"x":0,"y":0,"width":1,"height":1}}}
+                """.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        mvc.perform(multipart("/storage/media/profile").file(image).file(crop)
+                .header("Authorization", auth).header("Idempotency-Key", key))
+            .andExpect(status().isConflict())
+            .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
+            .andExpect(jsonPath("$.code").value("STORAGE_UPLOAD_KEY_CONFLICT"))
+            .andExpect(header().string("Cache-Control", "private, no-store"));
+        pixels.setRGB(0, 0, 0xffffff);
+        output.reset();
+        ImageIO.write(pixels, "png", output);
+        var changedImage = new MockMultipartFile("file", "image.png", "image/png", output.toByteArray());
+        mvc.perform(multipart("/storage/media/profile").file(changedImage)
+                .header("Authorization", auth).header("Idempotency-Key", key))
+            .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("STORAGE_UPLOAD_KEY_CONFLICT"));
+        String otherResult = mvc.perform(multipart("/storage/media/profile").file(changedImage)
+                .header("Authorization", "Bearer " + other.accessToken()).header("Idempotency-Key", key))
+            .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        org.assertj.core.api.Assertions.assertThat(JsonPath.<Integer>read(otherResult, "$.mediaId"))
+                .isNotEqualTo(JsonPath.<Integer>read(original, "$.mediaId"));
+        long actor = query.findByCpf("39053344705").orElseThrow().id();
+        org.assertj.core.api.Assertions.assertThat(
+                jdbc.queryForObject("select count(*) from storage_upload_permits where actor_user_id=?", Long.class, actor)).isEqualTo(1);
+        org.assertj.core.api.Assertions.assertThat(
+                jdbc.queryForObject("select count(*) from storage_media_assets where uploaded_by_user_id=?", Long.class, actor)).isEqualTo(1);
     }
     @Test void authenticatedOwnerReadsMasterWhileOtherUsersAndModerationCannotBypassIt() throws Exception {
         var owner=users.registerAndAuthenticate(new UserRegistrationData("Storage fixture",null,"storage-fixture@example.com","52998224725",null,null,null,Instant.now()),"Password@123");
