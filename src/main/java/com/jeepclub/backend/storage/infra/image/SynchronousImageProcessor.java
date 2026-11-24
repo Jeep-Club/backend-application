@@ -316,7 +316,7 @@ public final class SynchronousImageProcessor {
     }
     private static boolean isJpeg(byte[] b) {return b.length>=4 && (b[0]&255)==255 && (b[1]&255)==216;}
     /** Reject incomplete or corrupted containers even when a decoder tolerates them. */
-    private static void validateContainer(byte[] bytes) {
+    static void validateContainer(byte[] bytes) {
         if (isWebp(bytes)) {
             long declared=Integer.toUnsignedLong(java.nio.ByteBuffer.wrap(bytes,4,4).order(java.nio.ByteOrder.LITTLE_ENDIAN).getInt());
             if (declared+8!=bytes.length) throw new IllegalArgumentException("Invalid WebP length");
@@ -364,6 +364,9 @@ public final class SynchronousImageProcessor {
             }
         }
         throw new IllegalArgumentException("Incomplete PNG");
+    }
+    static String containerMime(byte[] bytes) {
+        return isWebp(bytes) ? "image/webp" : isJpeg(bytes) ? "image/jpeg" : "image/png";
     }
     private static BufferedImage crop(BufferedImage src, Crop c) {
         if (c == null) return src;

@@ -2,6 +2,26 @@
 
 ## Verificação por etapa e confirmação de commit
 
+### Codec isolado
+
+O upload aguarda o codec em um processo Java filho. Há um filho ativo e
+até dois chamadores, com espera síncrona sob o prazo da admissão. O canal
+binário tem versão, UUID de execução, limites de input e output, e
+validação de formato, dimensões e quantidade de representações no pai.
+O filho executa o mesmo processador de imagens com heap de 512 MiB e
+dois processadores visíveis à JVM. O backend continua a persistir as
+variantes obrigatórias antes de emitir 201.
+
+O ambiente herdado é limpo, preservando apenas a variável técnica
+`SystemRoot` no Windows. O filho não inicializa Spring, recebe o
+payload pelo pipe e usa um diretório temporário exclusivo. O supervisor
+solicita encerramento no deadline e só libera capacidade após observar
+a saída do processo e de descendentes detectados e concluir a limpeza.
+O executável controlado não inicia subprocessos. O processo usa o mesmo
+usuário do contêiner, portanto o isolamento é de execução e recursos,
+e não constitui uma fronteira de autorização do sistema operacional.
+O heap não representa o RSS máximo do processo.
+
 O serviço propaga o mesmo prazo monotônico ao codec síncrono. O processador
 verifica o prazo após decodificar a fonte, antes de novas tentativas de
 compressão da MASTER, antes de decodificar a MASTER e entre as variantes.

@@ -6,11 +6,11 @@ import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.stereotype.Component;
 import java.util.List;
 import java.util.ArrayList;
-import java.io.IOException;
+import java.util.UUID;
 
 @Component
 public class MediaImageProcessingAdapter implements MediaImageProcessor {
-    private final SynchronousImageProcessor processor=new SynchronousImageProcessor();
+    private final IsolatedImageCodec processor = new IsolatedImageCodec();
     private final MeterRegistry metrics;
     public MediaImageProcessingAdapter(MeterRegistry metrics) { this.metrics=metrics; }
     @Override public Processed process(byte[] input, MediaContext context) {
@@ -33,13 +33,12 @@ public class MediaImageProcessingAdapter implements MediaImageProcessor {
                 presets.add(new SynchronousImageProcessor.Preset("CARD_PORTRAIT",4096,4096,null));
             var codes=presets.stream().map(SynchronousImageProcessor.Preset::code).collect(java.util.stream.Collectors.toSet());
             if (!codes.containsAll(options.crops().keySet())) throw new IllegalArgumentException("Unknown crop variant");
-            var result=processor.process(input,profile ? SynchronousImageProcessor.Category.PROFILE : SynchronousImageProcessor.Category.OTHER,presets,options.crops(),checkDeadline);
-            var images=new ArrayList<Representation>(); images.add(convert(result.master())); result.variants().forEach(i -> images.add(convert(i)));
-            outcome="success"; return new Processed(result.receivedSha256(),images);
-        } catch(IOException e) { throw new IllegalArgumentException("Invalid image content",e); }
+            var request = new ImageCodecWorker.Request(UUID.randomUUID(), input,
+                    profile ? SynchronousImageProcessor.Category.PROFILE : SynchronousImageProcessor.Category.OTHER,
+                    presets, options.crops());
+            var result = processor.process(request, checkDeadline);
+            outcome="success"; return result;
+        }
         finally { metrics.timer("storage.image.processing","outcome",outcome).record(System.nanoTime()-start,java.util.concurrent.TimeUnit.NANOSECONDS); }
-    }
-    private static Representation convert(SynchronousImageProcessor.Image image) {
-        return new Representation(image.code(),image.bytes(),image.mimeType(),image.width(),image.height());
     }
 }
