@@ -18,6 +18,7 @@ public class UploadPermitEntity {
     @Column(name="charged",nullable=false) private boolean charged;
     @Column(name="completed",nullable=false) private boolean completed;
     @Column(name="catalog_asset_id") private Long catalogAssetId;
+    @Column(name="execution_id", length=36) private String executionId;
     @Column(name="request_scope_hash", length=64) private String requestScopeHash;
     @Column(name="request_key_hash", length=64) private String requestKeyHash;
     @Column(name="request_fingerprint", length=64) private String requestFingerprint;

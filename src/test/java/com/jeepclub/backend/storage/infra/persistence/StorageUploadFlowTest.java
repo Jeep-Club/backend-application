@@ -244,6 +244,70 @@ class StorageUploadFlowTest {
         assertThat(jdbc.queryForObject("select catalog_asset_id from storage_upload_permits where actor_user_id=?",Long.class,actor)).isEqualTo(result.mediaId());
         assertThat(finishCalls.get()).isZero();
     }
+    @Test void staleExecutionCannotMutateReadmittedPermit() {
+        long actor = 987641L;
+        var identity = new UploadAdmission.RequestIdentity("d".repeat(64), "e".repeat(64), "f".repeat(64));
+        var stale = admission.reserve(actor, identity).permit();
+        admission.abortBeforeStore(stale);
+        var current = admission.reserve(actor, identity).permit();
+        assertThat(current.id()).isEqualTo(stale.id());
+        assertThat(current.executionId()).isNotEqualTo(stale.executionId());
+        assertThatCode(() -> UUID.fromString(current.executionId())).doesNotThrowAnyException();
+        assertThatThrownBy(() -> admission.charge(stale, 1000)).isInstanceOf(IllegalStateException.class);
+        admission.charge(current, 1000);
+        var planned = List.of(new UploadAdmission.PlannedBlob("1".repeat(64), 1000));
+        assertThatThrownBy(() -> admission.recordPlannedBlobs(stale, planned)).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> new TransactionTemplate(manager).executeWithoutResult(status ->
+                admission.finishInCatalogTransaction(stale, 1L))).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> admission.finish(stale)).isInstanceOf(IllegalStateException.class);
+        admission.abortBeforeStore(stale);
+        assertThat(jdbc.queryForObject("select in_flight from storage_upload_budgets where scope_id=?", Integer.class, actor)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=?", Long.class, actor)).isEqualTo(1000);
+        assertThat(jdbc.queryForObject("select charged_uploads from storage_upload_budgets where scope_id=?", Long.class, actor)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select count(*) from storage_upload_planned_blobs where permit_id=?", Long.class, current.id())).isZero();
+        admission.abortBeforeStore(current);
+    }
+
+    @Test void rolledBackReadmissionCompensationCannotAbortNewExecution() {
+        long actor = 987634L;
+        var identity = new UploadAdmission.RequestIdentity("1".repeat(64), "2".repeat(64), "3".repeat(64));
+        var original = admission.reserve(actor, identity).permit();
+        admission.abortBeforeStore(original);
+        long globalBefore = jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=0", Long.class);
+        var transactions = new java.util.concurrent.atomic.AtomicInteger();
+        var commits = new java.util.concurrent.atomic.AtomicInteger();
+        var survivor = new java.util.concurrent.atomic.AtomicReference<UploadAdmission.Permit>();
+        var uncertain = new PlatformTransactionManager() {
+            public org.springframework.transaction.TransactionStatus getTransaction(org.springframework.transaction.TransactionDefinition definition) {
+                if (transactions.incrementAndGet() == 4) survivor.set(admission.reserve(actor, identity).permit());
+                return manager.getTransaction(definition);
+            }
+            public void commit(org.springframework.transaction.TransactionStatus status) {
+                if (commits.incrementAndGet() == 3) {
+                    manager.rollback(status);
+                    throw new org.springframework.transaction.TransactionSystemException("readmission acknowledgement lost");
+                }
+                manager.commit(status);
+            }
+            public void rollback(org.springframework.transaction.TransactionStatus status) { manager.rollback(status); }
+        };
+        var adapter = new SqlUploadAdmission(emForQuota(), uncertain, 64L * 1024 * 1024, 10L * 1024 * 1024 * 1024, 30, 2, 1000);
+        assertThatThrownBy(() -> adapter.reserve(actor, identity))
+                .isInstanceOf(org.springframework.transaction.TransactionSystemException.class)
+                .hasMessage("readmission acknowledgement lost");
+        assertThat(transactions.get()).isEqualTo(4);
+        assertThat(survivor.get()).isNotNull();
+        assertThat(survivor.get().id()).isEqualTo(original.id());
+        assertThat(survivor.get().executionId()).isNotEqualTo(original.executionId());
+        assertThat(jdbc.queryForObject("select in_flight from storage_upload_budgets where scope_id=?", Integer.class, actor)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=?", Long.class, actor)).isEqualTo(20L * 1024 * 1024);
+        assertThat(jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=0", Long.class)).isEqualTo(globalBefore + 20L * 1024 * 1024);
+        assertThat(jdbc.queryForObject("select charged_uploads from storage_upload_budgets where scope_id=?", Long.class, actor)).isZero();
+        assertThat(jdbc.queryForObject("select count(*) from storage_upload_planned_blobs where permit_id=?", Long.class, original.id())).isZero();
+        admission.charge(survivor.get(), 1000);
+        admission.abortBeforeStore(survivor.get());
+    }
+
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
     void missingReservationAcknowledgementRecoversOnlyTheConfirmedReservation(boolean committed) {

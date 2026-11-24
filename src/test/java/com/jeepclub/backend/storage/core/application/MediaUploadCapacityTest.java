@@ -28,7 +28,7 @@ class MediaUploadCapacityTest {
     void expiredUploadStopsAtNextBoundaryAndPreservesCustody(DelayedStage stage) {
         var time = new AtomicLong();
         var admission = mock(UploadAdmission.class);
-        var permit = new UploadAdmission.Permit("fixture", 1);
+        var permit = new UploadAdmission.Permit("fixture", 1, "fixture-execution");
         when(admission.reserve(1)).thenReturn(permit);
         var policy = new StorageConsumerPolicy() {
             public Context context() { return Context.IDENTITY_PROFILE; }
@@ -77,7 +77,7 @@ class MediaUploadCapacityTest {
 
     @Test void planFailurePreventsPhysicalWritesAndFinishesPermit() {
         var admission=mock(UploadAdmission.class);
-        var permit=new UploadAdmission.Permit("fixture",1);
+        var permit=new UploadAdmission.Permit("fixture",1,"fixture-execution");
         when(admission.reserve(1)).thenReturn(permit);
         doThrow(new IllegalStateException("plan failed")).when(admission).recordPlannedBlobs(eq(permit),anyList());
         var processor=mock(MediaImageProcessor.class);
@@ -98,7 +98,7 @@ class MediaUploadCapacityTest {
     }
     @Test void boundsPayloadReadsAcrossUsersAndReleasesCapacityAfterFailure() throws Exception {
         var admission=mock(UploadAdmission.class);
-        when(admission.reserve(anyLong())).thenAnswer(invocation -> new UploadAdmission.Permit("fixture",invocation.getArgument(0)));
+        when(admission.reserve(anyLong())).thenAnswer(invocation -> new UploadAdmission.Permit("fixture",invocation.getArgument(0),"fixture-execution"));
         var policy=new StorageConsumerPolicy() {
             public Context context() { return Context.IDENTITY_PROFILE; }
             public boolean mayUpload(long actor,String consumerId) { return true; }

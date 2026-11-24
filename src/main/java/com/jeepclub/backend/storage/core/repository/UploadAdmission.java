@@ -1,7 +1,7 @@
 package com.jeepclub.backend.storage.core.repository;
 
 public interface UploadAdmission {
-    record Permit(String id,long actor) {}
+    record Permit(String id, long actor, String executionId) {}
     Permit reserve(long actor);
     record RequestIdentity(String scopeHash, String keyHash, String fingerprint) {}
     record KeyedReservation(Permit permit, Long confirmedMediaId) {}

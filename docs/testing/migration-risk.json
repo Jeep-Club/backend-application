@@ -10,5 +10,11 @@
     "tests": [
       "StorageUploadIdempotencyUpgradeMySqlIT#v26PreservesPermitsAndEnforcesScopedKeys"
     ]
+  },
+  "9eea14788d0e3bcaef36ed5f990ddda297bb1b2a541caac2dedba45d665bd5d3": {
+    "reason": "Coluna aditiva para cercar mutações por execução, preservando identidade idempotente e permits históricos da V26.",
+    "tests": [
+      "StorageUploadExecutionUpgradeMySqlIT#v27PreservesExistingPermitAndItsIdempotencyBinding"
+    ]
   }
 }

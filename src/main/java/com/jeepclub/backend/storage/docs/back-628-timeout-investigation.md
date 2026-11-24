@@ -43,6 +43,15 @@ payload recebe 503 sem iniciar outro codec, store ou cobrança. A resposta
 de sucesso é uma confirmação de upload. A leitura continua sujeita à
 autorização e moderação da referência.
 
+A V27 separa o UUID de execução do identificador idempotente do permit.
+Cada readmissão grava um novo UUID sob os mesmos locks. Se uma readmissão
+sofre rollback e outra ocupa o permit antes da compensação, o UUID antigo
+impede estorno, cobrança, alteração de intents ou finalização da nova
+execução. Permits históricos sem UUID preservam recibos confirmados.
+Uma readmissão permitida grava o primeiro UUID antes de qualquer mutação
+do pipeline. O teste MySQL simula rollback real seguido de readmissão
+antes da compensação tardia.
+
 Quando o banco confirma compensação antes da cobrança e da primeira
 gravação, o mesmo payload pode readmitir o permit sob os locks originais
 e os limites vigentes. A chave permanece vinculada ao payload. O caminho

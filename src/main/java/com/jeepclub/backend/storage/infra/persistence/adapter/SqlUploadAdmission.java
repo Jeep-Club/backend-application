@@ -63,7 +63,8 @@ public class SqlUploadAdmission implements UploadAdmission {
     }
     @Override public KeyedReservation reserve(long actor, RequestIdentity identity) {
         if(actor<=0) throw new IllegalArgumentException("Invalid actor");ensure(0);ensure(actor);
-        var permit = new Permit(UUID.randomUUID().toString(), actor);
+        // A transaction that rolls back must never share its execution identity with a later retry.
+        var permit = new Permit(UUID.randomUUID().toString(), actor, UUID.randomUUID().toString());
         var provisional = new AtomicReference<>(permit);
         try {
             return tx.execute(status -> {
@@ -80,14 +81,16 @@ public class SqlUploadAdmission implements UploadAdmission {
                 user.setUsedBytes(user.getUsedBytes()+MAX_RESERVATION);global.setUsedBytes(global.getUsedBytes()+MAX_RESERVATION);
                 if (prior != null) {
                     // A completed, uncharged permit cannot have reached physical storage.
-                    var retry = new Permit(prior.getId(), actor);
+                    var retry = new Permit(prior.getId(), actor, permit.executionId());
                     provisional.set(retry);
+                    prior.setExecutionId(retry.executionId());
                     prior.setCompleted(false);
                     prior.setAccountedBytes(MAX_RESERVATION);
                     em.flush();
                     return new KeyedReservation(retry, null);
                 }
                 var row=new UploadPermitEntity();row.setId(permit.id());row.setActorUserId(actor);row.setAccountedBytes(MAX_RESERVATION);row.setCreatedAt(now);
+                row.setExecutionId(permit.executionId());
                 if (identity != null) {
                     row.setRequestScopeHash(identity.scopeHash());
                     row.setRequestKeyHash(identity.keyHash());
@@ -133,7 +136,8 @@ public class SqlUploadAdmission implements UploadAdmission {
         if(bytes<=0 || bytes>MAX_RESERVATION) throw new IllegalArgumentException("Invalid representation budget");
         tx.executeWithoutResult(status -> {
             var global=lock(0);var user=lock(permit.actor());var row=lockPermit(permit.id());
-            if(row==null || row.getActorUserId()!=permit.actor() || row.isCompleted() || row.isCharged()) throw new IllegalArgumentException("Invalid upload permit");
+            requireCurrentExecution(row, permit);
+            if(row.isCompleted() || row.isCharged()) throw new IllegalArgumentException("Invalid upload permit");
             if(user.getChargedUploads()>=maxUploads) throw new LimitExceeded();
             long difference=bytes-row.getAccountedBytes();global.setUsedBytes(global.getUsedBytes()+difference);user.setUsedBytes(user.getUsedBytes()+difference);
             user.setChargedUploads(user.getChargedUploads()+1);row.setAccountedBytes(bytes);row.setCharged(true);em.flush();
@@ -143,7 +147,8 @@ public class SqlUploadAdmission implements UploadAdmission {
         if(blobs==null || blobs.isEmpty()) throw new IllegalArgumentException("Missing planned blobs");
         tx.executeWithoutResult(status -> {
             var row=lockPermit(permit.id());
-            if(row==null || row.getActorUserId()!=permit.actor() || row.isCompleted() || !row.isCharged()) throw new IllegalArgumentException("Invalid upload permit");
+            requireCurrentExecution(row, permit);
+            if(row.isCompleted() || !row.isCharged()) throw new IllegalArgumentException("Invalid upload permit");
             long total=0;
             for(var blob:blobs) {
                 if(blob==null || blob.sha256()==null || !blob.sha256().matches("[0-9a-f]{64}") || blob.sizeBytes()<=0) throw new IllegalArgumentException("Invalid planned blob");
@@ -166,7 +171,7 @@ public class SqlUploadAdmission implements UploadAdmission {
             // The same budget locks serialize this check with the original reservation.
             if (row == null && recoveringReservation) return;
             if(row==null || row.getActorUserId()!=permit.actor()) throw new IllegalArgumentException("Invalid upload permit");
-            if(row.isCompleted()) return;
+            if(!isCurrentExecution(row, permit) || row.isCompleted()) return;
             if (recoveringReservation && (row.isCharged() || row.getAccountedBytes() != MAX_RESERVATION)) {
                 throw new IllegalStateException("Unexpected reservation state");
             }
@@ -182,16 +187,32 @@ public class SqlUploadAdmission implements UploadAdmission {
     @Override @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.MANDATORY)
     public void finishInCatalogTransaction(Permit permit,long mediaId) {
         if(mediaId<=0) throw new IllegalArgumentException("Invalid media asset");
-        finishLocked(permit);
-        var row=em.find(UploadPermitEntity.class,permit.id());
-        if(row.getCatalogAssetId()!=null && row.getCatalogAssetId()!=mediaId) throw new IllegalArgumentException("Permit already bound");
-        row.setCatalogAssetId(mediaId);em.flush();
+        var global = lock(0);
+        var user = lock(permit.actor());
+        var row = lockPermit(permit.id());
+        requireCurrentExecution(row, permit);
+        if (row.isCompleted() && java.util.Objects.equals(row.getCatalogAssetId(), mediaId)) return;
+        if (row.isCompleted() || !row.isCharged() || row.getCatalogAssetId() != null) {
+            throw new IllegalStateException("Upload permit cannot be bound");
+        }
+        row.setCatalogAssetId(mediaId);
+        finishLocked(global, user, row);
     }
     private void finishLocked(Permit permit) {
             var global=lock(0);var user=lock(permit.actor());var row=lockPermit(permit.id());
-            if(row==null || row.getActorUserId()!=permit.actor()) throw new IllegalArgumentException("Invalid upload permit");
+            requireCurrentExecution(row, permit);
+            finishLocked(global, user, row);
+    }
+    private void finishLocked(UploadBudgetEntity global, UploadBudgetEntity user, UploadPermitEntity row) {
             if(row.isCompleted()) return;
             if(!row.isCharged()){global.setUsedBytes(global.getUsedBytes()-row.getAccountedBytes());user.setUsedBytes(user.getUsedBytes()-row.getAccountedBytes());row.setAccountedBytes(0);}
             user.setInFlight(user.getInFlight()-1);row.setCompleted(true);em.flush();
+    }
+    private static boolean isCurrentExecution(UploadPermitEntity row, Permit permit) {
+        return permit.executionId() != null && permit.executionId().equals(row.getExecutionId());
+    }
+    private static void requireCurrentExecution(UploadPermitEntity row, Permit permit) {
+        if (row == null || row.getActorUserId() != permit.actor()) throw new IllegalArgumentException("Invalid upload permit");
+        if (!isCurrentExecution(row, permit)) throw new IllegalStateException("Stale upload execution");
     }
 }
