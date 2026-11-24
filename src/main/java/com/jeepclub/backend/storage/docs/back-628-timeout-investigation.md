@@ -18,6 +18,24 @@ O asset permanece sem referência operacional. O ensaio simula a observação
 da aplicação após o commit, sem simular o comportamento de rede do driver.
 O cliente não deve interpretar o 503 como prova de rollback ou autorização de retry.
 
+## Benchmark por socket e MySQL
+
+O diagnóstico opt-in `StorageSocketBenchmarkMySqlIT` mede o POST de perfil
+com dois uploads concorrentes. Em `f8ac98b4ab66e34d0a874519d6faf1a1506994ac`,
+Windows 11, Ryzen 5 PRO 5655GE (12 CPUs lógicas), JDK 17.0.20 e MySQL 8.0.46,
+foram 2 aquecimentos e 23 amostras medidas. O corpus reuniu PNG, JPEG e WebP
+sintéticos de até 20 megapixels e três JPEGs da galeria pública do frontend
+`develop` em `5e366e79015be2472a16dfbe5d435528884f637a`. Entradas de
+67.721 a 4.616.257 bytes, p50 de 964 ms, p95 de 2.555 ms, máximo de
+2.564 ms e 23 respostas 201. O ensaio verificou 3 variantes por asset, bytes,
+integridade e contabilidade. A MASTER ficou entre 67.447 e 1.541.239 bytes.
+Esse resultado caracteriza o corpus no host local, sem medir latência sob
+falha, pico de heap/CPU ou capacidade de produção.
+
+O corpus opcional é lido ao passar
+`-Dstorage.benchmark.publicGallery=<diretório public/images do frontend>`
+ao [comando diagnóstico](../../../../../../../../docs/testing/progressive-validation.md#diagnósticos-de-storage).
+
 ## Prazo cooperativo após admissão
 
 `MediaUploadService` mede 10 s com relógio monotônico a partir da aquisição

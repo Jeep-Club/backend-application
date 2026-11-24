@@ -128,6 +128,17 @@ class SynchronousImageProcessorTest {
                     .hasMessage("Image dimensions exceed limits");
         }
     }
+
+    @Test void rejectsDecoderResultsWithDimensionsThatDifferFromHeader() {
+        var decoded = new BufferedImage(16, 12, BufferedImage.TYPE_INT_RGB);
+        assertThat(SynchronousImageProcessor.requireDecodedDimensions(decoded, 16, 12)).isSameAs(decoded);
+        assertThatThrownBy(() -> SynchronousImageProcessor.requireDecodedDimensions(decoded, 12, 12))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> SynchronousImageProcessor.requireDecodedDimensions(decoded, 16, 16))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> SynchronousImageProcessor.requireDecodedDimensions(null, 16, 12))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
     @Test void pngMasterDropsTextWithoutRecompressingPixelsOrLosingTransparency() throws Exception {
         var input = new BufferedImage(12, 8, BufferedImage.TYPE_INT_ARGB);
         input.setRGB(2, 3, 0x40112233);

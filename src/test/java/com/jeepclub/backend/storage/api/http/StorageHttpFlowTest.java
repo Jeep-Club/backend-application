@@ -90,6 +90,12 @@ class StorageHttpFlowTest {
         long blobCount=jdbc.queryForObject("select count(*) from storage_blobs",Long.class);
         var invalidFiles=java.util.List.of(
             new MockMultipartFile("file","empty.png","image/png",new byte[0]),
+            new MockMultipartFile("file", "short.png", "image/png", png) {
+                @Override public long getSize() { return png.length + 1L; }
+            },
+            new MockMultipartFile("file", "surplus.png", "image/png", png) {
+                @Override public long getSize() { return png.length - 1L; }
+            },
             new MockMultipartFile("file","missing.png",null,png),
             new MockMultipartFile("file","fake.png","image/png",new byte[]{1,2,3}),
             new MockMultipartFile("file","corrupt.png","image/png",corruptPng),

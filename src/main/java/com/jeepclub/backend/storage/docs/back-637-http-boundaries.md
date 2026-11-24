@@ -11,6 +11,12 @@ adicional recebe 413 com `application/problem+json` e não cria asset, blob ou
 permit adicional. Payload com assinatura inválida recebe 400 e não deixa asset,
 blob ou permit aberto. `StorageMultipartMySqlIT` repete esses cenários em MySQL.
 
+`StorageHttpFlowTest` também exercita leituras menores e maiores que o tamanho
+declarado pela parte multipart. O controller rejeita ambas com 400 antes de
+processar ou gravar bytes. `SynchronousImageProcessorTest` cobre a validação
+comum usada para comparar largura e altura pré-decodificação com o resultado
+dos decoders JPEG, PNG e WebP, além de cabeçalhos PNG acima dos limites.
+
 No pipeline, JPEG e PNG também são rejeitados se as dimensões retornadas pelo
 decoder divergirem das dimensões verificadas antes da decodificação. Essa
 checagem já existia para WebP. Validar a regressão com imagens válidas,

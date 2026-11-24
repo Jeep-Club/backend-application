@@ -233,10 +233,7 @@ public final class SynchronousImageProcessor {
             int[] dimensions=dev.matrixlab.webp4j.WebPCodec.getWebPInfo(bytes);
             if (dimensions==null || dimensions.length<2) throw new IllegalArgumentException("Invalid WebP dimensions");
             validateDimensions(dimensions[0],dimensions[1]);
-            BufferedImage image=dev.matrixlab.webp4j.WebPCodec.decodeImage(bytes);
-            if (image==null || image.getWidth()!=dimensions[0] || image.getHeight()!=dimensions[1])
-                throw new IllegalArgumentException("Invalid WebP image");
-            return image;
+            return requireDecodedDimensions(dev.matrixlab.webp4j.WebPCodec.decodeImage(bytes), dimensions[0], dimensions[1]);
         }
         try (ImageInputStream stream = ImageIO.createImageInputStream(new ByteArrayInputStream(bytes))) {
             if (stream == null) throw new IllegalArgumentException("Invalid image");
@@ -252,11 +249,17 @@ public final class SynchronousImageProcessor {
                 int width = reader.getWidth(0), height = reader.getHeight(0);
                 validateDimensions(width,height);
                 BufferedImage image = reader.read(0);
-                if (image == null || warning[0] || image.getWidth() != width || image.getHeight() != height)
-                    throw new IllegalArgumentException("Invalid image");
-                return image;
+                if (warning[0]) throw new IllegalArgumentException("Invalid image");
+                return requireDecodedDimensions(image, width, height);
             } finally { reader.dispose(); }
         }
+    }
+
+    static BufferedImage requireDecodedDimensions(BufferedImage image, int width, int height) {
+        if (image == null || image.getWidth() != width || image.getHeight() != height) {
+            throw new IllegalArgumentException("Decoded image dimensions differ from header");
+        }
+        return image;
     }
     private static void validateDimensions(int width,int height) {
         if (width < 1 || height < 1 || width > MAX_SIDE || height > MAX_SIDE || (long) width * height > MAX_PIXELS)
