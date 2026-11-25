@@ -1,0 +1,20 @@
+{
+  "53e58eb533706138d11006f24d49984de8f60f62d5d9bf0fe67e123cd595859f": {
+    "reason": "DDL aditivo sobre V24; upgrade verifica preservacao de budgets e permits existentes, FK e unicidade de intents. Hibernate validate adicional no fluxo MySQL.",
+    "tests": [
+      "StorageUploadPlanUpgradeMySqlIT#v25PreservesExistingBudgetsAndPermitsAndEnforcesPlanConstraints"
+    ]
+  },
+  "e344a53d5bebdc1eb5b92c81a56de39b1039985031dd698cce489f5cc35cbab7": {
+    "reason": "DDL aditivo sobre V25. Preserva permits anteriores e verifica a unicidade por ator e contexto e a integridade dos campos da identidade.",
+    "tests": [
+      "StorageUploadIdempotencyUpgradeMySqlIT#v26PreservesPermitsAndEnforcesScopedKeys"
+    ]
+  },
+  "9eea14788d0e3bcaef36ed5f990ddda297bb1b2a541caac2dedba45d665bd5d3": {
+    "reason": "Coluna aditiva para cercar mutações por execução, preservando identidade idempotente e permits históricos da V26.",
+    "tests": [
+      "StorageUploadExecutionUpgradeMySqlIT#v27PreservesExistingPermitAndItsIdempotencyBinding"
+    ]
+  }
+}

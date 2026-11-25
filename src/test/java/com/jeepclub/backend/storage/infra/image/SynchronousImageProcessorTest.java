@@ -8,9 +8,95 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.*;
 
 class SynchronousImageProcessorTest {
+    @Test void highDepthSourceReservesDoubleRasterCapacityUntilProcessingReturns() throws Exception {
+        var processor = new SynchronousImageProcessor(120 * 80 * 2);
+        var output = new ByteArrayOutputStream();
+        assertThat(ImageIO.write(new BufferedImage(120, 80, BufferedImage.TYPE_USHORT_GRAY), "png", output)).isTrue();
+        byte[] highDepth = output.toByteArray();
+        byte[] ordinary = image();
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var checks = new java.util.concurrent.atomic.AtomicInteger();
+        var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            var first = executor.submit(() -> processor.process(highDepth, SynchronousImageProcessor.Category.PROFILE,
+                    List.of(), java.util.Map.of(), () -> {
+                        if (checks.incrementAndGet() != 2) return;
+                        entered.countDown();
+                        try {
+                            if (!release.await(8, java.util.concurrent.TimeUnit.SECONDS)) throw new IllegalStateException("Fixture timeout");
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                            throw new IllegalStateException(interrupted);
+                        }
+                    }));
+            assertThat(entered.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            assertThatThrownBy(() -> processor.process(ordinary, SynchronousImageProcessor.Category.PROFILE, List.of()))
+                    .isInstanceOf(IllegalStateException.class).hasMessage("Image raster capacity exceeded");
+            release.countDown();
+            assertThat(first.get(10, java.util.concurrent.TimeUnit.SECONDS).master()).isNotNull();
+            assertThat(processor.process(ordinary, SynchronousImageProcessor.Category.PROFILE, List.of()).master()).isNotNull();
+        } finally {
+            release.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test void deadlineAfterDecodeStopsProcessingAndReleasesCapacity() throws Exception {
+        var processor = new SynchronousImageProcessor();
+        byte[] input = image();
+        var checks = new java.util.concurrent.atomic.AtomicInteger();
+        var expiration = new IllegalStateException("expired");
+        for (int attempt = 0; attempt < 3; attempt++) {
+            checks.set(0);
+            assertThatThrownBy(() -> processor.process(input, SynchronousImageProcessor.Category.PROFILE,
+                    List.of(), java.util.Map.of(), () -> {
+                        if (checks.incrementAndGet() == 2) throw expiration;
+                    })).isSameAs(expiration);
+        }
+        assertThat(processor.process(input, SynchronousImageProcessor.Category.PROFILE, List.of()).master()).isNotNull();
+    }
+
+    @Test void rejectsReductionBelowAvailableGalleryResolution() throws Exception {
+        var source = new BufferedImage(1600, 1200, BufferedImage.TYPE_INT_ARGB);
+        var random = new java.util.Random(628);
+        for (int y = 0; y < source.getHeight(); y++) {
+            for (int x = 0; x < source.getWidth(); x++) {
+                source.setRGB(x, y, random.nextInt());
+            }
+        }
+        var output = new ByteArrayOutputStream();
+        ImageIO.write(source, "png", output);
+        assertThat(output.size()).isBetween(5 * 1024 * 1024 + 1, SynchronousImageProcessor.MAX_INPUT);
+        var processor = new SynchronousImageProcessor();
+        var thumbnail = new SynchronousImageProcessor.Preset("THUMBNAIL", 240, 180, null);
+        var gallery = new SynchronousImageProcessor.Preset("GALLERY", 1600, 1200, null);
+        byte[] input = output.toByteArray();
+
+        var reduced = processor.process(input, SynchronousImageProcessor.Category.OTHER, List.of(thumbnail));
+        assertThat(reduced.master().bytes().length).isLessThanOrEqualTo(5 * 1024 * 1024);
+        assertThat(reduced.variants().get(0).width()).isEqualTo(240);
+        assertThatThrownBy(() -> processor.process(input, SynchronousImageProcessor.Category.OTHER, List.of(thumbnail, gallery)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("MASTER cannot preserve variant resolution within category limit");
+    }
+
     private byte[] image() throws Exception {
         var img = new BufferedImage(120, 80, BufferedImage.TYPE_INT_RGB);
         var out = new ByteArrayOutputStream(); ImageIO.write(img, "png", out); return out.toByteArray();
+    }
+    @Test void acceptsExactlyTenMibAndRejectsOneByteMore() throws Exception {
+        byte[] png=image();int payloadSize=SynchronousImageProcessor.MAX_INPUT-png.length-12;
+        byte[] padding=new byte[payloadSize];byte[] type={'n','p','T','c'};
+        var crc=new java.util.zip.CRC32();crc.update(type);crc.update(padding);
+        var output=new ByteArrayOutputStream(SynchronousImageProcessor.MAX_INPUT);
+        var data=new java.io.DataOutputStream(output);
+        data.write(png,0,png.length-12);data.writeInt(payloadSize);data.write(type);data.write(padding);data.writeInt((int)crc.getValue());data.write(png,png.length-12,12);
+        byte[] exact=output.toByteArray();assertThat(exact).hasSize(SynchronousImageProcessor.MAX_INPUT);
+        var processor=new SynchronousImageProcessor();
+        assertThat(processor.process(exact,SynchronousImageProcessor.Category.PROFILE,List.of()).master().bytes()).isNotEmpty();
+        assertThatThrownBy(() -> processor.process(java.util.Arrays.copyOf(exact,exact.length+1),SynchronousImageProcessor.Category.PROFILE,List.of()))
+            .isInstanceOf(IllegalArgumentException.class);
     }
     @Test void derivesIndependentCropsAndHashesPersistedBytes() throws Exception {
         var processor = new SynchronousImageProcessor();
@@ -74,6 +160,33 @@ class SynchronousImageProcessorTest {
         byte[] valid = image();
         assertThatThrownBy(() -> processor.process(java.util.Arrays.copyOf(valid, valid.length - 12),
                 SynchronousImageProcessor.Category.PROFILE, List.of())).isInstanceOf(IllegalArgumentException.class);
+    }
+    @Test void rejectsOverBudgetPngHeadersBeforeReadingPixels() throws Exception {
+        var processor = new SynchronousImageProcessor();
+        for (int[] dimensions : new int[][]{{10_001, 1}, {1, 10_001}, {5_001, 4_000}}) {
+            byte[] png = image();
+            // Keep the small IDAT and repair the header CRC so the dimension check must reject it.
+            var header = java.nio.ByteBuffer.wrap(png);
+            header.putInt(16, dimensions[0]);
+            header.putInt(20, dimensions[1]);
+            var crc = new java.util.zip.CRC32();
+            crc.update(png, 12, 17);
+            header.putInt(29, (int) crc.getValue());
+            assertThatThrownBy(() -> processor.process(png, SynchronousImageProcessor.Category.PROFILE, List.of()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("Image dimensions exceed limits");
+        }
+    }
+
+    @Test void rejectsDecoderResultsWithDimensionsThatDifferFromHeader() {
+        var decoded = new BufferedImage(16, 12, BufferedImage.TYPE_INT_RGB);
+        assertThat(SynchronousImageProcessor.requireDecodedDimensions(decoded, 16, 12)).isSameAs(decoded);
+        assertThatThrownBy(() -> SynchronousImageProcessor.requireDecodedDimensions(decoded, 12, 12))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> SynchronousImageProcessor.requireDecodedDimensions(decoded, 16, 16))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> SynchronousImageProcessor.requireDecodedDimensions(null, 16, 12))
+                .isInstanceOf(IllegalArgumentException.class);
     }
     @Test void pngMasterDropsTextWithoutRecompressingPixelsOrLosingTransparency() throws Exception {
         var input = new BufferedImage(12, 8, BufferedImage.TYPE_INT_ARGB);

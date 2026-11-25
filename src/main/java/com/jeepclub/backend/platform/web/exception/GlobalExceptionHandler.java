@@ -70,6 +70,32 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     @Override
+    protected ResponseEntity<Object> handleMaxUploadSizeExceededException(org.springframework.web.multipart.MaxUploadSizeExceededException exception,
+            HttpHeaders headers, HttpStatusCode status, WebRequest request) {
+        if (!isStorageMediaRequest(request)) return super.handleMaxUploadSizeExceededException(exception,headers,status,request);
+        return storageMultipartProblem(HttpStatus.PAYLOAD_TOO_LARGE,"STORAGE_UPLOAD_TOO_LARGE");
+    }
+
+    @Override
+    protected ResponseEntity<Object> handleMissingServletRequestPart(org.springframework.web.multipart.support.MissingServletRequestPartException exception,
+            HttpHeaders headers, HttpStatusCode status, WebRequest request) {
+        if (!isStorageMediaRequest(request)) return super.handleMissingServletRequestPart(exception,headers,status,request);
+        return storageMultipartProblem(HttpStatus.BAD_REQUEST,"INVALID_MEDIA_REQUEST");
+    }
+
+    private boolean isStorageMediaRequest(WebRequest request) {
+        if (!(request instanceof org.springframework.web.context.request.ServletWebRequest servlet)) return false;
+        var http=servlet.getRequest();
+        return http.getRequestURI().equals(http.getContextPath()+"/storage/media/profile");
+    }
+
+    private ResponseEntity<Object> storageMultipartProblem(HttpStatus status,String code) {
+        var problem=problemFactory.create(status,code,LocaleContextHolder.getLocale());
+        return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,"private, no-store")
+            .contentType(org.springframework.http.MediaType.APPLICATION_PROBLEM_JSON).body(problem);
+    }
+
+    @Override
     protected ResponseEntity<Object> handleMethodArgumentNotValid(
             MethodArgumentNotValidException exception,
             HttpHeaders headers,

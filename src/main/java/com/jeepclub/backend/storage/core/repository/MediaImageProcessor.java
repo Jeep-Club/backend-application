@@ -25,6 +25,10 @@ public interface MediaImageProcessor {
         public static Options defaults() { return new Options(Map.of()); }
     }
     Processed process(byte[] input, MediaContext context);
+    default Processed process(byte[] input, MediaContext context, Options options, Runnable checkDeadline) {
+        checkDeadline.run();
+        return process(input, context, options);
+    }
     default Processed process(byte[] input, MediaContext context, Options options) {
         if (options == null || !options.crops().isEmpty()) throw new IllegalArgumentException("Crop unsupported");
         return process(input, context);

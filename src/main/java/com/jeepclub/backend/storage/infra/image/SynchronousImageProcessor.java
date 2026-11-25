@@ -18,7 +18,9 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Semaphore;
+import com.jeepclub.backend.storage.core.repository.MediaImageProcessor;
 
 /** Bounded, synchronous codec. No persistence or access policy is implied by this component. */
 public final class SynchronousImageProcessor {
@@ -26,6 +28,28 @@ public final class SynchronousImageProcessor {
     private static final long MAX_PIXELS = 20_000_000L;
     private static final int MAX_SIDE = 10_000;
     private final Semaphore capacity = new Semaphore(2, true);
+    private final Semaphore rasterCapacity;
+
+    public SynchronousImageProcessor() {
+        this(Math.toIntExact(2 * MAX_PIXELS));
+    }
+
+    SynchronousImageProcessor(int rasterBudget) {
+        rasterCapacity = new Semaphore(rasterBudget, true);
+    }
+
+    private final class RasterReservation implements AutoCloseable {
+        private int units;
+
+        void reserve(int required) {
+            if (!rasterCapacity.tryAcquire(required)) throw new IllegalStateException("Image raster capacity exceeded");
+            units = required;
+        }
+
+        @Override public void close() {
+            rasterCapacity.release(units);
+        }
+    }
     public enum Category { PROFILE, DEPENDENT, OTHER }
     public record Crop(int x, int y, int width, int height) {}
     public record Preset(String code, int maxWidth, int maxHeight, Crop crop) {
@@ -46,14 +70,20 @@ public final class SynchronousImageProcessor {
     }
     public Result process(byte[] input, Category category, List<Preset> presets,
                           java.util.Map<String, com.jeepclub.backend.storage.core.repository.MediaImageProcessor.Crop> crops) throws IOException {
+        return process(input, category, presets, crops, () -> {});
+    }
+    Result process(byte[] input, Category category, List<Preset> presets,
+                   Map<String, MediaImageProcessor.Crop> crops, Runnable checkDeadline) throws IOException {
         if (input == null || input.length == 0 || input.length > MAX_INPUT || category == null || presets == null || presets.size() > 16
                 || crops == null || presets.stream().map(Preset::code).distinct().count() != presets.size()
                 || !presets.stream().map(Preset::code).collect(java.util.stream.Collectors.toSet()).containsAll(crops.keySet()))
             throw new IllegalArgumentException("Invalid upload");
         if (!capacity.tryAcquire()) throw new IllegalStateException("Image processing capacity exceeded");
-        try {
+        try (var raster = new RasterReservation()) {
+            checkDeadline.run();
             byte[] snapshot = input.clone();
-            BufferedImage decoded = decode(snapshot);
+            BufferedImage decoded = decode(snapshot, raster::reserve);
+            checkDeadline.run();
             int orientation = ExifOrientation.read(snapshot);
             BufferedImage source = ExifOrientation.apply(decoded, orientation);
             int limit = (category == Category.OTHER ? 5 : 2) * 1024 * 1024;
@@ -61,29 +91,34 @@ public final class SynchronousImageProcessor {
                     ? (isWebp(snapshot) ? sanitizeWebpWithoutRecompression(snapshot)
                         : isJpeg(snapshot) ? sanitizeJpegWithoutRecompression(snapshot,source) : sanitizePngWithoutRecompression(snapshot)) : null;
             if (preserved != null && preserved.length > limit) preserved = null;
+            checkDeadline.run();
             BufferedImage masterImage = resize(source, 4096, 4096);
+            int baselineWidth = masterImage.getWidth();
+            int baselineHeight = masterImage.getHeight();
             byte[] masterBytes = preserved != null ? preserved : encode(masterImage);
             while(masterBytes.length > limit && Math.max(masterImage.getWidth(),masterImage.getHeight()) > 256) {
-                masterImage=resize(masterImage,Math.max(1,masterImage.getWidth()*3/4),Math.max(1,masterImage.getHeight()*3/4));
+                checkDeadline.run();
+                masterImage=resize(source,Math.max(1,masterImage.getWidth()*3/4),Math.max(1,masterImage.getHeight()*3/4));
                 masterBytes=encode(masterImage);
             }
             if (masterBytes.length > limit) throw new IllegalArgumentException("MASTER exceeds category limit");
+            if (masterImage.getWidth() != baselineWidth || masterImage.getHeight() != baselineHeight) {
+                verifyVariantResolution(baselineWidth, baselineHeight, masterImage, presets, crops);
+            }
             String mime = preserved != null ? (isWebp(preserved) ? "image/webp" : isJpeg(preserved) ? "image/jpeg" : "image/png")
                     : (masterImage.getColorModel().hasAlpha() ? "image/png" : "image/jpeg");
             Image master = image("MASTER", masterImage, masterBytes, mime);
             // Derivatives use the actual persisted, sanitized MASTER, not a parallel source image.
+            checkDeadline.run();
             masterImage = decode(masterBytes);
             var variants = new java.util.ArrayList<Image>();
             long derivedPixels=0,totalBytes=masterBytes.length;
             for (Preset preset : presets) {
+                checkDeadline.run();
                 Crop selected=preset.crop();
                 var normalized = crops.get(preset.code());
                 if (normalized != null) {
-                    int x=(int)Math.floor(normalized.x()*masterImage.getWidth());
-                    int y=(int)Math.floor(normalized.y()*masterImage.getHeight());
-                    int right=Math.min(masterImage.getWidth(),(int)Math.ceil((normalized.x()+normalized.width())*masterImage.getWidth()));
-                    int bottom=Math.min(masterImage.getHeight(),(int)Math.ceil((normalized.y()+normalized.height())*masterImage.getHeight()));
-                    selected=new Crop(x,y,right-x,bottom-y);
+                    selected = pixelCrop(masterImage.getWidth(), masterImage.getHeight(), normalized);
                     if (preset.code().equals("AVATAR_SMALL") && Math.abs(selected.width()-selected.height())>1)
                         throw new IllegalArgumentException("Avatar crop must be square");
                     if (preset.code().equals("CARD_PORTRAIT") && selected.width()>=selected.height())
@@ -93,13 +128,43 @@ public final class SynchronousImageProcessor {
                 BufferedImage resized = resize(cropped, preset.maxWidth(), preset.maxHeight());
                 derivedPixels+=(long)resized.getWidth()*resized.getHeight();
                 if(derivedPixels>20_000_000L) throw new IllegalArgumentException("Variant pixel budget exceeded");
+                checkDeadline.run();
                 var presentation=encodePresentation(resized);
                 totalBytes+=presentation.bytes().length;
                 if(totalBytes>20L*1024*1024) throw new IllegalArgumentException("Variant byte budget exceeded");
                 variants.add(image(preset.code(), resized, presentation.bytes(), presentation.mime()));
             }
+            checkDeadline.run();
             return new Result(hash(snapshot), master, List.copyOf(variants));
         } finally { capacity.release(); }
+    }
+
+    private static Crop pixelCrop(int width, int height, MediaImageProcessor.Crop normalized) {
+        int x = (int) Math.floor(normalized.x() * width);
+        int y = (int) Math.floor(normalized.y() * height);
+        int right = Math.min(width, (int) Math.ceil((normalized.x() + normalized.width()) * width));
+        int bottom = Math.min(height, (int) Math.ceil((normalized.y() + normalized.height()) * height));
+        return new Crop(x, y, right - x, bottom - y);
+    }
+
+    private static void verifyVariantResolution(int baselineWidth, int baselineHeight, BufferedImage master,
+            List<Preset> presets, Map<String, MediaImageProcessor.Crop> crops) {
+        for (Preset preset : presets) {
+            var normalized = crops.get(preset.code());
+            Crop reference = normalized == null ? preset.crop() : pixelCrop(baselineWidth, baselineHeight, normalized);
+            int referenceWidth = reference == null ? baselineWidth : reference.width();
+            int referenceHeight = reference == null ? baselineHeight : reference.height();
+            Crop selected = normalized == null ? preset.crop() : pixelCrop(master.getWidth(), master.getHeight(), normalized);
+            BufferedImage available = crop(master, selected);
+            // The current 300 DPI card export uses an approximately 283 × 408 pixel photo box.
+            int targetWidth = preset.code().equals("CARD_PORTRAIT") ? Math.min(preset.maxWidth(), 283) : preset.maxWidth();
+            int targetHeight = preset.code().equals("CARD_PORTRAIT") ? Math.min(preset.maxHeight(), 408) : preset.maxHeight();
+            double scale = fitScale(referenceWidth, referenceHeight, targetWidth, targetHeight);
+            if (available.getWidth() < Math.round(referenceWidth * scale)
+                    || available.getHeight() < Math.round(referenceHeight * scale)) {
+                throw new IllegalArgumentException("MASTER cannot preserve variant resolution within category limit");
+            }
+        }
     }
     /** Remove application/comment segments while preserving entropy; fall back if color interpretation changes. */
     private static byte[] sanitizeJpegWithoutRecompression(byte[] bytes,BufferedImage original) throws IOException {
@@ -196,16 +261,17 @@ public final class SynchronousImageProcessor {
         return out.toByteArray();
     }
     private static BufferedImage decode(byte[] bytes) throws IOException {
+        return decode(bytes, null);
+    }
+    private static BufferedImage decode(byte[] bytes, java.util.function.IntConsumer reserveRaster) throws IOException {
         validateContainer(bytes);
         if (isWebp(bytes)) {
             if (!dev.matrixlab.webp4j.WebPCodec.isAvailable()) throw new IllegalStateException("WebP decoder unavailable");
             int[] dimensions=dev.matrixlab.webp4j.WebPCodec.getWebPInfo(bytes);
             if (dimensions==null || dimensions.length<2) throw new IllegalArgumentException("Invalid WebP dimensions");
             validateDimensions(dimensions[0],dimensions[1]);
-            BufferedImage image=dev.matrixlab.webp4j.WebPCodec.decodeImage(bytes);
-            if (image==null || image.getWidth()!=dimensions[0] || image.getHeight()!=dimensions[1])
-                throw new IllegalArgumentException("Invalid WebP image");
-            return image;
+            if (reserveRaster != null) reserveRaster.accept(dimensions[0] * dimensions[1]);
+            return requireDecodedDimensions(dev.matrixlab.webp4j.WebPCodec.decodeImage(bytes), dimensions[0], dimensions[1]);
         }
         try (ImageInputStream stream = ImageIO.createImageInputStream(new ByteArrayInputStream(bytes))) {
             if (stream == null) throw new IllegalArgumentException("Invalid image");
@@ -220,11 +286,25 @@ public final class SynchronousImageProcessor {
                 reader.addIIOReadWarningListener((ignored, message) -> warning[0] = true);
                 int width = reader.getWidth(0), height = reader.getHeight(0);
                 validateDimensions(width,height);
+                if (reserveRaster != null) {
+                    var rawType = reader.getRawImageType(0);
+                    // High-depth or unknown rasters can use double the normal decoded working space.
+                    boolean wideSamples = rawType == null
+                            || rawType.getSampleModel().getDataType() == java.awt.image.DataBuffer.TYPE_USHORT;
+                    reserveRaster.accept(width * height * (wideSamples ? 2 : 1));
+                }
                 BufferedImage image = reader.read(0);
-                if (image == null || warning[0]) throw new IllegalArgumentException("Invalid image");
-                return image;
+                if (warning[0]) throw new IllegalArgumentException("Invalid image");
+                return requireDecodedDimensions(image, width, height);
             } finally { reader.dispose(); }
         }
+    }
+
+    static BufferedImage requireDecodedDimensions(BufferedImage image, int width, int height) {
+        if (image == null || image.getWidth() != width || image.getHeight() != height) {
+            throw new IllegalArgumentException("Decoded image dimensions differ from header");
+        }
+        return image;
     }
     private static void validateDimensions(int width,int height) {
         if (width < 1 || height < 1 || width > MAX_SIDE || height > MAX_SIDE || (long) width * height > MAX_PIXELS)
@@ -236,7 +316,7 @@ public final class SynchronousImageProcessor {
     }
     private static boolean isJpeg(byte[] b) {return b.length>=4 && (b[0]&255)==255 && (b[1]&255)==216;}
     /** Reject incomplete or corrupted containers even when a decoder tolerates them. */
-    private static void validateContainer(byte[] bytes) {
+    static void validateContainer(byte[] bytes) {
         if (isWebp(bytes)) {
             long declared=Integer.toUnsignedLong(java.nio.ByteBuffer.wrap(bytes,4,4).order(java.nio.ByteOrder.LITTLE_ENDIAN).getInt());
             if (declared+8!=bytes.length) throw new IllegalArgumentException("Invalid WebP length");
@@ -285,6 +365,9 @@ public final class SynchronousImageProcessor {
         }
         throw new IllegalArgumentException("Incomplete PNG");
     }
+    static String containerMime(byte[] bytes) {
+        return isWebp(bytes) ? "image/webp" : isJpeg(bytes) ? "image/jpeg" : "image/png";
+    }
     private static BufferedImage crop(BufferedImage src, Crop c) {
         if (c == null) return src;
         if (c.x() < 0 || c.y() < 0 || c.width() < 1 || c.height() < 1 || (long)c.x()+c.width() > src.getWidth() || (long)c.y()+c.height() > src.getHeight())
@@ -292,13 +375,16 @@ public final class SynchronousImageProcessor {
         return src.getSubimage(c.x(), c.y(), c.width(), c.height());
     }
     private static BufferedImage resize(BufferedImage src, int maxW, int maxH) {
-        double scale = Math.min(1d, Math.min((double) maxW/src.getWidth(), (double) maxH/src.getHeight()));
+        double scale = fitScale(src.getWidth(), src.getHeight(), maxW, maxH);
         int w = Math.max(1, (int)Math.round(src.getWidth()*scale)), h = Math.max(1, (int)Math.round(src.getHeight()*scale));
         BufferedImage out = new BufferedImage(w, h, src.getColorModel().hasAlpha() ? BufferedImage.TYPE_INT_ARGB : BufferedImage.TYPE_INT_RGB);
         Graphics2D g = out.createGraphics();
         try { g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC); g.drawImage(src, 0, 0, w, h, null); }
         finally { g.dispose(); }
         return out;
+    }
+    private static double fitScale(int width, int height, int maxWidth, int maxHeight) {
+        return Math.min(1d, Math.min((double) maxWidth / width, (double) maxHeight / height));
     }
     record Encoded(byte[] bytes,String mime) {}
     @FunctionalInterface interface WebpEncoder { byte[] encode(BufferedImage image) throws IOException; }

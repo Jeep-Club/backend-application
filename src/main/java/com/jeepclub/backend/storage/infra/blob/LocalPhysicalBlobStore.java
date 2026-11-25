@@ -2,12 +2,14 @@ package com.jeepclub.backend.storage.infra.blob;
 
 import com.jeepclub.backend.storage.core.repository.PhysicalBlobStore;
 import com.jeepclub.backend.storage.infra.persistence.adapter.BlobCatalogAdapter;
+import com.jeepclub.backend.storage.infra.process.StorageProcessSupervisor;
 import com.jeepclub.backend.platform.storage.properties.StorageProperties;
 import org.springframework.stereotype.Component;
 import java.nio.file.*;
 import java.nio.channels.FileChannel;
 import java.nio.ByteBuffer;
 import java.io.IOException;
+import java.time.Duration;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -16,7 +18,22 @@ import java.util.stream.Collectors;
 @Component
 public class LocalPhysicalBlobStore implements PhysicalBlobStore {
     private final Path root;
-    public LocalPhysicalBlobStore(StorageProperties properties) { root=properties.local().rootDirectory().toAbsolutePath().normalize().resolve("storage-blobs"); }
+    private final StorageProcessSupervisor writer;
+    @org.springframework.beans.factory.annotation.Autowired
+    public LocalPhysicalBlobStore(StorageProperties properties) { this(properties.local().rootDirectory()); }
+    LocalPhysicalBlobStore(Path providerRoot) {
+        this(providerRoot, null);
+    }
+    LocalPhysicalBlobStore(Path providerRoot, java.util.function.Function<Path, ProcessBuilder> command) {
+        root = providerRoot.toAbsolutePath().normalize().resolve("storage-blobs");
+        writer = new StorageProcessSupervisor("Physical blob write", Duration.ofSeconds(4),
+                command == null ? this::physicalCommand : command);
+    }
+    private ProcessBuilder physicalCommand(Path scratch) {
+        var command = StorageProcessSupervisor.javaWorker(scratch, PhysicalBlobWriteWorker.class, 128);
+        command.command().add(root.getParent().toString());
+        return command;
+    }
     private void safe() throws IOException {
         for (Path p=root; p!=null; p=p.getParent()) if (Files.isSymbolicLink(p)) throw new IOException("Symbolic storage path");
         boolean posix=posix();
@@ -37,6 +54,17 @@ public class LocalPhysicalBlobStore implements PhysicalBlobStore {
         return root.resolve(digest+".bin");
     }
     @Override public void putVerified(String digest, byte[] bytes) {
+        putVerified(digest, bytes, () -> {});
+    }
+    void putVerified(String digest, byte[] bytes, Runnable checkDeadline) {
+        if (bytes == null || bytes.length == 0 || bytes.length > PhysicalBlobWriteWorker.MAX_BYTES) {
+            throw new IllegalArgumentException("Invalid blob size");
+        }
+        if (!BlobCatalogAdapter.digest(bytes).equals(digest)) throw new IllegalArgumentException("Digest mismatch");
+        var operation = UUID.randomUUID();
+        writer.run(child -> PhysicalBlobWriteWorker.exchange(child, operation, digest, bytes), checkDeadline);
+    }
+    void putVerifiedDirect(String digest, byte[] bytes, Runnable beforePublish) {
         if (!BlobCatalogAdapter.digest(bytes).equals(digest)) throw new IllegalArgumentException("Digest mismatch");
         try {
             safe(); Path target=path(digest);
@@ -45,8 +73,16 @@ public class LocalPhysicalBlobStore implements PhysicalBlobStore {
             try (var channel=FileChannel.open(stage,Set.of(StandardOpenOption.CREATE_NEW,StandardOpenOption.WRITE,LinkOption.NOFOLLOW_LINKS),fileAttributes())) {
                 ByteBuffer buffer=ByteBuffer.wrap(bytes); while(buffer.hasRemaining()) channel.write(buffer); channel.force(true);
             }
-            Files.move(stage,target,StandardCopyOption.ATOMIC_MOVE);
+            beforePublish.run();
+            // A database disconnect can release the digest lock while the writer is still alive.
+            // Publishing with a hard link creates the canonical name atomically without replacing it.
+            try {
+                Files.createLink(target, stage);
+            } catch (FileAlreadyExistsException concurrentPublisher) {
+                // Verify the winning object before removing this private staging link.
+            }
             readVerified(digest,bytes.length);
+            Files.delete(stage);
         } catch (IOException e) { throw new IllegalStateException("Physical blob write failed; custody preserved for reconciliation",e); }
     }
     @Override public byte[] readVerified(String digest,long size) {

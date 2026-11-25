@@ -25,61 +25,69 @@ class MediaResolutionServiceTest {
     void fixture(String namespace,String checksum) {
         when(catalog.findAsset(1L)).thenReturn(Optional.of(new MediaAsset(1L,MediaOrigin.UPLOAD,MediaContext.IDENTITY_PROFILE,"11",11L,11L,MediaSubjectType.USER,11L,"PHOTO",MediaClassification.CLASSIFIED,MediaPhysicalState.PRESENT,now,now,0L)));
         when(catalog.findReference(2L)).thenReturn(Optional.of(ref));
-        when(catalog.findVariant(1L,"MASTER")).thenReturn(Optional.of(new MediaVariant(3L,1L,"MASTER",MediaVariantRole.MASTER,"LOCAL",namespace,namespace+"/fixture.png","image/png",3,1,1,"SHA-256",checksum,null,null,null,now)));
+        when(catalog.findVariant(1L,"AVATAR_SMALL")).thenReturn(Optional.of(new MediaVariant(3L,1L,"AVATAR_SMALL",MediaVariantRole.DERIVED,"LOCAL",namespace,namespace+"/fixture.png","image/png",3,1,1,"SHA-256",checksum,null,null,null,now)));
         when(governance.allows(1L,2L)).thenReturn(true);
         when(policy.context()).thenReturn(StorageConsumerPolicy.Context.IDENTITY_PROFILE);
-        when(policy.mayRead(11,StoragePolicyViews.reference(ref),true)).thenReturn(true);
+        when(policy.mayRead(11,StoragePolicyViews.reference(ref),false)).thenReturn(true);
     }
     String digest() throws Exception {return HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));}
 
+    @Test void masterIsDeniedBeforeEitherProviderEvenForOwner() throws Exception {
+        fixture("images",digest());
+        when(catalog.findVariant(1L,"MASTER")).thenReturn(Optional.of(new MediaVariant(4L,1L,"MASTER",MediaVariantRole.MASTER,"LOCAL","images","images/fixture.png","image/png",3,1,1,"SHA-256",digest(),null,null,null,now)));
+        assertThatThrownBy(() -> service.resolve(11,1,2,"MASTER")).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> service.resolve(22,1,2,"MASTER")).isInstanceOf(AccessDeniedException.class);
+        verifyNoInteractions(blobs,legacy);
+    }
+
     @Test void legacyUsesItsProviderAfterAuthorizationAndVerifiesIntegrity() throws Exception {
         fixture("images",digest());when(legacy.read("images/fixture.png")).thenReturn(bytes);
-        assertThat(service.resolve(11,1,2,"MASTER").bytes()).containsExactly(bytes);
+        assertThat(service.resolve(11,1,2,"AVATAR_SMALL").bytes()).containsExactly(bytes);
         verifyNoInteractions(blobs);
     }
     @Test void deniedAudienceNeverReadsPhysicalContent() throws Exception {
         fixture("images",digest());
-        assertThatThrownBy(()->service.resolve(22,1,2,"MASTER")).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(()->service.resolve(22,1,2,"AVATAR_SMALL")).isInstanceOf(AccessDeniedException.class);
         verifyNoInteractions(blobs,legacy);
     }
     @Test void endedReferenceIsDeniedBeforeReadingAnyProvider() throws Exception {
         fixture("images",digest());
         when(catalog.findReference(2L)).thenReturn(Optional.of(ref.end(now.plusSeconds(1),11L,"DETACHED")));
-        assertThatThrownBy(() -> service.resolve(11,1,2,"MASTER")).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> service.resolve(11,1,2,"AVATAR_SMALL")).isInstanceOf(AccessDeniedException.class);
         verifyNoInteractions(blobs,legacy);
         verify(policy,never()).mayRead(anyLong(),any(),anyBoolean());
     }
     @Test void missingPolicyNeverReadsEitherProvider() throws Exception {
         fixture("images",digest());
         var resolver = new MediaResolutionService(catalog,blobs,governance,List.of(),legacy);
-        assertThatThrownBy(() -> resolver.resolve(11,1,2,"MASTER")).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> resolver.resolve(11,1,2,"AVATAR_SMALL")).isInstanceOf(AccessDeniedException.class);
         verifyNoInteractions(blobs,legacy);
     }
     @Test void referenceBelongingToAnotherAssetNeverReadsEitherProvider() throws Exception {
         fixture("images",digest());
         var other = new MediaReference(2L,9L,MediaContext.IDENTITY_PROFILE,"11","PHOTO",null,MediaOrigin.UPLOAD,now,11L,null,null,null,0L);
         when(catalog.findReference(2L)).thenReturn(Optional.of(other));
-        assertThatThrownBy(() -> service.resolve(11,1,2,"MASTER")).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> service.resolve(11,1,2,"AVATAR_SMALL")).isInstanceOf(AccessDeniedException.class);
         verifyNoInteractions(blobs,legacy);
     }
     @Test void moderationPreventsLegacyRead() throws Exception {
         fixture("images",digest());when(governance.allows(1L,2L)).thenReturn(false);
-        assertThatThrownBy(()->service.resolve(11,1,2,"MASTER")).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(()->service.resolve(11,1,2,"AVATAR_SMALL")).isInstanceOf(AccessDeniedException.class);
         verifyNoInteractions(blobs,legacy);
     }
     @Test void changedLegacyContentIsNotDelivered() throws Exception {
         fixture("images",digest());when(legacy.read("images/fixture.png")).thenReturn(new byte[]{3,2,1});
-        assertThatThrownBy(()->service.resolve(11,1,2,"MASTER")).isInstanceOf(MediaIntegrityException.class);
+        assertThatThrownBy(()->service.resolve(11,1,2,"AVATAR_SMALL")).isInstanceOf(MediaIntegrityException.class);
     }
     @Test void missingNewBlobDoesNotFallBackToLegacy() throws Exception {
         fixture("storage-blobs",digest());
-        assertThatThrownBy(()->service.resolve(11,1,2,"MASTER")).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(()->service.resolve(11,1,2,"AVATAR_SMALL")).isInstanceOf(AccessDeniedException.class);
         verifyNoInteractions(legacy);
     }
     @Test void realLegacyFileIsReadInPlaceAndChangedOrMissingFileIsNeverDelivered(@org.junit.jupiter.api.io.TempDir java.nio.file.Path root) throws Exception {
         fixture("images",digest());
         String key="images/2026/11/12/550e8400-e29b-41d4-a716-446655440000.png";
-        when(catalog.findVariant(1L,"MASTER")).thenReturn(Optional.of(new MediaVariant(3L,1L,"MASTER",MediaVariantRole.MASTER,
+        when(catalog.findVariant(1L,"AVATAR_SMALL")).thenReturn(Optional.of(new MediaVariant(3L,1L,"AVATAR_SMALL",MediaVariantRole.DERIVED,
             "LOCAL","images",key,"image/png",bytes.length,1,1,"SHA-256",digest(),null,null,null,now)));
         var file=root.resolve(key);java.nio.file.Files.createDirectories(file.getParent());java.nio.file.Files.write(file,bytes);
         var modified=java.nio.file.Files.getLastModifiedTime(file);
@@ -87,14 +95,14 @@ class MediaResolutionServiceTest {
         var provider=new com.jeepclub.backend.storage.infra.blob.LegacyMediaSourceAdapter(
             new com.jeepclub.backend.platform.storage.local.LocalFileStorage(properties,java.time.Clock.systemUTC()));
         var resolver=new MediaResolutionService(catalog,blobs,governance,List.of(policy),provider);
-        assertThat(resolver.resolve(11,1,2,"MASTER").bytes()).containsExactly(bytes);
+        assertThat(resolver.resolve(11,1,2,"AVATAR_SMALL").bytes()).containsExactly(bytes);
         assertThat(java.nio.file.Files.readAllBytes(file)).containsExactly(bytes);
         assertThat(java.nio.file.Files.getLastModifiedTime(file)).isEqualTo(modified);
         verifyNoInteractions(blobs);
         java.nio.file.Files.write(file,new byte[]{3,2,1});
-        assertThatThrownBy(()->resolver.resolve(11,1,2,"MASTER")).isInstanceOf(MediaIntegrityException.class);
+        assertThatThrownBy(()->resolver.resolve(11,1,2,"AVATAR_SMALL")).isInstanceOf(MediaIntegrityException.class);
         java.nio.file.Files.delete(file); // Test fixture only, never application behavior.
-        assertThatThrownBy(()->resolver.resolve(11,1,2,"MASTER"))
+        assertThatThrownBy(()->resolver.resolve(11,1,2,"AVATAR_SMALL"))
             .isInstanceOf(com.jeepclub.backend.shared.storage.exception.StorageObjectNotFoundException.class);
     }
 }

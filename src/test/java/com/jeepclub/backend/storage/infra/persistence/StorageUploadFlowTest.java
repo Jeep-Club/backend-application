@@ -48,6 +48,7 @@ class StorageUploadFlowTest {
         }
         @Bean LegacyFixture legacySource() { return new LegacyFixture(); }
         @Bean SimpleMeterRegistry metrics() { return new SimpleMeterRegistry(); }
+        @Bean java.time.Clock clock() { return java.time.Clock.systemUTC(); }
         @Bean StorageConsumerPolicy policy() { return new StorageConsumerPolicy() {
             public Context context() { return Context.IDENTITY_PROFILE; }
             public boolean mayUpload(long actor,String id) { return Long.toString(actor).equals(id); }
@@ -76,6 +77,455 @@ class StorageUploadFlowTest {
     @Autowired BlobCatalog blobs; @Autowired PhysicalBlobStore physical; @Autowired MediaCatalogRepository catalog;
     @Autowired MediaGovernance governance; @Autowired JdbcTemplate jdbc; @Autowired PlatformTransactionManager manager;
     @Autowired MediaAdministration admin; @Autowired MediaReferenceService references; @Autowired LegacyBackfill legacy; @Autowired BlobInspection inspection;
+    @Test void readFailureBeforeChargeAndStoreReleasesReservation() {
+        long actor=987614L;
+        var warm=admission.reserve(987615L);admission.finish(warm);
+        long globalBefore=jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=0",Long.class);
+        var noStore=org.mockito.Mockito.mock(BlobCatalog.class);
+        var service=new MediaUploadService(catalog,noStore,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,
+            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),admission,java.time.Clock.systemUTC());
+        assertThatThrownBy(() -> service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),() -> {throw new IllegalArgumentException("read fixture");}))
+            .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),() -> {throw new IllegalArgumentException("read retry fixture");}))
+            .isInstanceOf(IllegalArgumentException.class);
+        org.mockito.Mockito.verifyNoInteractions(noStore);
+        assertThat(jdbc.queryForObject("select count(*) from storage_upload_permits where actor_user_id=? and charged=false and completed=true and accounted_bytes=0",Long.class,actor)).isEqualTo(2);
+        assertThat(jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=0",Long.class)).isEqualTo(globalBefore);
+        assertThat(jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=?",Long.class,actor)).isZero();
+        assertThat(jdbc.queryForObject("select charged_uploads from storage_upload_budgets where scope_id=?",Long.class,actor)).isZero();
+        assertThat(jdbc.queryForObject("select in_flight from storage_upload_budgets where scope_id=?",Integer.class,actor)).isZero();
+    }
+    @Test void failureAfterCommittedChargeBeforeStoreReleasesQuotaExactlyOnce() throws Exception {
+        long actor=987716L;var captured=new java.util.concurrent.atomic.AtomicReference<UploadAdmission.Permit>();
+        UploadAdmission failing=new UploadAdmission() {
+            public Permit reserve(long id) { var p=admission.reserve(id);captured.set(p);return p; }
+            public void charge(Permit p,long size) { admission.charge(p,size);throw new IllegalStateException("charge response lost"); }
+            public void recordPlannedBlobs(Permit p,java.util.List<PlannedBlob> b) { admission.recordPlannedBlobs(p,b); }
+            public void finishInCatalogTransaction(Permit p,long id) { admission.finishInCatalogTransaction(p,id); }
+            public void abortBeforeStore(Permit p) { admission.abortBeforeStore(p); }
+            public void finish(Permit p) { admission.finish(p); }
+        };
+        var noStore=org.mockito.Mockito.mock(BlobCatalog.class);
+        var service=new MediaUploadService(catalog,noStore,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,
+            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),failing,java.time.Clock.systemUTC());
+        var warm=admission.reserve(987718L);admission.finish(warm);
+        long before=jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=0",Long.class);
+        assertThatThrownBy(() -> service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),image(414)))
+            .isInstanceOf(IllegalStateException.class).hasMessage("charge response lost");
+        org.mockito.Mockito.verifyNoInteractions(noStore);
+        admission.abortBeforeStore(captured.get());
+        assertThat(jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=0",Long.class)).isEqualTo(before);
+        assertThat(jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=?",Long.class,actor)).isZero();
+        assertThat(jdbc.queryForObject("select charged_uploads from storage_upload_budgets where scope_id=?",Long.class,actor)).isZero();
+        assertThat(jdbc.queryForObject("select in_flight from storage_upload_budgets where scope_id=?",Integer.class,actor)).isZero();
+    }
+    @Test void failureAfterCommittedPlanPreservesIntentButReleasesQuota() throws Exception {
+        long actor=987719L;
+        UploadAdmission failing=new UploadAdmission() {
+            public Permit reserve(long id) { return admission.reserve(id); }
+            public void charge(Permit p,long size) { admission.charge(p,size); }
+            public void recordPlannedBlobs(Permit p,java.util.List<PlannedBlob> b) { admission.recordPlannedBlobs(p,b);throw new IllegalStateException("plan response lost"); }
+            public void finishInCatalogTransaction(Permit p,long id) { admission.finishInCatalogTransaction(p,id); }
+            public void abortBeforeStore(Permit p) { admission.abortBeforeStore(p); }
+            public void finish(Permit p) { admission.finish(p); }
+        };
+        var noStore=org.mockito.Mockito.mock(BlobCatalog.class);
+        var service=new MediaUploadService(catalog,noStore,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,
+            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),failing,java.time.Clock.systemUTC());
+        assertThatThrownBy(() -> service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),image(415)))
+            .isInstanceOf(IllegalStateException.class).hasMessage("plan response lost");
+        org.mockito.Mockito.verifyNoInteractions(noStore);
+        assertThat(jdbc.queryForObject("select count(*) from storage_upload_planned_blobs p join storage_upload_permits u on u.id=p.permit_id where u.actor_user_id=? and u.completed=true and u.accounted_bytes=0",Long.class,actor)).isPositive();
+        assertThat(jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=?",Long.class,actor)).isZero();
+        assertThat(jdbc.queryForObject("select charged_uploads from storage_upload_budgets where scope_id=?",Long.class,actor)).isZero();
+        assertThat(jdbc.queryForObject("select in_flight from storage_upload_budgets where scope_id=?",Integer.class,actor)).isZero();
+    }
+    @Test void retainedLimitIsRecheckedAfterMultipleReservations() {
+        long actor=987717L;
+        var limited=new SqlUploadAdmission(emForQuota(),manager,64L*1024*1024,100L*1024*1024,30,2,1);
+        var first=limited.reserve(actor);var second=limited.reserve(actor);
+        limited.charge(first,1000);
+        assertThatThrownBy(() -> limited.charge(second,1000)).isInstanceOf(UploadAdmission.LimitExceeded.class);
+        limited.abortBeforeStore(second);limited.finish(first);
+        assertThat(jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=?",Long.class,actor)).isEqualTo(1000);
+        assertThat(jdbc.queryForObject("select charged_uploads from storage_upload_budgets where scope_id=?",Long.class,actor)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select in_flight from storage_upload_budgets where scope_id=?",Integer.class,actor)).isZero();
+    }
+    @Test void storePortFailureWithNonWritingMockRetainsChargedQuota() throws Exception {
+        long actor=987611L;
+        var noWrite=org.mockito.Mockito.mock(BlobCatalog.class);
+        org.mockito.Mockito.when(noWrite.store(org.mockito.ArgumentMatchers.any())).thenThrow(new IllegalStateException("before write fixture"));
+        var service=new MediaUploadService(catalog,noWrite,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,
+            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),admission,java.time.Clock.systemUTC());
+        long before=jdbc.queryForObject("select count(*) from storage_blobs",Long.class);
+        assertThatThrownBy(() -> service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),image(411)))
+            .isInstanceOf(IllegalStateException.class).hasMessage("before write fixture");
+        assertThat(jdbc.queryForObject("select count(*) from storage_media_assets where uploaded_by_user_id=?",Long.class,actor)).isZero();
+        assertThat(jdbc.queryForObject("select count(*) from storage_blobs",Long.class)).isEqualTo(before);
+        assertThat(jdbc.queryForObject("select count(*) from storage_upload_permits where actor_user_id=? and charged=true and completed=true and accounted_bytes>0",Long.class,actor)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=?",Long.class,actor)).isPositive();
+        assertThat(jdbc.queryForObject("select in_flight from storage_upload_budgets where scope_id=?",Integer.class,actor)).isZero();
+    }
+    @Test void failureAfterVerifiedBlobStoreRetainsCustodyAndChargedQuota() throws Exception {
+        long actor=987612L;var saved=new java.util.concurrent.atomic.AtomicReference<BlobCatalog.Blob>();
+        BlobCatalog uncertain=new BlobCatalog() {
+            public Blob store(byte[] bytes) {saved.set(blobs.store(bytes));throw new IllegalStateException("after write fixture");}
+            public void bind(Long id,Blob blob) {blobs.bind(id,blob);}
+            public Optional<Blob> findByVariant(Long id) {return blobs.findByVariant(id);}
+            public byte[] read(Blob blob) {return blobs.read(blob);}
+        };
+        var service=new MediaUploadService(catalog,uncertain,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,
+            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),admission,java.time.Clock.systemUTC());
+        assertThatThrownBy(() -> service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),image(412)))
+            .isInstanceOf(IllegalStateException.class).hasMessage("after write fixture");
+        assertThat(saved.get()).isNotNull();assertThat(blobs.read(saved.get())).isNotEmpty();
+        assertThat(jdbc.queryForObject("select count(*) from storage_media_assets where uploaded_by_user_id=?",Long.class,actor)).isZero();
+        assertThat(jdbc.queryForObject("select count(*) from storage_upload_permits where actor_user_id=? and charged=true and completed=true and accounted_bytes>0",Long.class,actor)).isEqualTo(1);
+    }
+    @Test void failedPhysicalStoreLeavesUnreadyCustodyRecordAndChargedQuota() throws Exception {
+        long actor=987613L;
+        var provider=org.mockito.Mockito.mock(PhysicalBlobStore.class);
+        org.mockito.Mockito.doThrow(new IllegalStateException("provider fixture")).when(provider).putVerified(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.any());
+        var adapter=new BlobCatalogAdapter(quotaEntityManager,provider,manager);
+        var service=new MediaUploadService(catalog,adapter,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,
+            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),admission,java.time.Clock.systemUTC());
+        long before=jdbc.queryForObject("select count(*) from storage_blobs where ready=false",Long.class);
+        assertThatThrownBy(() -> service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),image(413)))
+            .isInstanceOf(IllegalStateException.class).hasMessage("provider fixture");
+        assertThat(jdbc.queryForObject("select count(*) from storage_blobs where ready=false",Long.class)).isEqualTo(before+1);
+        assertThat(jdbc.queryForObject("select count(*) from storage_upload_planned_blobs p join storage_upload_permits u on u.id=p.permit_id join storage_blobs b on b.sha256=p.sha256 where u.actor_user_id=? and b.ready=false",Long.class,actor)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select count(*) from storage_media_assets where uploaded_by_user_id=?",Long.class,actor)).isZero();
+        assertThat(jdbc.queryForObject("select count(*) from storage_upload_permits where actor_user_id=? and charged=true and completed=true and accounted_bytes>0",Long.class,actor)).isEqualTo(1);
+    }
+    @Test void finishFailureRollsBackCatalogAndRetryKeepsBlobCustody() throws Exception {
+        long actor=987601L;
+        UploadAdmission failing=new UploadAdmission() {
+            public Permit reserve(long id) { return admission.reserve(id); }
+            public void charge(Permit permit,long size) { admission.charge(permit,size); }
+            public void recordPlannedBlobs(Permit permit,java.util.List<PlannedBlob> blobs) { admission.recordPlannedBlobs(permit,blobs); }
+            public void finishInCatalogTransaction(Permit permit,long mediaId) { admission.finishInCatalogTransaction(permit,mediaId); throw new IllegalStateException("finish fixture"); }
+            public void abortBeforeStore(Permit permit) { admission.abortBeforeStore(permit); }
+            public void finish(Permit permit) { admission.finish(permit); }
+        };
+        var service=new MediaUploadService(catalog,blobs,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,
+            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),failing,java.time.Clock.systemUTC());
+        byte[] bytes=image(17);
+        assertThatThrownBy(() -> service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),bytes)).isInstanceOf(IllegalStateException.class).hasMessage("finish fixture");
+        assertThat(jdbc.queryForObject("select count(*) from storage_media_assets where uploaded_by_user_id=?",Long.class,actor)).isZero();
+        assertThat(jdbc.queryForObject("select count(*) from storage_media_variants v join storage_media_assets a on a.id=v.media_id where a.uploaded_by_user_id=?",Long.class,actor)).isZero();
+        assertThat(jdbc.queryForObject("select count(*) from storage_upload_permits where actor_user_id=? and charged=true and completed=true",Long.class,actor)).isEqualTo(1);
+        long retained=jdbc.queryForObject("select count(*) from storage_blobs where ready=true",Long.class);
+        assertThat(retained).isGreaterThan(0);
+        var master=new MediaImageProcessingAdapter(new SimpleMeterRegistry()).process(bytes,MediaContext.IDENTITY_PROFILE).images().get(0);
+        assertThat(physical.readVerified(BlobCatalogAdapter.digest(master.bytes()),master.bytes().length)).containsExactly(master.bytes());
+        var result=upload.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),bytes);
+        assertThat(result.mediaId()).isPositive();
+        assertThat(jdbc.queryForObject("select count(*) from storage_media_assets where uploaded_by_user_id=?",Long.class,actor)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select count(*) from storage_blobs where ready=true",Long.class)).isEqualTo(retained);
+        assertThat(jdbc.queryForObject("select in_flight from storage_upload_budgets where scope_id=?",Integer.class,actor)).isZero();
+    }
+    @Test void successCommitsPermitWithCatalogWithoutPostCommitFinish() throws Exception {
+        long actor=987602L;
+        var finishCalls=new java.util.concurrent.atomic.AtomicInteger();
+        UploadAdmission observed=new UploadAdmission() {
+            public Permit reserve(long id) { return admission.reserve(id); }
+            public void charge(Permit permit,long size) { admission.charge(permit,size); }
+            public void recordPlannedBlobs(Permit permit,java.util.List<PlannedBlob> blobs) { admission.recordPlannedBlobs(permit,blobs); }
+            public void finishInCatalogTransaction(Permit permit,long mediaId) { admission.finishInCatalogTransaction(permit,mediaId); }
+            public void abortBeforeStore(Permit permit) { admission.abortBeforeStore(permit); }
+            public void finish(Permit permit) { finishCalls.incrementAndGet(); throw new IllegalStateException("post commit fixture"); }
+        };
+        var service=new MediaUploadService(catalog,blobs,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,
+            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),observed,java.time.Clock.systemUTC());
+        var result=service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),image(18));
+        assertThat(catalog.findAsset(result.mediaId())).isPresent();
+        assertThat(catalog.findVariant(result.mediaId(),"MASTER")).isPresent();
+        assertThat(jdbc.queryForObject("select count(*) from storage_upload_permits where actor_user_id=? and charged=true and completed=true",Long.class,actor)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select catalog_asset_id from storage_upload_permits where actor_user_id=?",Long.class,actor)).isEqualTo(result.mediaId());
+        assertThat(finishCalls.get()).isZero();
+    }
+    @Test void compensatedPreWriteRetryReusesOnlyTheSameImmutableIntents() {
+        long actor = 987642L;
+        var identity = new UploadAdmission.RequestIdentity("5".repeat(64), "6".repeat(64), "7".repeat(64));
+        var plan = List.of(new UploadAdmission.PlannedBlob("8".repeat(64), 1024));
+        var first = admission.reserve(actor, identity).permit();
+        admission.charge(first, 1024);
+        admission.recordPlannedBlobs(first, plan);
+        admission.abortBeforeStore(first);
+        var retry = admission.reserve(actor, identity).permit();
+        assertThat(retry.id()).isEqualTo(first.id());
+        assertThat(retry.executionId()).isNotEqualTo(first.executionId());
+        admission.charge(retry, 1024);
+        assertThatThrownBy(() -> admission.recordPlannedBlobs(retry, List.of(new UploadAdmission.PlannedBlob("9".repeat(64), 1024))))
+                .isInstanceOf(IllegalStateException.class);
+        admission.recordPlannedBlobs(retry, plan);
+        assertThat(jdbc.queryForObject("select count(*) from storage_upload_planned_blobs where permit_id=?", Long.class, first.id()))
+                .isEqualTo(1);
+        assertThat(jdbc.queryForObject("select charged_uploads from storage_upload_budgets where scope_id=?", Long.class, actor))
+                .isEqualTo(1);
+        admission.abortBeforeStore(retry);
+    }
+
+    @Test void staleExecutionCannotMutateReadmittedPermit() {
+        long actor = 987641L;
+        var identity = new UploadAdmission.RequestIdentity("d".repeat(64), "e".repeat(64), "f".repeat(64));
+        var stale = admission.reserve(actor, identity).permit();
+        admission.abortBeforeStore(stale);
+        var current = admission.reserve(actor, identity).permit();
+        assertThat(current.id()).isEqualTo(stale.id());
+        assertThat(current.executionId()).isNotEqualTo(stale.executionId());
+        assertThatCode(() -> UUID.fromString(current.executionId())).doesNotThrowAnyException();
+        assertThatThrownBy(() -> admission.charge(stale, 1000)).isInstanceOf(IllegalStateException.class);
+        admission.charge(current, 1000);
+        var planned = List.of(new UploadAdmission.PlannedBlob("1".repeat(64), 1000));
+        assertThatThrownBy(() -> admission.recordPlannedBlobs(stale, planned)).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> new TransactionTemplate(manager).executeWithoutResult(status ->
+                admission.finishInCatalogTransaction(stale, 1L))).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> admission.finish(stale)).isInstanceOf(IllegalStateException.class);
+        admission.abortBeforeStore(stale);
+        assertThat(jdbc.queryForObject("select in_flight from storage_upload_budgets where scope_id=?", Integer.class, actor)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=?", Long.class, actor)).isEqualTo(1000);
+        assertThat(jdbc.queryForObject("select charged_uploads from storage_upload_budgets where scope_id=?", Long.class, actor)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select count(*) from storage_upload_planned_blobs where permit_id=?", Long.class, current.id())).isZero();
+        admission.abortBeforeStore(current);
+    }
+
+    @Test void rolledBackReadmissionCompensationCannotAbortNewExecution() {
+        long actor = 987634L;
+        var identity = new UploadAdmission.RequestIdentity("1".repeat(64), "2".repeat(64), "3".repeat(64));
+        var original = admission.reserve(actor, identity).permit();
+        admission.abortBeforeStore(original);
+        long globalBefore = jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=0", Long.class);
+        var transactions = new java.util.concurrent.atomic.AtomicInteger();
+        var commits = new java.util.concurrent.atomic.AtomicInteger();
+        var survivor = new java.util.concurrent.atomic.AtomicReference<UploadAdmission.Permit>();
+        var uncertain = new PlatformTransactionManager() {
+            public org.springframework.transaction.TransactionStatus getTransaction(org.springframework.transaction.TransactionDefinition definition) {
+                if (transactions.incrementAndGet() == 4) survivor.set(admission.reserve(actor, identity).permit());
+                return manager.getTransaction(definition);
+            }
+            public void commit(org.springframework.transaction.TransactionStatus status) {
+                if (commits.incrementAndGet() == 3) {
+                    manager.rollback(status);
+                    throw new org.springframework.transaction.TransactionSystemException("readmission acknowledgement lost");
+                }
+                manager.commit(status);
+            }
+            public void rollback(org.springframework.transaction.TransactionStatus status) { manager.rollback(status); }
+        };
+        var adapter = new SqlUploadAdmission(emForQuota(), uncertain, 64L * 1024 * 1024, 10L * 1024 * 1024 * 1024, 30, 2, 1000);
+        assertThatThrownBy(() -> adapter.reserve(actor, identity))
+                .isInstanceOf(org.springframework.transaction.TransactionSystemException.class)
+                .hasMessage("readmission acknowledgement lost");
+        assertThat(transactions.get()).isEqualTo(4);
+        assertThat(survivor.get()).isNotNull();
+        assertThat(survivor.get().id()).isEqualTo(original.id());
+        assertThat(survivor.get().executionId()).isNotEqualTo(original.executionId());
+        assertThat(jdbc.queryForObject("select in_flight from storage_upload_budgets where scope_id=?", Integer.class, actor)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=?", Long.class, actor)).isEqualTo(20L * 1024 * 1024);
+        assertThat(jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=0", Long.class)).isEqualTo(globalBefore + 20L * 1024 * 1024);
+        assertThat(jdbc.queryForObject("select charged_uploads from storage_upload_budgets where scope_id=?", Long.class, actor)).isZero();
+        assertThat(jdbc.queryForObject("select count(*) from storage_upload_planned_blobs where permit_id=?", Long.class, original.id())).isZero();
+        admission.charge(survivor.get(), 1000);
+        admission.abortBeforeStore(survivor.get());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    void missingReservationAcknowledgementRecoversOnlyTheConfirmedReservation(boolean committed) {
+        long actor = committed ? 987631L : 987632L;
+        admission.abortBeforeStore(admission.reserve(actor));
+        long usedBefore = jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=0", Long.class);
+        var commits = new java.util.concurrent.atomic.AtomicInteger();
+        var uncertainReservation = new org.springframework.transaction.PlatformTransactionManager() {
+            @Override
+            public org.springframework.transaction.TransactionStatus getTransaction(org.springframework.transaction.TransactionDefinition definition) {
+                return manager.getTransaction(definition);
+            }
+
+            @Override
+            public void commit(org.springframework.transaction.TransactionStatus status) {
+                // Two independent budget checks precede the reservation transaction.
+                if (commits.incrementAndGet() != 3) {
+                    manager.commit(status);
+                    return;
+                }
+                if (committed) manager.commit(status);
+                else manager.rollback(status);
+                throw new org.springframework.transaction.TransactionSystemException("Fixture lost reservation acknowledgement");
+            }
+
+            @Override
+            public void rollback(org.springframework.transaction.TransactionStatus status) {
+                manager.rollback(status);
+            }
+        };
+        var uncertainAdmission = new SqlUploadAdmission(emForQuota(), uncertainReservation,
+                64L * 1024 * 1024, 10L * 1024 * 1024 * 1024, 30, 2, 1000);
+        var identity = new UploadAdmission.RequestIdentity("a".repeat(64), "b".repeat(64), "c".repeat(64));
+        assertThatThrownBy(() -> uncertainAdmission.reserve(actor, identity))
+                .isInstanceOf(org.springframework.transaction.TransactionSystemException.class)
+                .hasMessage("Fixture lost reservation acknowledgement");
+        assertThat(commits.get()).isEqualTo(4);
+        assertThat(jdbc.queryForObject("select count(*) from storage_upload_permits where actor_user_id=? and completed=true and charged=false and accounted_bytes=0",
+                Long.class, actor)).isEqualTo(committed ? 2 : 1);
+        assertThat(jdbc.queryForObject("select in_flight from storage_upload_budgets where scope_id=?", Integer.class, actor)).isZero();
+        assertThat(jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=?", Long.class, actor)).isZero();
+        assertThat(jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=0", Long.class)).isEqualTo(usedBefore);
+        assertThat(jdbc.queryForObject("""
+                select count(*) from storage_upload_planned_blobs p join storage_upload_permits u on u.id=p.permit_id
+                where u.actor_user_id=?
+                """, Long.class, actor)).isZero();
+        var retry = admission.reserve(actor, identity);
+        assertThat(retry.confirmedMediaId()).isNull();
+        assertThat(retry.permit()).isNotNull();
+        assertThat(jdbc.queryForObject("select count(*) from storage_upload_permits where actor_user_id=? and request_key_hash=?",
+                Long.class, actor, identity.keyHash())).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select in_flight from storage_upload_budgets where scope_id=?", Integer.class, actor)).isEqualTo(1);
+        admission.abortBeforeStore(retry.permit());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    void missingCommitAcknowledgementKeepsCustodyWithEitherDatabaseOutcome(boolean committed) throws Exception {
+        long actor = committed ? 987629L : 987630L;
+        var uncertainCommit = new org.springframework.transaction.PlatformTransactionManager() {
+            @Override
+            public org.springframework.transaction.TransactionStatus getTransaction(org.springframework.transaction.TransactionDefinition definition) {
+                return manager.getTransaction(definition);
+            }
+
+            @Override
+            public void commit(org.springframework.transaction.TransactionStatus status) {
+                if (committed) {
+                    manager.commit(status);
+                } else {
+                    manager.rollback(status);
+                }
+                throw new org.springframework.transaction.TransactionSystemException("Fixture lost commit acknowledgement");
+            }
+
+            @Override
+            public void rollback(org.springframework.transaction.TransactionStatus status) {
+                manager.rollback(status);
+            }
+        };
+        var service = new MediaUploadService(catalog, blobs, new MediaImageProcessingAdapter(new SimpleMeterRegistry()),
+                governance, List.of(new Configuration().policy()), uncertainCommit, new SimpleMeterRegistry(),
+                admission, java.time.Clock.systemUTC());
+        byte[] bytes = image(180);
+        var options = MediaImageProcessor.Options.defaults();
+        String key = "missing-catalog-ack";
+        assertThatThrownBy(() -> service.upload(actor, MediaContext.IDENTITY_PROFILE, Long.toString(actor), () -> bytes, options, key))
+                .isInstanceOf(IllegalStateException.class).hasMessage("Upload transaction outcome unavailable");
+
+        Long assetId = jdbc.queryForObject("select catalog_asset_id from storage_upload_permits where actor_user_id=? and completed=true and charged=true",
+                Long.class, actor);
+        if (committed) {
+            assertThat(assetId).isNotNull();
+            assertThat(catalog.findAsset(assetId)).isPresent();
+            assertThat(catalog.findVariant(assetId, "MASTER")).isPresent();
+            assertThat(catalog.findVariant(assetId, "AVATAR_SMALL")).isPresent();
+            assertThat(catalog.findVariant(assetId, "PROFILE_PREVIEW")).isPresent();
+            assertThat(jdbc.queryForObject("select count(*) from storage_media_references where media_id=?", Long.class, assetId)).isZero();
+            assertThatThrownBy(() -> resolution.resolve(actor, assetId, Long.MAX_VALUE, "AVATAR_SMALL"))
+                    .isInstanceOf(AccessDeniedException.class);
+            assertThat(upload.upload(actor, MediaContext.IDENTITY_PROFILE, Long.toString(actor), () -> bytes, options, key).mediaId())
+                    .isEqualTo(assetId);
+        } else {
+            assertThatThrownBy(() -> upload.upload(actor, MediaContext.IDENTITY_PROFILE, Long.toString(actor), () -> bytes, options, key))
+                    .isInstanceOf(IllegalStateException.class).hasMessage("Upload transaction outcome unavailable");
+            assertThat(assetId).isNull();
+            assertThat(jdbc.queryForObject("select count(*) from storage_media_assets where uploaded_by_user_id=?", Long.class, actor)).isZero();
+        }
+        assertThat(jdbc.queryForObject("""
+                select count(*) from storage_upload_planned_blobs p
+                join storage_upload_permits u on u.id=p.permit_id
+                join storage_blobs b on b.sha256=p.sha256
+                where u.actor_user_id=? and b.ready=true and b.size_bytes=p.size_bytes
+                """, Long.class, actor)).isEqualTo(3);
+        assertThat(jdbc.queryForObject("select in_flight from storage_upload_budgets where scope_id=?", Integer.class, actor)).isZero();
+        assertThat(jdbc.queryForObject("select charged_uploads from storage_upload_budgets where scope_id=?", Long.class, actor)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select used_bytes from storage_upload_budgets where scope_id=?", Long.class, actor))
+                .isEqualTo(jdbc.queryForObject("select accounted_bytes from storage_upload_permits where actor_user_id=?", Long.class, actor));
+    }
+
+    @Test void concurrentIdenticalKeyStartsOnlyOneCodecAndReturnsTheConfirmedAsset() throws Exception {
+        long actor = 987633L;
+        byte[] bytes = image(181);
+        var options = MediaImageProcessor.Options.defaults();
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        var processor = new MediaImageProcessingAdapter(new SimpleMeterRegistry());
+        MediaImageProcessor blocked = (input, context) -> {
+            calls.incrementAndGet();
+            entered.countDown();
+            try {
+                if (!release.await(8, java.util.concurrent.TimeUnit.SECONDS)) throw new IllegalStateException("Fixture codec timeout");
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(interrupted);
+            }
+            return processor.process(input, context);
+        };
+        var service = new MediaUploadService(catalog, blobs, blocked, governance, List.of(new Configuration().policy()),
+                manager, new SimpleMeterRegistry(), admission, java.time.Clock.systemUTC());
+        var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            var original = executor.submit(() -> service.upload(actor, MediaContext.IDENTITY_PROFILE, Long.toString(actor),
+                    () -> bytes, options, "concurrent-key"));
+            assertThat(entered.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            assertThatThrownBy(() -> service.upload(actor, MediaContext.IDENTITY_PROFILE, Long.toString(actor),
+                    () -> bytes, options, "concurrent-key"))
+                    .isInstanceOf(IllegalStateException.class).hasMessage("Upload transaction outcome unavailable");
+            release.countDown();
+            var result = original.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            assertThat(service.upload(actor, MediaContext.IDENTITY_PROFILE, Long.toString(actor),
+                    () -> bytes, options, "concurrent-key")).isEqualTo(result);
+            assertThat(calls.get()).isEqualTo(1);
+            assertThat(jdbc.queryForObject("select count(*) from storage_upload_permits where actor_user_id=?", Long.class, actor)).isEqualTo(1);
+            assertThat(jdbc.queryForObject("select count(*) from storage_media_assets where uploaded_by_user_id=?", Long.class, actor)).isEqualTo(1);
+            assertThat(jdbc.queryForObject("select charged_uploads from storage_upload_budgets where scope_id=?", Long.class, actor)).isEqualTo(1);
+        } finally {
+            release.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test void concurrentUploadsCompleteTheirOwnPermitsWhileSharingBytes() throws Exception {
+        byte[] bytes=image(19);
+        var start=new CountDownLatch(1);var pool=Executors.newFixedThreadPool(2);
+        try {
+            var first=pool.submit(() -> { start.await(); return upload.upload(987603,MediaContext.IDENTITY_PROFILE,"987603",bytes); });
+            var second=pool.submit(() -> { start.await(); return upload.upload(987604,MediaContext.IDENTITY_PROFILE,"987604",bytes); });
+            start.countDown();var a=first.get(30,TimeUnit.SECONDS);var b=second.get(30,TimeUnit.SECONDS);
+            assertThat(a.mediaId()).isNotEqualTo(b.mediaId());
+            var av=catalog.findVariant(a.mediaId(),"MASTER").orElseThrow();var bv=catalog.findVariant(b.mediaId(),"MASTER").orElseThrow();
+            assertThat(blobs.findByVariant(av.variantId())).isEqualTo(blobs.findByVariant(bv.variantId()));
+            assertThat(jdbc.queryForObject("select count(*) from storage_upload_permits where actor_user_id in (?,?) and charged=true and completed=true",Long.class,987603L,987604L)).isEqualTo(2);
+        } finally {pool.shutdownNow();}
+    }
+    @Test void failedCleanupPreservesOriginalErrorAndOpenPermitForRecovery() {
+        long actor=987605L;var permitRef=new java.util.concurrent.atomic.AtomicReference<UploadAdmission.Permit>();
+        UploadAdmission failing=new UploadAdmission() {
+            public Permit reserve(long id) { var permit=admission.reserve(id);permitRef.set(permit);return permit; }
+            public void charge(Permit permit,long size) { admission.charge(permit,size); }
+            public void recordPlannedBlobs(Permit permit,java.util.List<PlannedBlob> blobs) { admission.recordPlannedBlobs(permit,blobs); }
+            public void finishInCatalogTransaction(Permit permit,long mediaId) { admission.finishInCatalogTransaction(permit,mediaId); }
+            public void abortBeforeStore(Permit permit) { throw new IllegalStateException("cleanup fixture"); }
+            public void finish(Permit permit) { throw new IllegalStateException("cleanup fixture"); }
+        };
+        var service=new MediaUploadService(catalog,blobs,new MediaImageProcessingAdapter(new SimpleMeterRegistry()),governance,
+            List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),failing,java.time.Clock.systemUTC());
+        try {
+            assertThatThrownBy(() -> service.upload(actor,MediaContext.IDENTITY_PROFILE,Long.toString(actor),() -> {throw new IllegalArgumentException("read fixture");}))
+                .isInstanceOf(IllegalArgumentException.class).hasMessage("read fixture")
+                .satisfies(error -> assertThat(error.getSuppressed()).hasSize(1));
+            assertThat(jdbc.queryForObject("select count(*) from storage_media_assets where uploaded_by_user_id=?",Long.class,actor)).isZero();
+            assertThat(jdbc.queryForObject("select count(*) from storage_upload_permits where actor_user_id=? and charged=false and completed=false",Long.class,actor)).isEqualTo(1);
+        } finally { if(permitRef.get()!=null) admission.finish(permitRef.get()); }
+    }
     @Test void reconciliationReportsMissingPhysicalBlob() {
         var blob=blobs.store("missing-fixture-reconciliation".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         var missing=org.mockito.Mockito.mock(PhysicalBlobStore.class);
@@ -216,9 +666,9 @@ class StorageUploadFlowTest {
         long first=positionedAttach(206,a.mediaId(),0),second=positionedAttach(207,b.mediaId(),2);
         assertThat(blobs.findByVariant(catalog.findVariant(a.mediaId(),"MASTER").orElseThrow().variantId()))
             .isEqualTo(blobs.findByVariant(catalog.findVariant(b.mediaId(),"MASTER").orElseThrow().variantId()));
-        assertThat(resolution.resolve(206,a.mediaId(),first,"MASTER").bytes()).isNotEmpty();
-        assertThat(resolution.resolve(207,b.mediaId(),second,"MASTER").bytes()).isNotEmpty();
-        assertThatThrownBy(()->resolution.resolve(207,a.mediaId(),first,"MASTER")).isInstanceOf(AccessDeniedException.class);
+        assertThat(resolution.resolve(206,a.mediaId(),first,"AVATAR_SMALL").bytes()).isNotEmpty();
+        assertThat(resolution.resolve(207,b.mediaId(),second,"AVATAR_SMALL").bytes()).isNotEmpty();
+        assertThatThrownBy(()->resolution.resolve(207,a.mediaId(),first,"AVATAR_SMALL")).isInstanceOf(AccessDeniedException.class);
         assertThatThrownBy(()->positionedAttach(207,a.mediaId(),2)).isInstanceOf(AccessDeniedException.class);
     }
     void detach(long actor,long media,long ref) {
@@ -239,12 +689,12 @@ class StorageUploadFlowTest {
         assertThat(a.mediaId()).isNotEqualTo(b.mediaId());
         var va=catalog.findVariant(a.mediaId(),"MASTER").orElseThrow();var vb=catalog.findVariant(b.mediaId(),"MASTER").orElseThrow();
         assertThat(blobs.findByVariant(va.variantId())).isEqualTo(blobs.findByVariant(vb.variantId()));
-        assertThat(resolution.resolve(11,a.mediaId(),a.referenceId(),"MASTER").bytes()).isNotEmpty();
-        assertThatThrownBy(() -> resolution.resolve(22,a.mediaId(),a.referenceId(),"MASTER")).isInstanceOf(AccessDeniedException.class);
-        assertThatThrownBy(() -> resolution.resolve(11,a.mediaId(),b.referenceId(),"MASTER")).isInstanceOf(AccessDeniedException.class);
+        assertThat(resolution.resolve(11,a.mediaId(),a.referenceId(),"AVATAR_SMALL").bytes()).isNotEmpty();
+        assertThatThrownBy(() -> resolution.resolve(22,a.mediaId(),a.referenceId(),"AVATAR_SMALL")).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> resolution.resolve(11,a.mediaId(),b.referenceId(),"AVATAR_SMALL")).isInstanceOf(AccessDeniedException.class);
         governance.moderate(new ModerationDecision(a.mediaId(),null,ModerationDecision.State.BLOCKED,ModerationDecision.Reason.PRIVACY,"private note",11,Instant.now()));
-        assertThatThrownBy(() -> resolution.resolve(11,a.mediaId(),a.referenceId(),"MASTER")).isInstanceOf(AccessDeniedException.class);
-        assertThat(resolution.resolve(22,b.mediaId(),b.referenceId(),"MASTER").bytes()).isNotEmpty();
+        assertThatThrownBy(() -> resolution.resolve(11,a.mediaId(),a.referenceId(),"AVATAR_SMALL")).isInstanceOf(AccessDeniedException.class);
+        assertThat(resolution.resolve(22,b.mediaId(),b.referenceId(),"AVATAR_SMALL").bytes()).isNotEmpty();
     }
     @Test void logicalDiscardOfOneAssetDoesNotRemoveSharedBlobOrAffectOtherAsset() throws Exception {
         byte[] bytes=image(620);var a=attachedUpload(620,MediaContext.IDENTITY_PROFILE,"620",bytes);
@@ -255,17 +705,19 @@ class StorageUploadFlowTest {
         assertThat(blobs.findByVariant(vb.variantId())).contains(shared);
         detach(620,a.mediaId(),a.referenceId());
         admin.discard(a.mediaId(),new MediaAuditContext(MediaActorKind.USER,620L,Instant.now(),null));
-        assertThatThrownBy(() -> resolution.resolve(620,a.mediaId(),a.referenceId(),"MASTER")).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> resolution.resolve(620,a.mediaId(),a.referenceId(),"AVATAR_SMALL")).isInstanceOf(AccessDeniedException.class);
         assertThat(blobs.read(shared)).isNotEmpty();
-        assertThat(resolution.resolve(621,b.mediaId(),b.referenceId(),"MASTER").bytes()).isNotEmpty();
+        assertThat(resolution.resolve(621,b.mediaId(),b.referenceId(),"AVATAR_SMALL").bytes()).isNotEmpty();
     }
     @Test void unattachedUploadHasNoActiveReferenceAndRetentionStartsAtUpload() throws Exception {
         var a=upload.upload(101,MediaContext.IDENTITY_PROFILE,"101",image(101));
         assertThat(a.referenceId()).isNull();
         assertThat(catalog.findReferences(a.mediaId(),0,100)).isEmpty();
-        assertThatThrownBy(() -> resolution.resolve(101,a.mediaId(),Long.MAX_VALUE,"MASTER"))
+        assertThatThrownBy(() -> resolution.resolve(101,a.mediaId(),Long.MAX_VALUE,"AVATAR_SMALL"))
             .isInstanceOf(AccessDeniedException.class);
         var master=catalog.findVariant(a.mediaId(),"MASTER").orElseThrow();
+        assertThat(master.processingVersion()).isEqualTo("V1");
+        assertThat(catalog.findVariant(a.mediaId(),"AVATAR_SMALL").orElseThrow().processingVersion()).isEqualTo("V2");
         var stored=blobs.findByVariant(master.variantId()).orElseThrow();
         assertThat(blobs.read(stored)).isNotEmpty();
         var asset=catalog.findAsset(a.mediaId()).orElseThrow();
@@ -330,7 +782,7 @@ class StorageUploadFlowTest {
         byte[] bytes=image(77);
         var image=new MediaImageProcessor.Representation("MASTER",bytes,"image/png",80,60);
         MediaImageProcessor broken=(input,context) -> new MediaImageProcessor.Processed(BlobCatalogAdapter.digest(input),List.of(image,image));
-        var service=new MediaUploadService(catalog,blobs,broken,governance,List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),admission);
+        var service=new MediaUploadService(catalog,blobs,broken,governance,List.of(new Configuration().policy()),manager,new SimpleMeterRegistry(),admission,java.time.Clock.systemUTC());
         assertThatThrownBy(() -> service.upload(77,MediaContext.IDENTITY_PROFILE,"77",bytes)).isInstanceOf(RuntimeException.class);
         assertThat(jdbc.queryForObject("select count(*) from storage_media_assets where owner_user_id=77",Long.class)).isZero();
         var hash=BlobCatalogAdapter.digest(bytes);
@@ -348,7 +800,7 @@ class StorageUploadFlowTest {
         governance.legalHold(a.mediaId(),true,"Retention fixture obligation",audit);
         assertThat(admin.review(a.mediaId(),audit).decision()).isEqualTo("LEGAL_HOLD");
         admin.discard(a.mediaId(),audit);
-        assertThatThrownBy(() -> resolution.resolve(55,a.mediaId(),a.referenceId(),"MASTER")).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> resolution.resolve(55,a.mediaId(),a.referenceId(),"AVATAR_SMALL")).isInstanceOf(AccessDeniedException.class);
         assertThatThrownBy(() -> attach(55,a.mediaId(),MediaContext.IDENTITY_PROFILE,"55","PHOTO")).isInstanceOf(IllegalArgumentException.class);
     }
     @Test void backfillIsIdempotentUnknownHeldAndRollbackPreservesBytes() {
@@ -388,18 +840,11 @@ class StorageUploadFlowTest {
         var now=Instant.now();
         var ref=catalog.recordReference(new MediaReference(null,result.mediaId(),MediaContext.IDENTITY_PROFILE,"111","PHOTO",null,MediaOrigin.LEGACY_IMPORT,now,null,null,null,null,null),
             new MediaAuditContext(MediaActorKind.SYSTEM,null,now,null));
-        assertThat(resolution.resolve(111,result.mediaId(),ref.referenceId(),"MASTER").bytes()).containsExactly(legacySource.read(key));
-        assertThatThrownBy(()->resolution.resolve(112,result.mediaId(),ref.referenceId(),"MASTER")).isInstanceOf(AccessDeniedException.class);
-        assertThat(legacy.apply(key,new MediaAuditContext(MediaActorKind.SYSTEM,null,Instant.now(),null)).mediaId()).isEqualTo(result.mediaId());
         int reads=legacySource.reads.get();
-        var noPolicy=new MediaResolutionService(catalog,blobs,governance,List.of(),legacySource);
-        assertThatThrownBy(()->noPolicy.resolve(111,result.mediaId(),ref.referenceId(),"MASTER")).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> resolution.resolve(111,result.mediaId(),ref.referenceId(),"MASTER")).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> resolution.resolve(112,result.mediaId(),ref.referenceId(),"MASTER")).isInstanceOf(AccessDeniedException.class);
         assertThat(legacySource.reads.get()).isEqualTo(reads);
-        legacySource.changes.put(key,image(112));
-        assertThatThrownBy(()->resolution.resolve(111,result.mediaId(),ref.referenceId(),"MASTER")).isInstanceOf(MediaIntegrityException.class);
-        legacySource.missing.add(key);
-        assertThatThrownBy(()->resolution.resolve(111,result.mediaId(),ref.referenceId(),"MASTER"))
-            .isInstanceOf(com.jeepclub.backend.shared.storage.exception.StorageObjectNotFoundException.class);
+        assertThat(legacy.apply(key,new MediaAuditContext(MediaActorKind.SYSTEM,null,Instant.now(),null)).mediaId()).isEqualTo(result.mediaId());
     }
     @Test void unknownOrCorruptLegacyContentCannotBecomePresent() {
         var result=legacy.apply("images/not-an-image.jpg",systemAudit());
@@ -423,6 +868,7 @@ class StorageUploadFlowTest {
         var resolver=new MediaResolutionService(catalog,blobs,governance,List.of(new Configuration().policy()),source);
         var controller=new com.jeepclub.backend.storage.api.http.StorageMediaController(upload,resolver,references);
         var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller)
+            .setControllerAdvice(new com.jeepclub.backend.storage.api.http.StorageMediaErrors(new com.jeepclub.backend.platform.web.exception.ApiProblemFactory(new org.springframework.context.support.StaticMessageSource(),java.time.Clock.systemUTC())))
             .setCustomArgumentResolvers(new org.springframework.web.method.support.HandlerMethodArgumentResolver() {
                 public boolean supportsParameter(org.springframework.core.MethodParameter p) {return p.getParameterType()==com.jeepclub.backend.platform.security.principal.UserPrincipal.class;}
                 public Object resolveArgument(org.springframework.core.MethodParameter p,org.springframework.web.method.support.ModelAndViewContainer m,
@@ -431,8 +877,7 @@ class StorageUploadFlowTest {
                 }
             }).build();
         mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/storage/media/"+id+"/references/"+ref.referenceId()+"/variants/MASTER"))
-            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
-            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content().bytes(bytes));
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isNotFound());
         assertThat(Files.readAllBytes(file)).containsExactly(bytes);assertThat(Files.getLastModifiedTime(file)).isEqualTo(modified);
         assertThat(importer.apply(key,systemAudit()).mediaId()).isEqualTo(id);
     }
@@ -491,21 +936,21 @@ class StorageUploadFlowTest {
         var a=attachedUpload(66,MediaContext.IDENTITY_PROFILE,"66",image(6));
         long second=attach(66,a.mediaId(),MediaContext.IDENTITY_PROFILE,"66","GALLERY");
         governance.moderate(new ModerationDecision(a.mediaId(),a.referenceId(),ModerationDecision.State.HIDDEN,ModerationDecision.Reason.PRIVACY,"internal",66,Instant.now()));
-        assertThatThrownBy(() -> resolution.resolve(66,a.mediaId(),a.referenceId(),"MASTER")).isInstanceOf(AccessDeniedException.class);
-        assertThat(resolution.resolve(66,a.mediaId(),second,"MASTER").bytes()).isNotEmpty();
+        assertThatThrownBy(() -> resolution.resolve(66,a.mediaId(),a.referenceId(),"AVATAR_SMALL")).isInstanceOf(AccessDeniedException.class);
+        assertThat(resolution.resolve(66,a.mediaId(),second,"AVATAR_SMALL").bytes()).isNotEmpty();
         governance.moderate(new ModerationDecision(a.mediaId(),a.referenceId(),ModerationDecision.State.VISIBLE,ModerationDecision.Reason.RESTORED,null,66,Instant.now()));
-        assertThat(resolution.resolve(66,a.mediaId(),a.referenceId(),"MASTER").bytes()).isNotEmpty();
+        assertThat(resolution.resolve(66,a.mediaId(),a.referenceId(),"AVATAR_SMALL").bytes()).isNotEmpty();
     }
     @Test void contextualBlockSurvivesReassociationUntilAuthorizedRestoration() throws Exception {
         var a=attachedUpload(91,MediaContext.IDENTITY_PROFILE,"91",image(91));
         governance.moderate(new ModerationDecision(a.mediaId(),a.referenceId(),ModerationDecision.State.BLOCKED,ModerationDecision.Reason.PRIVACY,"scope",91,Instant.now()));
         detach(91,a.mediaId(),a.referenceId());
         long second=attach(91,a.mediaId(),MediaContext.IDENTITY_PROFILE,"91","PHOTO");
-        assertThatThrownBy(() -> resolution.resolve(91,a.mediaId(),second,"MASTER")).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> resolution.resolve(91,a.mediaId(),second,"AVATAR_SMALL")).isInstanceOf(AccessDeniedException.class);
         long separate=attach(91,a.mediaId(),MediaContext.IDENTITY_PROFILE,"91","GALLERY");
-        assertThat(resolution.resolve(91,a.mediaId(),separate,"MASTER").bytes()).isNotEmpty();
+        assertThat(resolution.resolve(91,a.mediaId(),separate,"AVATAR_SMALL").bytes()).isNotEmpty();
         governance.moderate(new ModerationDecision(a.mediaId(),a.referenceId(),ModerationDecision.State.VISIBLE,ModerationDecision.Reason.RESTORED,null,91,Instant.now()));
-        assertThat(resolution.resolve(91,a.mediaId(),second,"MASTER").bytes()).isNotEmpty();
+        assertThat(resolution.resolve(91,a.mediaId(),second,"AVATAR_SMALL").bytes()).isNotEmpty();
     }
     @Test void moderationCannotResurrectDiscardedMedia() throws Exception {
         var a=attachedUpload(92,MediaContext.IDENTITY_PROFILE,"92",image(92));detach(92,a.mediaId(),a.referenceId());
@@ -513,7 +958,7 @@ class StorageUploadFlowTest {
         for(var state:List.of(ModerationDecision.State.VISIBLE,ModerationDecision.State.HIDDEN,ModerationDecision.State.BLOCKED)) {
             assertThatThrownBy(() -> governance.moderate(new ModerationDecision(a.mediaId(),null,state,state==ModerationDecision.State.VISIBLE?ModerationDecision.Reason.RESTORED:ModerationDecision.Reason.PRIVACY,null,92,Instant.now()))).isInstanceOf(IllegalArgumentException.class);
         }
-        assertThatThrownBy(() -> resolution.resolve(92,a.mediaId(),a.referenceId(),"MASTER")).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> resolution.resolve(92,a.mediaId(),a.referenceId(),"AVATAR_SMALL")).isInstanceOf(AccessDeniedException.class);
         assertThatThrownBy(() -> attach(92,a.mediaId(),MediaContext.IDENTITY_PROFILE,"92","PHOTO")).isInstanceOf(IllegalArgumentException.class);
     }
     @Test void backfillReappliesSameAssetAfterRollbackAndRejectsChangedSource() throws Exception {
@@ -539,6 +984,15 @@ class StorageUploadFlowTest {
         governance.legalHold(a.mediaId(),false,"Private release justification",audit);
         assertThat(jdbc.queryForObject("select internal_note from storage_governance_events where media_id=? and operation='LEGAL_HOLD_RELEASED'",String.class,a.mediaId())).isEqualTo("Private release justification");
         assertThat(admin.events(a.mediaId(),0,100).toString()).doesNotContain("Private release justification");
+    }
+    @Test void missingUserBudgetWithHistoricalPermitsFailsClosed() {
+        long actor=987781L;
+        var prior=admission.reserve(actor);admission.charge(prior,1000);admission.finish(prior);
+        assertThat(jdbc.update("delete from storage_upload_budgets where scope_id=?",actor)).isEqualTo(1);
+        assertThatThrownBy(() -> admission.reserve(actor)).isInstanceOf(IllegalStateException.class)
+            .hasMessage("Upload budget requires reconciliation");
+        assertThat(jdbc.queryForObject("select count(*) from storage_upload_budgets where scope_id=?",Long.class,actor)).isZero();
+        assertThat(jdbc.queryForObject("select accounted_bytes from storage_upload_permits where id=?",Long.class,prior.id())).isEqualTo(1000);
     }
     @Test void uploadAdmissionSerializesPerUserConcurrencyAndRetainsCustodyCharges() {
         var a=admission.reserve(94);var b=admission.reserve(94);
