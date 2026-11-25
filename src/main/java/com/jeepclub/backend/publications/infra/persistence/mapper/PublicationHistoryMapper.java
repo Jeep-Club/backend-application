@@ -8,7 +8,13 @@ import java.time.Instant;
 public class PublicationHistoryMapper {
     public PublicationHistoryEntity snapshot(PublicationEntity source, Long deletedByUserId, Instant deletedAt) {
         PublicationHistoryEntity history;
-        if (source instanceof NoticeEntity) history = new NoticeHistoryEntity();
+        if (source instanceof NoticeEntity notice) {
+            var noticeHistory = new NoticeHistoryEntity();
+            noticeHistory.setPriority(notice.getPriority());
+            noticeHistory.setValidFrom(notice.getValidFrom());
+            noticeHistory.setValidUntil(notice.getValidUntil());
+            history = noticeHistory;
+        }
         else if (source instanceof EventEntity event) {
             var eventHistory = new EventHistoryEntity();
             eventHistory.setStartsAt(event.getStartsAt());

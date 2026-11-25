@@ -1,5 +1,6 @@
 package com.jeepclub.backend.publications.core.domain.model;
 
+import com.jeepclub.backend.publications.core.domain.enums.NoticePriority;
 import com.jeepclub.backend.publications.core.domain.enums.PublicationStatus;
 import com.jeepclub.backend.publications.core.domain.enums.ServicePublicationRequestStatus;
 import org.junit.jupiter.api.Test;
@@ -140,6 +141,44 @@ class PublicationDomainTest {
         assertThatThrownBy(() -> event.setEditorialDetails("x", 0)).isInstanceOf(IllegalArgumentException.class);
         assertThat(event.getLocation()).isEqualTo("Meeting point");
         assertThat(event.getParticipantLimit()).isEqualTo(25);
+    }
+
+    @Test void noticePriorityAndTemporalValidityWindowEnforceInclusiveBoundsWithoutChangingEditorialStatus() {
+        var defaultNotice = Notice.create(7L, "Default", "Body", gallery(1), NOW);
+        assertThat(defaultNotice.getPriority()).isEqualTo(NoticePriority.NORMAL);
+        assertThat(defaultNotice.getValidFrom()).isNull();
+        assertThat(defaultNotice.getValidUntil()).isNull();
+        assertThat(defaultNotice.isTemporallyVisibleAt(NOW.minusSeconds(1000))).isTrue();
+        assertThat(defaultNotice.isExpiredAt(NOW.plusSeconds(1000))).isFalse();
+
+        Instant start = NOW.plusSeconds(60);
+        Instant end = NOW.plusSeconds(120);
+        assertThatThrownBy(() -> Notice.create(7L, "Reversed", "Body", gallery(1), NoticePriority.HIGH, end, start, NOW))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        var scheduled = Notice.create(7L, "Urgent", "Body", gallery(1), NoticePriority.URGENT, start, end, NOW);
+        scheduled.publish(NOW.plusSeconds(1));
+        assertThat(scheduled.getPriority()).isEqualTo(NoticePriority.URGENT);
+        assertThat(scheduled.isTemporallyVisibleAt(start.minusNanos(1))).isFalse();
+        assertThat(scheduled.isTemporallyVisibleAt(start)).isTrue();
+        assertThat(scheduled.isTemporallyVisibleAt(end)).isTrue();
+        assertThat(scheduled.isTemporallyVisibleAt(end.plusNanos(1))).isFalse();
+        assertThat(scheduled.isExpiredAt(end)).isFalse();
+        assertThat(scheduled.isExpiredAt(end.plusNanos(1))).isTrue();
+        assertThat(scheduled.getStatus()).isEqualTo(PublicationStatus.PUBLISHED);
+
+        scheduled.updatePriorityAndValidity(NoticePriority.LOW, null, end.plusSeconds(60), NOW.plusSeconds(2));
+        assertThat(scheduled.getPriority()).isEqualTo(NoticePriority.LOW);
+        assertThat(scheduled.getValidFrom()).isNull();
+        assertThat(scheduled.getValidUntil()).isEqualTo(end.plusSeconds(60));
+        assertThatThrownBy(() -> scheduled.updatePriorityAndValidity(null, null, null, NOW.plusSeconds(3)))
+                .isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> scheduled.updatePriorityAndValidity(NoticePriority.NORMAL, end.plusSeconds(10), end, NOW.plusSeconds(3)))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        scheduled.archive(NOW.plusSeconds(10));
+        assertThatThrownBy(() -> scheduled.updatePriorityAndValidity(NoticePriority.HIGH, null, null, NOW.plusSeconds(11)))
+                .isInstanceOf(IllegalStateException.class);
     }
 
     private static List<PublicationImage> gallery(int count) {

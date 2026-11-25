@@ -1,5 +1,6 @@
 package com.jeepclub.backend.publications.infra.persistence.adapter;
 
+import com.jeepclub.backend.publications.core.domain.enums.NoticePriority;
 import com.jeepclub.backend.publications.core.domain.enums.PublicationStatus;
 import com.jeepclub.backend.publications.core.domain.enums.ServicePublicationRequestStatus;
 import com.jeepclub.backend.publications.core.application.service.AdminServicePublicationRequestService;
@@ -86,6 +87,136 @@ class PublicationPersistenceTest {
                         org.springframework.data.domain.Sort.Order.desc("id"))));
         assertThat(page.getTotalElements()).isEqualTo(2);
         assertThat(page.getContent()).singleElement().satisfies(c -> assertThat(c.getImages()).hasSize(1));
+    }
+
+    @Test void administrativeNoticeAndServiceQueriesFilterCombineAndIsolateSubtypesInSql() {
+        Instant base = Instant.parse("2027-01-15T12:00:00Z");
+        var draftNotice = repository.save(Notice.create(7L, "Aviso %_! Rascunho", "Conteúdo interno", gallery(), base));
+        var publishedNotice = Notice.create(7L, "Aviso Publicado", "Trilha especial", gallery(), base.plusSeconds(10));
+        publishedNotice.publish(base.plusSeconds(20));
+        publishedNotice = (Notice) repository.save(publishedNotice);
+        var archivedNotice = Notice.create(8L, "Aviso Arquivado", "Trilha antiga", gallery(), base.plusSeconds(30));
+        archivedNotice.publish(base.plusSeconds(40));
+        archivedNotice.archive(base.plusSeconds(50));
+        archivedNotice = (Notice) repository.save(archivedNotice);
+
+        var deletedNotice = (Notice) repository.save(Notice.create(7L, "Aviso Removido", "Trilha removida", gallery(), base.plusSeconds(60)));
+        repository.delete(deletedNotice.getId(), 99L, base.plusSeconds(70));
+
+        repository.save(Event.create(7L, "Evento Trilha", "Não é aviso nem serviço", gallery(), base.plusSeconds(3600), base));
+
+        var pubService = (ServicePublication) repository.save(ServicePublication.fromApprovedRequest(
+                ServicePublicationRequest.reconstitute(1001L, 7L, "Mecânica %_! 4x4", "Revisão completa", new BigDecimal("250.00"),
+                        "11999990001", gallery(), ServicePublicationRequestStatus.PENDING, null, null, null, base, null, base, 0L),
+                base.plusSeconds(15)
+        ));
+        var archService = ServicePublication.fromApprovedRequest(
+                ServicePublicationRequest.reconstitute(1002L, 8L, "Guincho Pesado", "Atendimento 24h", new BigDecimal("500.00"),
+                        "11999990002", gallery(), ServicePublicationRequestStatus.PENDING, null, null, null, base, null, base, 0L),
+                base.plusSeconds(25)
+        );
+        archService.archive(base.plusSeconds(35));
+        archService = (ServicePublication) repository.save(archService);
+
+        var sortDesc = org.springframework.data.domain.PageRequest.of(
+                0, 10, org.springframework.data.domain.Sort.by(
+                        org.springframework.data.domain.Sort.Order.desc("createdAt"),
+                        org.springframework.data.domain.Sort.Order.desc("id")
+                )
+        );
+
+        var allNotices = repository.findNotices(null, null, base, base.plusSeconds(100), null, null, sortDesc);
+        assertThat(allNotices.getTotalElements()).isEqualTo(3);
+        assertThat(allNotices.getContent()).extracting(Notice::getId)
+                .containsExactly(archivedNotice.getId(), publishedNotice.getId(), draftNotice.getId());
+
+        var literalNoticeSearch = repository.findNotices(PublicationStatus.DRAFT, "%_!", base, base.plusSeconds(100), null, null, sortDesc);
+        assertThat(literalNoticeSearch.getTotalElements()).isEqualTo(1);
+        assertThat(literalNoticeSearch.getContent()).singleElement()
+                .extracting(Notice::getId).isEqualTo(draftNotice.getId());
+
+        var contentAndPublishedRange = repository.findNotices(
+                null, "TRILHA", null, null, base.plusSeconds(15), base.plusSeconds(25), sortDesc
+        );
+        assertThat(contentAndPublishedRange.getTotalElements()).isEqualTo(1);
+        assertThat(contentAndPublishedRange.getContent()).singleElement()
+                .extracting(Notice::getId).isEqualTo(publishedNotice.getId());
+
+        var allServices = repository.findServices(null, null, base, base.plusSeconds(100), null, null, sortDesc);
+        assertThat(allServices.getTotalElements()).isEqualTo(2);
+        assertThat(allServices.getContent()).extracting(ServicePublication::getId)
+                .containsExactly(archService.getId(), pubService.getId());
+
+        var archivedServices = repository.findServices(PublicationStatus.ARCHIVED, "24h", base, base.plusSeconds(100), null, null, sortDesc);
+        assertThat(archivedServices.getTotalElements()).isEqualTo(1);
+        assertThat(archivedServices.getContent()).singleElement()
+                .extracting(ServicePublication::getId).isEqualTo(archService.getId());
+
+        assertThat(repository.findServicesByIds(List.of(pubService.getId(), archService.getId(), deletedNotice.getId())))
+                .extracting(ServicePublication::getId)
+                .containsExactlyInAnyOrder(pubService.getId(), archService.getId());
+    }
+
+    @Test void noticePriorityAndValidityWindowFilterFeedPreserveEditorialStatusAndSnapshotOnDelete() {
+        // Clock in JpaTestConfiguration is fixed at NOW.plusSeconds(1)
+        Instant referenceNow = NOW.plusSeconds(1);
+        Instant publishedAt = Instant.parse("2060-01-01T00:00:00Z");
+
+        var activeBoundaryNotice = Notice.create(7L, "Urgent Valid", "Boundary valid", gallery(),
+                NoticePriority.URGENT, referenceNow, referenceNow, NOW);
+        activeBoundaryNotice.publish(publishedAt.plusSeconds(1));
+        activeBoundaryNotice = (Notice) repository.save(activeBoundaryNotice);
+
+        var futureNotice = Notice.create(7L, "Future Notice", "Starts later", gallery(),
+                NoticePriority.HIGH, referenceNow.plusSeconds(10), referenceNow.plusSeconds(60), NOW);
+        futureNotice.publish(publishedAt.plusSeconds(2));
+        futureNotice = (Notice) repository.save(futureNotice);
+
+        var expiredNotice = Notice.create(7L, "Expired Notice", "Ended earlier", gallery(),
+                NoticePriority.LOW, referenceNow.minusSeconds(60), referenceNow.minusSeconds(1), NOW);
+        expiredNotice.publish(publishedAt.plusSeconds(3));
+        expiredNotice = (Notice) repository.save(expiredNotice);
+
+        var event = Event.create(7L, "Published Event", "Still visible", gallery(), NOW.plusSeconds(3600), NOW);
+        event.publish(publishedAt.plusSeconds(4));
+        event = (Event) repository.save(event);
+
+        em.flush();
+        em.clear();
+
+        var feedPage = repository.findPublished(null, publishedAt, publishedAt.plusSeconds(10),
+                org.springframework.data.domain.PageRequest.of(0, 10,
+                        org.springframework.data.domain.Sort.by(
+                                org.springframework.data.domain.Sort.Order.desc("publishedAt"),
+                                org.springframework.data.domain.Sort.Order.desc("id"))));
+        assertThat(feedPage.getTotalElements()).isEqualTo(2);
+        assertThat(feedPage.getContent()).extracting(Publication::getId)
+                .containsExactly(event.getId(), activeBoundaryNotice.getId());
+
+        var sortAsc = org.springframework.data.domain.PageRequest.of(0, 10, org.springframework.data.domain.Sort.by("id"));
+        var expiredAdminPage = repository.findNotices(null, null, true, referenceNow, null, null, null, publishedAt, publishedAt.plusSeconds(10), sortAsc);
+        assertThat(expiredAdminPage.getContent()).extracting(Notice::getId).containsExactly(expiredNotice.getId());
+        assertThat(expiredAdminPage.getContent().get(0).getStatus()).isEqualTo(PublicationStatus.PUBLISHED);
+
+        var activeAdminPage = repository.findNotices(null, null, false, referenceNow, null, null, null, publishedAt, publishedAt.plusSeconds(10), sortAsc);
+        assertThat(activeAdminPage.getContent()).extracting(Notice::getId)
+                .containsExactly(activeBoundaryNotice.getId(), futureNotice.getId());
+
+        var urgentAdminPage = repository.findNotices(null, NoticePriority.URGENT, null, referenceNow, null, null, null, publishedAt, publishedAt.plusSeconds(10), sortAsc);
+        assertThat(urgentAdminPage.getContent()).extracting(Notice::getId).containsExactly(activeBoundaryNotice.getId());
+
+        long deletedId = activeBoundaryNotice.getId();
+        repository.delete(deletedId, 77L, publishedAt.plusSeconds(20));
+        em.flush();
+        em.clear();
+
+        var snapshot = history.findAll().stream()
+                .filter(item -> item.getPublicationId().equals(deletedId))
+                .map(NoticeHistoryEntity.class::cast)
+                .findFirst().orElseThrow();
+        assertThat(snapshot.getPriority()).isEqualTo(NoticePriority.URGENT.name());
+        assertThat(snapshot.getValidFrom()).isEqualTo(referenceNow);
+        assertThat(snapshot.getValidUntil()).isEqualTo(referenceNow);
     }
 
     @Test

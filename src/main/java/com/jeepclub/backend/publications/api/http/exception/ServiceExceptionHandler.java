@@ -49,7 +49,12 @@ public class ServiceExceptionHandler extends ApiExceptionHandler {
         };
     }
 
-    @ExceptionHandler({MalformedServicePayloadException.class, IllegalArgumentException.class})
+    @ExceptionHandler({
+            MalformedServicePayloadException.class,
+            IllegalArgumentException.class,
+            org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class,
+            org.springframework.data.core.PropertyReferenceException.class
+    })
     public ResponseEntity<ApiErrorResponse> invalid(RuntimeException exception) {
         return error("SERVICE_INVALID_REQUEST", HttpStatus.BAD_REQUEST);
     }

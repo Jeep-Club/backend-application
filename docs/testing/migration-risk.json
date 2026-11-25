@@ -1,8 +1,14 @@
 {
   "fb86cc2836d15fa01d8890ca315f6a5c329be71ead12a3e10b6b77658660e91e": {
-    "reason": "DDL aditivo anul?vel em Event e hist?rico; regress?o parte da V15 com dados legados em ambas as tabelas, compara estados e valida Hibernate.",
+    "reason": "DDL aditivo anulável em Event e histórico; regressão parte da V15 com dados legados em ambas as tabelas, compara estados e valida Hibernate.",
     "tests": [
       "MySqlMigrationIT#eventEditorialColumnsPreserveLegacyRowsOnUpgrade"
+    ]
+  },
+  "0fd8b16767ef7d27b1c0c820ca6b6572cbdfb5ffcdd74a3a12ec6ad032e92d3f": {
+    "reason": "DDL aditivo de prioridade (default NORMAL) e janela temporal anulável em Notice e histórico; regressão parte da V16 com linhas legadas em ambas as tabelas, compara estados e valida Hibernate.",
+    "tests": [
+      "MySqlMigrationIT#noticePriorityAndValidityColumnsPreserveLegacyRowsOnUpgrade"
     ]
   }
 }
