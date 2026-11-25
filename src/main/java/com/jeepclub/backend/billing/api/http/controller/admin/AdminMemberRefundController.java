@@ -1,8 +1,8 @@
 package com.jeepclub.backend.billing.api.http.controller.admin;
 
-import com.jeepclub.backend.billing.api.http.dto.refund.MemberRefundResponse;
+import com.jeepclub.backend.billing.api.http.dto.refund.AdminMemberRefundResponse;
 import com.jeepclub.backend.billing.api.http.dto.BillingPageSchemas;
-import com.jeepclub.backend.billing.api.http.dto.refund.MemberRefundSummaryResponse;
+import com.jeepclub.backend.billing.api.http.dto.refund.AdminMemberRefundSummaryResponse;
 import com.jeepclub.backend.billing.api.http.dto.refund.RejectMemberRefundRequest;
 import com.jeepclub.backend.billing.core.application.result.MemberRefundResult;
 import com.jeepclub.backend.billing.core.application.service.memberrefund.AdminMemberRefundService;
@@ -49,6 +49,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class AdminMemberRefundController {
 
     private final AdminMemberRefundService adminMemberRefundService;
+    private final AdminMemberRefundPresentation presentation;
 
     @GetMapping("/billing/member-refunds")
     @PreAuthorize("hasAuthority('BILLING_REFUND_READ')")
@@ -56,14 +57,14 @@ public class AdminMemberRefundController {
     @Operation(
             summary = "Listar reembolsos de membros",
             description = "Lista reembolsos com filtro opcional por status. Usa page zero-based, size 20 por padrão e limite global de 50.",
-            responses = @ApiResponse(responseCode = "200", description = "Página de reembolsos retornada.", content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = BillingPageSchemas.MemberRefunds.class)))
+            responses = @ApiResponse(responseCode = "200", description = "Página de reembolsos retornada.", content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = BillingPageSchemas.AdminMemberRefunds.class)))
     )
-    public ResponseEntity<PageResponse<MemberRefundSummaryResponse>> findAll(
+    public ResponseEntity<PageResponse<AdminMemberRefundSummaryResponse>> findAll(
             @RequestParam(required = false) MemberRefundStatus status,
             @ParameterObject Pageable pageable
     ) {
         Page<MemberRefundResult> results = adminMemberRefundService.findAll(status, pageable);
-        return ResponseEntity.ok(PageResponse.from(results.map(MemberRefundSummaryResponse::from)));
+        return ResponseEntity.ok(PageResponse.from(presentation.summaries(results)));
     }
 
     @GetMapping("/billing/member-refunds/{refundId}")
@@ -74,10 +75,12 @@ public class AdminMemberRefundController {
             summary = "Buscar reembolso por ID",
             description = "Consulta os dados completos de um reembolso de membro."
     )
-    public ResponseEntity<MemberRefundResponse> findById(
+    @ApiResponse(responseCode = "200", description = "Reembolso retornado com contexto administrativo.",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = AdminMemberRefundResponse.class)))
+    public ResponseEntity<AdminMemberRefundResponse> findById(
             @PathVariable @Positive(message = "ID do reembolso deve ser maior que zero.") Long refundId
     ) {
-        return ResponseEntity.ok(MemberRefundResponse.from(adminMemberRefundService.findById(refundId)));
+        return ResponseEntity.ok(presentation.detail(adminMemberRefundService.findById(refundId)));
     }
 
     @GetMapping("/billing/charge-cycles/{cycleId}/member-refunds")
@@ -86,14 +89,14 @@ public class AdminMemberRefundController {
     @Operation(
             summary = "Listar reembolsos de um ciclo",
             description = "Lista os reembolsos vinculados ao ciclo usando page zero-based, size 20 por padrão e limite global de 50.",
-            responses = @ApiResponse(responseCode = "200", description = "Página de reembolsos retornada.", content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = BillingPageSchemas.MemberRefunds.class)))
+            responses = @ApiResponse(responseCode = "200", description = "Página de reembolsos retornada.", content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = BillingPageSchemas.AdminMemberRefunds.class)))
     )
-    public ResponseEntity<PageResponse<MemberRefundSummaryResponse>> findByChargeCycleId(
+    public ResponseEntity<PageResponse<AdminMemberRefundSummaryResponse>> findByChargeCycleId(
             @PathVariable @Positive(message = "ID do ciclo deve ser maior que zero.") Long cycleId,
             @ParameterObject Pageable pageable
     ) {
         Page<MemberRefundResult> results = adminMemberRefundService.findByChargeCycleId(cycleId, pageable);
-        return ResponseEntity.ok(PageResponse.from(results.map(MemberRefundSummaryResponse::from)));
+        return ResponseEntity.ok(PageResponse.from(presentation.summaries(results)));
     }
 
     @PatchMapping("/billing/member-refunds/{refundId}/approve")
@@ -105,13 +108,14 @@ public class AdminMemberRefundController {
             summary = "Aprovar reembolso",
             description = "Aprova um reembolso elegível ou solicitado."
     )
-    public ResponseEntity<MemberRefundResponse> approve(
+    @ApiResponse(responseCode = "200", description = "Reembolso retornado com contexto administrativo.",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = AdminMemberRefundResponse.class)))
+    public ResponseEntity<AdminMemberRefundResponse> approve(
             @PathVariable @Positive(message = "ID do reembolso deve ser maior que zero.") Long refundId,
             Authentication authentication
     ) {
-        return ResponseEntity.ok(MemberRefundResponse.from(
-                adminMemberRefundService.approve(refundId, extractUserId(authentication))
-        ));
+        return ResponseEntity.ok(presentation.transition(
+                () -> adminMemberRefundService.approve(refundId, extractUserId(authentication))));
     }
 
     @PatchMapping("/billing/member-refunds/{refundId}/reject")
@@ -124,18 +128,15 @@ public class AdminMemberRefundController {
             summary = "Rejeitar reembolso",
             description = "Rejeita um reembolso solicitado, registrando o motivo da rejeição."
     )
-    public ResponseEntity<MemberRefundResponse> reject(
+    @ApiResponse(responseCode = "200", description = "Reembolso retornado com contexto administrativo.",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = AdminMemberRefundResponse.class)))
+    public ResponseEntity<AdminMemberRefundResponse> reject(
             @PathVariable @Positive(message = "ID do reembolso deve ser maior que zero.") Long refundId,
             @Valid @RequestBody RejectMemberRefundRequest request,
             Authentication authentication
     ) {
-        return ResponseEntity.ok(MemberRefundResponse.from(
-                adminMemberRefundService.reject(
-                        refundId,
-                        extractUserId(authentication),
-                        request.rejectionReason()
-                )
-        ));
+        return ResponseEntity.ok(presentation.transition(
+                () -> adminMemberRefundService.reject(refundId, extractUserId(authentication), request.rejectionReason())));
     }
 
     @PatchMapping("/billing/member-refunds/{refundId}/mark-as-refunded")
@@ -147,13 +148,14 @@ public class AdminMemberRefundController {
             summary = "Marcar reembolso como realizado",
             description = "Marca um reembolso aprovado como efetivamente realizado."
     )
-    public ResponseEntity<MemberRefundResponse> markAsRefunded(
+    @ApiResponse(responseCode = "200", description = "Reembolso retornado com contexto administrativo.",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = AdminMemberRefundResponse.class)))
+    public ResponseEntity<AdminMemberRefundResponse> markAsRefunded(
             @PathVariable @Positive(message = "ID do reembolso deve ser maior que zero.") Long refundId,
             Authentication authentication
     ) {
-        return ResponseEntity.ok(MemberRefundResponse.from(
-                adminMemberRefundService.markAsRefunded(refundId, extractUserId(authentication))
-        ));
+        return ResponseEntity.ok(presentation.transition(
+                () -> adminMemberRefundService.markAsRefunded(refundId, extractUserId(authentication))));
     }
 
     @PatchMapping("/billing/member-refunds/{refundId}/expire")
@@ -165,10 +167,12 @@ public class AdminMemberRefundController {
             summary = "Expirar elegibilidade de reembolso",
             description = "Expira manualmente um reembolso elegível quando sua janela de elegibilidade já passou."
     )
-    public ResponseEntity<MemberRefundResponse> expire(
+    @ApiResponse(responseCode = "200", description = "Reembolso retornado com contexto administrativo.",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = AdminMemberRefundResponse.class)))
+    public ResponseEntity<AdminMemberRefundResponse> expire(
             @PathVariable @Positive(message = "ID do reembolso deve ser maior que zero.") Long refundId
     ) {
-        return ResponseEntity.ok(MemberRefundResponse.from(adminMemberRefundService.expire(refundId)));
+        return ResponseEntity.ok(presentation.transition(() -> adminMemberRefundService.expire(refundId)));
     }
 
     @PatchMapping("/billing/member-refunds/{refundId}/cancel")
@@ -180,13 +184,14 @@ public class AdminMemberRefundController {
             summary = "Cancelar processo de reembolso",
             description = "Cancela um processo de reembolso ainda ativo."
     )
-    public ResponseEntity<MemberRefundResponse> cancel(
+    @ApiResponse(responseCode = "200", description = "Reembolso retornado com contexto administrativo.",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = AdminMemberRefundResponse.class)))
+    public ResponseEntity<AdminMemberRefundResponse> cancel(
             @PathVariable @Positive(message = "ID do reembolso deve ser maior que zero.") Long refundId,
             Authentication authentication
     ) {
-        return ResponseEntity.ok(MemberRefundResponse.from(
-                adminMemberRefundService.cancel(refundId, extractUserId(authentication))
-        ));
+        return ResponseEntity.ok(presentation.transition(
+                () -> adminMemberRefundService.cancel(refundId, extractUserId(authentication))));
     }
 
     private Long extractUserId(Authentication authentication) {

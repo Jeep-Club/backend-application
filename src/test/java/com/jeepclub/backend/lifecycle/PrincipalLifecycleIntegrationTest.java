@@ -306,7 +306,7 @@ class PrincipalLifecycleIntegrationTest {
         }
         for(var contract:List.of(List.of("/identity/admin/users/{id}/deletion-history","UserDeletionHistorySnapshot"),
                 List.of("/authorization/roles/{id}/deletion-history","RoleDeletionHistorySnapshot"),
-                List.of("/billing/charge-definitions/{id}/deletion-history","ChargeDefinitionDeletionHistorySnapshot"))) {
+                List.of("/billing/charge-definitions/{id}/deletion-history","ChargeDefinitionDeletionHistoryResponse"))) {
             assertThat(document.path("paths").path(contract.get(0)).path("get").path("responses").path("200")
                     .path("content").path("application/json").path("schema").path("$ref").asText())
                     .isEqualTo("#/components/schemas/"+contract.get(1));

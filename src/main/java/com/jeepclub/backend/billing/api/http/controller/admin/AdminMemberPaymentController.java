@@ -1,10 +1,11 @@
 package com.jeepclub.backend.billing.api.http.controller.admin;
 
-import com.jeepclub.backend.billing.api.http.dto.payment.MemberPaymentResponse;
+import com.jeepclub.backend.billing.api.http.dto.payment.AdminMemberPaymentResponse;
 import com.jeepclub.backend.billing.api.http.dto.BillingPageSchemas;
 import com.jeepclub.backend.billing.api.http.dto.payment.MemberPaymentSummaryResponse;
 import com.jeepclub.backend.billing.api.http.dto.payment.RejectMemberPaymentRequest;
 import com.jeepclub.backend.billing.core.application.result.MemberPaymentResult;
+import com.jeepclub.backend.billing.core.application.service.AdminBillingCommandService;
 import com.jeepclub.backend.billing.core.application.service.memberpayment.AdminMemberPaymentService;
 import com.jeepclub.backend.billing.core.domain.enums.payment.MemberPaymentStatus;
 import com.jeepclub.backend.platform.security.principal.UserPrincipal;
@@ -48,14 +49,16 @@ import org.springframework.web.bind.annotation.RestController;
 })
 public class AdminMemberPaymentController {
 
+    private final AdminBillingCommandService commands;
     private final AdminMemberPaymentService adminMemberPaymentService;
+    private final AdminMemberPaymentPresentation presentation;
 
     @GetMapping("/billing/member-payments")
     @PreAuthorize("hasAuthority('BILLING_PAYMENT_READ')")
     @RequiredPermission("BILLING_PAYMENT_READ")
     @Operation(
             summary = "Listar pagamentos de membros",
-            description = "Lista pagamentos com filtro opcional por status. Usa page zero-based, size 20 por padrão e limite global de 50.",
+            description = "Lista pagamentos administrativos com o contexto da cobrança vinculada e filtro opcional por status. Usa page zero-based, size 20 por padrão e limite global de 50.",
             responses = @ApiResponse(responseCode = "200", description = "Página de pagamentos retornada.", content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = BillingPageSchemas.MemberPayments.class)))
     )
     public ResponseEntity<PageResponse<MemberPaymentSummaryResponse>> findAll(
@@ -63,7 +66,7 @@ public class AdminMemberPaymentController {
             @ParameterObject Pageable pageable
     ) {
         Page<MemberPaymentResult> results = adminMemberPaymentService.findAll(status, pageable);
-        return ResponseEntity.ok(PageResponse.from(results.map(MemberPaymentSummaryResponse::from)));
+        return ResponseEntity.ok(PageResponse.from(presentation.summaries(results)));
     }
 
     @GetMapping("/billing/member-payments/{paymentId}")
@@ -74,11 +77,13 @@ public class AdminMemberPaymentController {
             summary = "Buscar pagamento por ID",
             description = "Consulta os dados completos de um pagamento de membro."
     )
-    public ResponseEntity<MemberPaymentResponse> findById(
+    @ApiResponse(responseCode = "200", description = "Pagamento retornado com contexto administrativo.",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = AdminMemberPaymentResponse.class)))
+    public ResponseEntity<AdminMemberPaymentResponse> findById(
             @PathVariable @Positive(message = "ID do pagamento deve ser maior que zero.") Long paymentId
     ) {
         MemberPaymentResult result = adminMemberPaymentService.findById(paymentId);
-        return ResponseEntity.ok(MemberPaymentResponse.from(result));
+        return ResponseEntity.ok(presentation.detail(result));
     }
 
     @PatchMapping("/billing/member-payments/{paymentId}/confirm")
@@ -90,15 +95,17 @@ public class AdminMemberPaymentController {
             summary = "Confirmar pagamento",
             description = "Confirma um pagamento pendente de validação e marca a cobrança aberta como paga. Se o ciclo foi cancelado, preserva a cobrança cancelada e garante elegibilidade de refund na janela original de 30 dias."
     )
-    public ResponseEntity<MemberPaymentResponse> confirm(
+    @ApiResponse(responseCode = "200", description = "Pagamento retornado com contexto administrativo.",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = AdminMemberPaymentResponse.class)))
+    public ResponseEntity<AdminMemberPaymentResponse> confirm(
             @PathVariable @Positive(message = "ID do pagamento deve ser maior que zero.") Long paymentId,
             Authentication authentication
     ) {
-        MemberPaymentResult result = adminMemberPaymentService.confirm(
+        var response = commands.execute(() -> adminMemberPaymentService.confirm(
                 paymentId,
                 extractUserId(authentication)
-        );
-        return ResponseEntity.ok(MemberPaymentResponse.from(result));
+        ), presentation::detail);
+        return ResponseEntity.ok(response);
     }
 
     @PatchMapping("/billing/member-payments/{paymentId}/reject")
@@ -111,17 +118,19 @@ public class AdminMemberPaymentController {
             summary = "Rejeitar pagamento",
             description = "Rejeita um pagamento pendente de validação sem gerar refund; preserva o estado da cobrança, inclusive cancelamento prévio do ciclo."
     )
-    public ResponseEntity<MemberPaymentResponse> reject(
+    @ApiResponse(responseCode = "200", description = "Pagamento retornado com contexto administrativo.",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = AdminMemberPaymentResponse.class)))
+    public ResponseEntity<AdminMemberPaymentResponse> reject(
             @PathVariable @Positive(message = "ID do pagamento deve ser maior que zero.") Long paymentId,
             @Valid @RequestBody RejectMemberPaymentRequest request,
             Authentication authentication
     ) {
-        MemberPaymentResult result = adminMemberPaymentService.reject(
+        var response = commands.execute(() -> adminMemberPaymentService.reject(
                 paymentId,
                 extractUserId(authentication),
                 request.rejectionReason()
-        );
-        return ResponseEntity.ok(MemberPaymentResponse.from(result));
+        ), presentation::detail);
+        return ResponseEntity.ok(response);
     }
 
     private Long extractUserId(Authentication authentication) {

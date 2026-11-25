@@ -4,6 +4,8 @@ import com.jeepclub.backend.billing.core.domain.model.ChargeDefinition;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 
 public interface ChargeDefinitionRepository {
@@ -13,6 +15,8 @@ public interface ChargeDefinitionRepository {
     void deleteWithHistory(Long definitionId, Long actorId, java.time.Instant now);
 
     Optional<ChargeDefinition> findById(Long id);
+
+    List<ChargeDefinition> findByIds(Collection<Long> ids);
 
     Optional<ChargeDefinition> findByIdForUpdate(Long id);
 

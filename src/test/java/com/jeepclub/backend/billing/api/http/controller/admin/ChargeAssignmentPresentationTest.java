@@ -1,5 +1,8 @@
 package com.jeepclub.backend.billing.api.http.controller.admin;
 
+import com.jeepclub.backend.billing.core.domain.model.ChargeDefinition;
+import com.jeepclub.backend.billing.core.repository.ChargeDefinitionRepository;
+import com.jeepclub.backend.publications.api.module.EventPresentationQuery;
 import com.jeepclub.backend.billing.core.application.result.ChargeAssignmentResult;
 import com.jeepclub.backend.billing.core.domain.enums.assignment.ChargeAudienceType;
 import com.jeepclub.backend.iam.authorization.api.module.RolePresentationQuery;
@@ -19,8 +22,10 @@ import static org.mockito.Mockito.*;
 class ChargeAssignmentPresentationTest {
     private final RolePresentationQuery roles = mock(RolePresentationQuery.class);
     private final UserQuery identity = mock(UserQuery.class);
+    private final ChargeDefinitionRepository definitions = mock(ChargeDefinitionRepository.class);
+    private final EventPresentationQuery events = mock(EventPresentationQuery.class);
     private final ChargeAssignmentPresentation presentation = new ChargeAssignmentPresentation(roles,
-            new BillingUserNamePresentation(identity));
+            new BillingUserNamePresentation(identity), definitions, events);
 
     private ChargeAssignmentResult assignment(long id, ChargeAudienceType type, Long roleId) {
         return new ChargeAssignmentResult(id, 1L, type, null, roleId, null, true, Instant.EPOCH, null);
@@ -49,7 +54,7 @@ class ChargeAssignmentPresentationTest {
         verifyNoInteractions(roles);
     }
 
-    @Test void resolvesEligibleNamesOncePerPageAndKeepsMutationsUnenriched() {
+    @Test void resolvesEligibleNamesOncePerPageAndOnMutations() {
         var first = userAssignment(1L, 12L);
         var duplicate = userAssignment(2L, 12L);
         var inactive = userAssignment(3L, 13L);
@@ -62,7 +67,6 @@ class ChargeAssignmentPresentationTest {
 
         SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(
                 "user", "n/a", List.of(new SimpleGrantedAuthority("IDENTITY_USER_READ"))));
-        assertThat(presentation.present(first).userName()).isNull();
         assertThat(presentation.present(new PageImpl<>(List.<ChargeAssignmentResult>of())).getContent()).isEmpty();
         verifyNoInteractions(identity);
         when(identity.findByIds(List.of(12L, 13L, 14L, 15L))).thenReturn(List.of(
@@ -74,7 +78,35 @@ class ChargeAssignmentPresentationTest {
         verifyNoMoreInteractions(identity);
 
         when(identity.findByIds(List.of(12L))).thenReturn(List.of(user(12L, "Nome atual", true)));
-        assertThat(presentation.presentRead(first).userName()).isEqualTo("Nome atual");
+        assertThat(presentation.present(first).userName()).isEqualTo("Nome atual");
+    }
+
+    @Test void resolvesDefinitionAndOnlyLooksUpEventTitlesWithPermission() {
+        var event = new ChargeAssignmentResult(1L, 1L, ChargeAudienceType.EVENT_PARTICIPANTS,
+                null, null, 10L, true, Instant.EPOCH, null);
+        var definition = mock(ChargeDefinition.class);
+        when(definition.getId()).thenReturn(1L);
+        when(definition.getName()).thenReturn("Anuidade");
+        when(definitions.findByIds(List.of(1L))).thenReturn(List.of(definition));
+        authorize(false);
+        var hidden = presentation.present(event);
+        assertThat(hidden.chargeDefinitionName()).isEqualTo("Anuidade");
+        assertThat(hidden.eventTitle()).isNull();
+        verifyNoInteractions(events);
+        clearInvocations(definitions);
+
+        SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(
+                "user", "n/a", List.of(new SimpleGrantedAuthority("PUBLICATIONS_EVENT_READ_ADMIN"))));
+        when(events.findByIds(List.of(10L))).thenReturn(List.of(
+                new EventPresentationQuery.Details(10L, "Passeio", Instant.EPOCH)));
+        var page = presentation.present(new PageImpl<>(List.of(event, event,
+                assignment(2, ChargeAudienceType.ALL_MEMBERS, null))));
+        assertThat(page.getContent()).extracting("eventTitle").containsExactly("Passeio", "Passeio", null);
+        verify(definitions).findByIds(List.of(1L));
+        verify(events).findByIds(List.of(10L));
+
+        when(events.findByIds(List.of(10L))).thenReturn(List.of());
+        assertThat(presentation.present(event).eventTitle()).isNull();
     }
 
     private static ChargeAssignmentResult userAssignment(long id, long userId) {

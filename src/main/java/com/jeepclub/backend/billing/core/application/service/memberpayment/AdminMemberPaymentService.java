@@ -2,9 +2,11 @@ package com.jeepclub.backend.billing.core.application.service.memberpayment;
 
 import com.jeepclub.backend.billing.core.application.exception.charge.MemberChargeNotFoundException;
 import com.jeepclub.backend.billing.core.application.exception.payment.MemberPaymentNotFoundException;
+import com.jeepclub.backend.billing.core.application.result.MemberPaymentChargeContext;
 import com.jeepclub.backend.billing.core.application.result.MemberPaymentResult;
 import com.jeepclub.backend.billing.core.domain.enums.payment.MemberPaymentStatus;
 import com.jeepclub.backend.billing.core.domain.exception.payment.InvalidMemberPaymentStateException;
+import com.jeepclub.backend.billing.core.domain.model.ChargeCycle;
 import com.jeepclub.backend.billing.core.domain.model.MemberCharge;
 import com.jeepclub.backend.billing.core.domain.model.MemberPayment;
 import com.jeepclub.backend.billing.core.repository.MemberChargeRepository;
@@ -17,7 +19,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.Collection;
+import java.util.Map;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -42,6 +47,26 @@ public class AdminMemberPaymentService {
     @Transactional(readOnly = true)
     public MemberPaymentResult findById(Long id) {
         return MemberPaymentResult.from(findMemberPaymentOrThrow(id));
+    }
+
+    @Transactional(readOnly = true)
+    public Map<Long, MemberPaymentChargeContext> chargeContexts(Collection<Long> chargeIds) {
+        if (chargeIds.isEmpty()) return Map.of();
+        var charges = memberChargeRepository.findByIds(chargeIds);
+        var cycleIds = charges.stream().map(MemberCharge::getChargeCycleId).distinct().toList();
+        if (cycleIds.isEmpty()) return Map.of();
+        var cyclesById = cycles.findByIds(cycleIds).stream()
+                .collect(Collectors.toMap(ChargeCycle::getId, cycle -> cycle));
+        return charges.stream().collect(Collectors.toMap(MemberCharge::getId, charge -> {
+            var cycle = cyclesById.get(charge.getChargeCycleId());
+            // Retain the charge's own IDs and date even when a legacy cycle cannot be resolved.
+            if (cycle != null && !Objects.equals(cycle.getChargeDefinitionId(), charge.getChargeDefinitionId())) {
+                cycle = null;
+            }
+            return new MemberPaymentChargeContext(charge.getUserId(), charge.getChargeDefinitionId(),
+                    charge.getChargeCycleId(), cycle == null ? null : cycle.getChargeDefinitionNameSnapshot(),
+                    cycle == null ? null : cycle.getCode(), charge.getDueDate());
+        }));
     }
 
     @Transactional

@@ -57,6 +57,19 @@ REJECTED --member resubmits---> PENDING_VALIDATION
 Pagamento enviado dentro da janela pode ser confirmado depois porque a
 confirmação valida estado, não recalcula a janela.
 
+### Contexto administrativo de pagamentos e cobranças
+
+A lista e o detalhe de pagamentos, inclusive após confirmar ou rejeitar,
+identificam o titular pela cobrança vinculada. O vencimento vem da cobrança.
+O nome histórico da definição e a referência do ciclo vêm do ciclo gravado.
+Ajustar o valor final ou cancelar uma cobrança devolve o mesmo contexto
+do detalhe administrativo por ID.
+
+Nomes atuais, inclusive de quem confirmou ou rejeitou, exigem IDENTITY_USER_READ.
+A matrícula vigente exige MEMBERSHIP_MEMBER_READ. Campos protegidos são
+nulos quando indisponíveis. O autosserviço mantém o contrato de envio e
+substituição de pagamentos.
+
 ## Reembolso
 
 O membro pode criar `REQUESTED` a partir de pagamento próprio confirmado.
@@ -70,3 +83,33 @@ Cancelamento não cria refund para PENDING_VALIDATION. Confirmar esse pagamento
 depois cria ELIGIBLE sem duplicar refund ativo/concluído, preservando a janela
 de 30 dias contada do instante mais recente entre cancelamento e confirmação.
 Uma confirmação tardia sempre possui uma janela utilizável completa.
+
+As respostas administrativas de reembolso identificam o beneficiário, a
+matrícula vigente e a obrigação vinculada. O detalhe e as transições também
+apresentam os nomes disponíveis dos atores. Nomes exigem IDENTITY_USER_READ e
+matrícula exige MEMBERSHIP_MEMBER_READ. Vínculos financeiros inconsistentes
+ficam sem rótulos históricos. O contrato do associado permanece separado.
+
+
+### Apresentação administrativa de atribuições e exclusões
+
+A listagem, o detalhe e as mutações de atribuições retornam o nome atual da
+definição. Os rótulos do alvo seguem a permissão de leitura de usuário, cargo
+ou evento e são resolvidos em lote na listagem. A consulta pública interna de
+Publications também pode fornecer o título preservado de um evento excluído.
+
+O histórico de exclusão da definição preserva o snapshot e o ID do autor. A
+resposta HTTP inclui o nome cadastral atual do autor ativo quando o solicitante
+possui `IDENTITY_USER_READ`. A consulta exige
+`BILLING_CHARGE_DEFINITION_HISTORY_READ`, é auditada e usa `Cache-Control: no-store`.
+
+### Operadores de ciclos e consistência das transições
+
+Os detalhes e as respostas de geração, cancelamento, finalização e arquivamento
+do ciclo incluem os nomes atuais dos operadores autorizados, resolvidos em
+um lote pelos IDs preservados. A listagem de ciclos conserva o contrato resumido.
+
+Nas mutações administrativas de ciclos e reembolsos, a composição da resposta
+participa da transação do comando. Falha técnica na apresentação resulta em
+rollback e erro HTTP sanitizado. Ausência cadastral ou de permissão auxiliar
+continua produzindo nomes nulos.

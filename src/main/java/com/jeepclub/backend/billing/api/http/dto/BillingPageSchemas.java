@@ -6,6 +6,7 @@ import com.jeepclub.backend.billing.api.http.dto.charge.SelfServiceMemberChargeS
 import com.jeepclub.backend.billing.api.http.dto.cycle.ChargeCycleSummaryResponse;
 import com.jeepclub.backend.billing.api.http.dto.definition.ChargeDefinitionSummaryResponse;
 import com.jeepclub.backend.billing.api.http.dto.payment.MemberPaymentSummaryResponse;
+import com.jeepclub.backend.billing.api.http.dto.refund.AdminMemberRefundSummaryResponse;
 import com.jeepclub.backend.billing.api.http.dto.refund.MemberRefundSummaryResponse;
 import io.swagger.v3.oas.annotations.media.Schema;
 
@@ -51,6 +52,12 @@ public final class BillingPageSchemas {
     public record MemberPayments(List<MemberPaymentSummaryResponse> content, int number, int size,
                                  long totalElements, int totalPages, int numberOfElements,
                                  boolean first, boolean last, boolean empty) {
+    }
+
+    @Schema(name = "PageResponseAdminMemberRefundSummaryResponse")
+    public record AdminMemberRefunds(List<AdminMemberRefundSummaryResponse> content, int number, int size,
+                                     long totalElements, int totalPages, int numberOfElements,
+                                     boolean first, boolean last, boolean empty) {
     }
 
     @Schema(name = "PageResponseMemberRefundSummaryResponse")

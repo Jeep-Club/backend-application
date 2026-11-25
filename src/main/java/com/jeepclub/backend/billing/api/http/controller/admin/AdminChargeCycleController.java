@@ -6,7 +6,6 @@ import com.jeepclub.backend.billing.api.http.dto.cycle.ChargeCycleSummaryRespons
 import com.jeepclub.backend.billing.api.http.dto.cycle.GenerateChargeCycleRequest;
 import com.jeepclub.backend.billing.api.http.dto.cycle.GenerateChargeCycleResponse;
 import com.jeepclub.backend.billing.core.application.result.cycle.ChargeCycleResult;
-import com.jeepclub.backend.billing.core.application.result.cycle.GenerateChargeCycleResult;
 import com.jeepclub.backend.billing.core.application.service.chargecycle.AdminChargeCycleService;
 import com.jeepclub.backend.platform.security.principal.UserPrincipal;
 import com.jeepclub.backend.platform.openapi.security.RequiredPermission;
@@ -47,10 +46,12 @@ import java.net.URI;
 public class AdminChargeCycleController {
 
     private final AdminChargeCycleService adminChargeCycleService;
+    private final AdminChargeCyclePresentation presentation;
 
     @PostMapping("/billing/charge-definitions/{chargeDefinitionId}/cycles")
     @PreAuthorize("hasAuthority('BILLING_CHARGE_CYCLE_GENERATE')")
     @RequiredPermission("BILLING_CHARGE_CYCLE_GENERATE")
+    @ApiResponse(responseCode = "201", description = "Ciclo gerado.", content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = GenerateChargeCycleResponse.class)))
     @ApiResponse(responseCode = "400", description = "Payload inválido.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class)))
     @ApiResponse(responseCode = "404", description = "Definição não encontrada.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class)))
     @ApiResponse(responseCode = "409", description = "Definição inativa, ciclo duplicado ou nenhum usuário elegível resolvido.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class)))
@@ -63,16 +64,16 @@ public class AdminChargeCycleController {
             @Valid @RequestBody GenerateChargeCycleRequest request,
             @AuthenticationPrincipal UserPrincipal principal
     ) {
-        GenerateChargeCycleResult result = adminChargeCycleService.generate(
+        var response = presentation.generate(() -> adminChargeCycleService.generate(
                 chargeDefinitionId,
                 request.code(),
                 request.dueDate(),
                 principal.getUserId()
-        );
+        ));
 
         return ResponseEntity
-                .created(URI.create("/billing/charge-cycles/" + result.chargeCycle().id()))
-                .body(GenerateChargeCycleResponse.from(result));
+                .created(URI.create("/billing/charge-cycles/" + response.chargeCycle().id()))
+                .body(response);
     }
 
     @GetMapping("/billing/charge-definitions/{chargeDefinitionId}/cycles")
@@ -99,6 +100,7 @@ public class AdminChargeCycleController {
     @GetMapping("/billing/charge-cycles/{cycleId}")
     @PreAuthorize("hasAuthority('BILLING_CHARGE_CYCLE_READ')")
     @RequiredPermission("BILLING_CHARGE_CYCLE_READ")
+    @ApiResponse(responseCode = "200", description = "Ciclo retornado.", content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ChargeCycleResponse.class)))
     @ApiResponse(responseCode = "404", description = "Ciclo não encontrado.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class)))
     @Operation(
             summary = "Buscar ciclo de cobrança por ID",
@@ -109,12 +111,13 @@ public class AdminChargeCycleController {
     ) {
         ChargeCycleResult result = adminChargeCycleService.findById(cycleId);
 
-        return ResponseEntity.ok(ChargeCycleResponse.from(result));
+        return ResponseEntity.ok(presentation.detail(result));
     }
 
     @PatchMapping("/billing/charge-cycles/{cycleId}/cancel")
     @PreAuthorize("hasAuthority('BILLING_CHARGE_CYCLE_CANCEL')")
     @RequiredPermission("BILLING_CHARGE_CYCLE_CANCEL")
+    @ApiResponse(responseCode = "200", description = "Ciclo retornado.", content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ChargeCycleResponse.class)))
     @ApiResponse(responseCode = "404", description = "Ciclo não encontrado.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class)))
     @ApiResponse(responseCode = "409", description = "Estado do ciclo não permite cancelamento.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class)))
     @Operation(
@@ -125,17 +128,14 @@ public class AdminChargeCycleController {
             @PathVariable @Positive(message = "ID do ciclo deve ser maior que zero.") Long cycleId,
             @AuthenticationPrincipal UserPrincipal principal
     ) {
-        ChargeCycleResult result = adminChargeCycleService.cancel(
-                cycleId,
-                principal.getUserId()
-        );
-
-        return ResponseEntity.ok(ChargeCycleResponse.from(result));
+        return ResponseEntity.ok(presentation.transition(
+                () -> adminChargeCycleService.cancel(cycleId, principal.getUserId())));
     }
 
     @PatchMapping("/billing/charge-cycles/{cycleId}/finish")
     @PreAuthorize("hasAuthority('BILLING_CHARGE_CYCLE_FINISH')")
     @RequiredPermission("BILLING_CHARGE_CYCLE_FINISH")
+    @ApiResponse(responseCode = "200", description = "Ciclo retornado.", content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ChargeCycleResponse.class)))
     @ApiResponse(responseCode = "404", description = "Ciclo não encontrado.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class)))
     @ApiResponse(responseCode = "409", description = "Estado do ciclo não permite finalização.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class)))
     @Operation(
@@ -146,17 +146,14 @@ public class AdminChargeCycleController {
             @PathVariable @Positive(message = "ID do ciclo deve ser maior que zero.") Long cycleId,
             @AuthenticationPrincipal UserPrincipal principal
     ) {
-        ChargeCycleResult result = adminChargeCycleService.finish(
-                cycleId,
-                principal.getUserId()
-        );
-
-        return ResponseEntity.ok(ChargeCycleResponse.from(result));
+        return ResponseEntity.ok(presentation.transition(
+                () -> adminChargeCycleService.finish(cycleId, principal.getUserId())));
     }
 
     @PatchMapping("/billing/charge-cycles/{cycleId}/archive")
     @PreAuthorize("hasAuthority('BILLING_CHARGE_CYCLE_ARCHIVE')")
     @RequiredPermission("BILLING_CHARGE_CYCLE_ARCHIVE")
+    @ApiResponse(responseCode = "200", description = "Ciclo retornado.", content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ChargeCycleResponse.class)))
     @ApiResponse(responseCode = "404", description = "Ciclo não encontrado.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class)))
     @ApiResponse(responseCode = "409", description = "Somente ciclos finalizados ou cancelados podem ser arquivados.", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ApiErrorResponse.class)))
     @Operation(
@@ -167,11 +164,7 @@ public class AdminChargeCycleController {
             @PathVariable @Positive(message = "ID do ciclo deve ser maior que zero.") Long cycleId,
             @AuthenticationPrincipal UserPrincipal principal
     ) {
-        ChargeCycleResult result = adminChargeCycleService.archive(
-                cycleId,
-                principal.getUserId()
-        );
-
-        return ResponseEntity.ok(ChargeCycleResponse.from(result));
+        return ResponseEntity.ok(presentation.transition(
+                () -> adminChargeCycleService.archive(cycleId, principal.getUserId())));
     }
 }

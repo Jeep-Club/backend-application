@@ -61,7 +61,11 @@ public class AdminMemberChargeService {
 
     @Transactional(readOnly = true)
     public MemberChargeCycleResult findById(Long id) {
-        var charge = toResult(findMemberChargeOrThrow(id));
+        return present(toResult(findMemberChargeOrThrow(id)));
+    }
+
+    @Transactional(readOnly = true)
+    public MemberChargeCycleResult present(MemberChargeResult charge) {
         return MemberChargeCyclePresentation.enrich(charge, chargeCycles.findById(charge.chargeCycleId()).orElse(null));
     }
 

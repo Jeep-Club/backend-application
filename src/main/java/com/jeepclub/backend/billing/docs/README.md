@@ -147,3 +147,10 @@ técnicas seguem o tratamento sanitizado de erros HTTP e não são tratadas como
 cadastro ausente. O nome histórico e o código vêm do ciclo gravado, com a mesma
 verificação de integridade de ciclo e definição usada no self-service. A
 apresentação cadastral não altera dados financeiros ou snapshots.
+
+Nos comandos administrativos de confirmação e rejeição de pagamento, ajuste e
+cancelamento de cobrança e criação e ativação ou desativação de atribuição, a
+mutação e a composição da resposta compartilham a transação. Se uma consulta de
+apresentação falhar, o comando é revertido antes da resposta de erro. Os locks
+financeiros seguem a ordem documentada e permanecem até a conclusão dessa
+transação.
