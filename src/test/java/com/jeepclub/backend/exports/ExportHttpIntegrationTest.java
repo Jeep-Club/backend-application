@@ -115,31 +115,35 @@ Arguments.of("/billing/admin/refunds/export","BILLING_EXPORT"));}
         var u3=user("Carla Selecionada","22233344455");
         org.springframework.test.util.ReflectionTestUtils.setField(u3,"status",com.jeepclub.backend.iam.identity.api.module.UserStatus.INACTIVE);
         em.flush();
+        seed("iam.authentication.infra.persistence.entity.AuthenticationAccountEntity","user",u1,"passwordHash","SECRET_PASSWORD_HASH","accessStatus",com.jeepclub.backend.iam.authentication.core.domain.enums.AuthenticationAccessStatus.ENABLED,"authenticationStatus",com.jeepclub.backend.iam.authentication.core.domain.enums.AuthenticationStatus.ENABLED,"credentialStatus",com.jeepclub.backend.iam.authentication.core.domain.enums.CredentialStatus.PERMANENT,"createdAt",FIXTURE_TIME);
+        var session=seed("iam.authentication.infra.persistence.entity.SessionEntity","userId",id(u1),"createdAt",FIXTURE_TIME,"expiresAt",FIXTURE_TIME.plusSeconds(3600),"status",com.jeepclub.backend.iam.authentication.core.domain.enums.SessionStatus.ACTIVE);
+        seed("iam.authentication.infra.persistence.entity.RefreshTokenEntity","sessionId",id(session),"tokenHash","SECRET_REFRESH_HASH","createdAt",FIXTURE_TIME,"expiresAt",FIXTURE_TIME.plusSeconds(3600),"status",com.jeepclub.backend.iam.authentication.core.domain.enums.RefreshTokenStatus.ACTIVE);
         seed("memberships.infra.persistence.entity.MemberEntity","identityUserId",id(u1),"membershipNumber","41","createdAt",FIXTURE_TIME,"updatedAt",FIXTURE_TIME);
-        seed("memberships.infra.persistence.entity.MemberEntity","identityUserId",id(u3),"membershipNumber","43","createdAt",FIXTURE_TIME,"updatedAt",FIXTURE_TIME);
 
         for(String format:List.of("CSV","PDF")) {
-            // Non-contiguous IDs with duplicate across MEMBER and TECHNICAL layouts
+            // Default layout (omitted) is MEMBER; non-contiguous IDs with duplicate; u1 has Member, u3 has no Member
             String memberExport=download("/identity/admin/users/export","IDENTITY_USER_EXPORT",format,
-                "layout","MEMBER","ids",id(u1).toString(),"ids",id(u3).toString(),"ids",id(u1).toString());
-            assertThat(memberExport).contains("Ana Selecionada","Carla Selecionada","41","43","Matrícula","ID técnico")
-                .doesNotContain("Bruno Ignorado","SECRET_STORAGE_SENTINEL","passwordHash","tokenHash");
+                "ids",id(u1).toString(),"ids",id(u3).toString(),"ids",id(u1).toString());
+            assertThat(memberExport).contains("Ana Selecionada","Carla Selecionada","41","Matrícula","ID técnico")
+                .doesNotContain("Bruno Ignorado","SECRET_STORAGE_SENTINEL","SECRET_PASSWORD_HASH","SECRET_REFRESH_HASH","passwordHash","tokenHash");
             if(format.equals("CSV")) {
                 List<String> lines=memberExport.lines().toList();
                 assertThat(lines).hasSize(3);
-                assertThat(lines.get(0)).startsWith("\uFEFF\"Matrícula\";").endsWith("\"ID técnico\"");
+                assertThat(lines.get(0)).isEqualTo("\uFEFF\"Matrícula\";\"Nome\";\"Data de nascimento\";\"E-mail\";\"CPF\";\"RG\";\"Telefone\";\"Possui foto\";\"Situação\";\"Criado em\";\"Desativado em\";\"Atualizado em\";\"ID técnico\"");
                 assertThat(lines.get(1)).startsWith("\"41\";\"Ana Selecionada\"").endsWith("\""+id(u1)+"\"");
+                assertThat(lines.get(2)).startsWith("\"\";\"Carla Selecionada\"").endsWith("\""+id(u3)+"\"");
             }
 
             String technicalExport=download("/identity/admin/users/export","IDENTITY_USER_EXPORT",format,
                 "layout","TECHNICAL","ids",id(u1).toString(),"ids",id(u3).toString());
-            assertThat(technicalExport).contains("Ana Selecionada","Carla Selecionada","41","43")
-                .doesNotContain("Bruno Ignorado","SECRET_STORAGE_SENTINEL","ID técnico");
+            assertThat(technicalExport).contains("Ana Selecionada","Carla Selecionada","41")
+                .doesNotContain("Bruno Ignorado","SECRET_STORAGE_SENTINEL","SECRET_PASSWORD_HASH","SECRET_REFRESH_HASH","ID técnico");
             if(format.equals("CSV")) {
                 List<String> lines=technicalExport.lines().toList();
                 assertThat(lines).hasSize(3);
-                assertThat(lines.get(0)).startsWith("\uFEFF\"ID\";\"Matrícula\";");
+                assertThat(lines.get(0)).isEqualTo("\uFEFF\"ID\";\"Matrícula\";\"Nome\";\"Data de nascimento\";\"E-mail\";\"CPF\";\"RG\";\"Telefone\";\"Possui foto\";\"Situação\";\"Criado em\";\"Desativado em\";\"Atualizado em\"");
                 assertThat(lines.get(1)).startsWith("\""+id(u1)+"\";\"41\";\"Ana Selecionada\"");
+                assertThat(lines.get(2)).startsWith("\""+id(u3)+"\";\"\";\"Carla Selecionada\"");
             }
 
             // Combined ids + cadastral filters (AND intersection)
@@ -155,6 +159,12 @@ Arguments.of("/billing/admin/refunds/export","BILLING_EXPORT"));}
             if(format.equals("CSV"))assertThat(empty.lines().count()).isEqualTo(1);
         }
 
+        // Confirm GET /identity/admin/users did NOT gain ids filtering as a side effect
+        auth("IDENTITY_USER_READ");
+        String listBody=mvc.perform(get("/identity/admin/users").param("ids",id(u1).toString()).header("Authorization","Bearer export-test"))
+            .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+        assertThat(listBody).contains("Ana Selecionada","Bruno Ignorado");
+
         // 404 Not Found for nonexistent ID alone or mixed with valid ID
         auth("IDENTITY_USER_EXPORT");
         mvc.perform(get("/identity/admin/users/export").param("ids","987654321").header("Authorization","Bearer export-test"))
@@ -162,7 +172,7 @@ Arguments.of("/billing/admin/refunds/export","BILLING_EXPORT"));}
         mvc.perform(get("/identity/admin/users/export").param("ids",id(u1).toString(),"987654321").header("Authorization","Bearer export-test"))
             .andExpect(status().isNotFound()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
 
-        // 400 Bad Request for id+ids, empty/non-positive/invalid/oversized lists
+        // 400 Bad Request for id+ids, empty/non-positive/invalid/oversized lists (201 rejected)
         mvc.perform(get("/identity/admin/users/export").param("id",id(u1).toString()).param("ids",id(u1).toString()).header("Authorization","Bearer export-test"))
             .andExpect(status().isBadRequest()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
         String[] oversized=java.util.stream.LongStream.rangeClosed(1,201).mapToObj(Long::toString).toArray(String[]::new);
@@ -172,23 +182,123 @@ Arguments.of("/billing/admin/refunds/export","BILLING_EXPORT"));}
         mvc.perform(get("/identity/admin/users/export").param("ids",oversized).header("Authorization","Bearer export-test"))
             .andExpect(status().isBadRequest()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
 
-        // Bounded SQL across multiple chunks (> 200 users) without N+1
-        List<String> chunkIds=new ArrayList<>();
-        for(int i=0;i<200;i++) {
-            var batchUser=user("Lote Identidade "+i,String.format("90000000%03d",i));
-            chunkIds.add(id(batchUser).toString());
+        // Scenario A boundary: exact maximum of 200 explicit IDs succeeds
+        List<String> exact200Ids=new ArrayList<>();
+        exact200Ids.add(id(u1).toString());
+        exact200Ids.add(id(u3).toString());
+        for(int i=0;i<198;i++) {
+            var extra=user("Limite Explicito "+i,String.format("92000000%03d",i));
+            exact200Ids.add(id(extra).toString());
         }
         em.flush();em.clear();
+        auth("IDENTITY_USER_EXPORT");
+        String maxIdsCsv=mvc.perform(get("/identity/admin/users/export")
+                .param("ids",exact200Ids.toArray(String[]::new))
+                .header("Authorization","Bearer export-test"))
+            .andExpect(status().isOk())
+            .andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+        assertThat(maxIdsCsv.lines().count()).isEqualTo(201); // 1 header + 200 selected users
+    }
+
+    @Test @org.springframework.transaction.annotation.Transactional
+    void identityExportPaginatesAcrossMultipleChunksAndResolvesMembershipsWithoutNPlusOne()throws Exception {
+        List<Long> expectedEligibleIds=new ArrayList<>();
+        Map<Long,String> expectedMemberships=new HashMap<>();
+        for(int i=0;i<205;i++) {
+            var eligible=user(String.format("Associado Lote %03d",i),String.format("93000000%03d",i));
+            org.springframework.test.util.ReflectionTestUtils.setField(eligible,"profilePhotoStorageKey","SECRET_STORAGE_SENTINEL");
+            Long uid=id(eligible);
+            expectedEligibleIds.add(uid);
+            if(i%2==0) {
+                String number=String.valueOf(7000+i);
+                seed("memberships.infra.persistence.entity.MemberEntity","identityUserId",uid,"membershipNumber",number,"createdAt",FIXTURE_TIME,"updatedAt",FIXTURE_TIME);
+                expectedMemberships.put(uid,number);
+            }
+        }
+        expectedEligibleIds.sort(Comparator.naturalOrder());
+
+        // Excluded users: matching name prefix with INACTIVE/ARCHIVED status, and ACTIVE user outside name prefix
+        var excludedInactive=user("Associado Lote Inativo","93900000001");
+        org.springframework.test.util.ReflectionTestUtils.setField(excludedInactive,"status",com.jeepclub.backend.iam.identity.api.module.UserStatus.INACTIVE);
+        var excludedArchived=user("Associado Lote Arquivado","93900000002");
+        org.springframework.test.util.ReflectionTestUtils.setField(excludedArchived,"status",com.jeepclub.backend.iam.identity.api.module.UserStatus.ARCHIVED);
+        org.springframework.test.util.ReflectionTestUtils.setField(excludedArchived,"archivedAt",FIXTURE_TIME);
+        var excludedOtherName=user("Visitante Externo Ativo","93900000003");
+        Set<Long> excludedIds=Set.of(id(excludedInactive),id(excludedArchived),id(excludedOtherName));
+        em.flush();em.clear();
+
         var stats=em.getEntityManagerFactory().unwrap(org.hibernate.SessionFactory.class).getStatistics();
+        boolean previousStatsEnabled=stats.isStatisticsEnabled();
         stats.setStatisticsEnabled(true);stats.clear();
+        String memberCsv;
+        long preparedStatements;
         try {
-            var request=get("/identity/admin/users/export").header("Authorization","Bearer export-test");
-            for(String cid:chunkIds) request.param("ids",cid);
-            String chunkCsv=mvc.perform(request).andExpect(status().isOk()).andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
-            assertThat(chunkCsv.lines().count()).isEqualTo(201);
-            assertThat(stats.getPrepareStatementCount()).isLessThanOrEqualTo(8);
+            auth("IDENTITY_USER_EXPORT");
+            memberCsv=mvc.perform(get("/identity/admin/users/export")
+                    .param("name","Associado Lote")
+                    .param("status","ACTIVE")
+                    .header("Authorization","Bearer export-test"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+            preparedStatements=stats.getPrepareStatementCount();
         } finally {
-            stats.setStatisticsEnabled(false);
+            stats.clear();
+            stats.setStatisticsEnabled(previousStatsEnabled);
+        }
+
+        // Expected bounded SQL for 2 non-empty chunks (200 + 5 rows):
+        // 2 chunks * (1 page select + 1 count select + 1 membership batch select) + 1 audit log insert = 7 queries
+        assertThat(preparedStatements).isBetween(6L,9L);
+
+        List<String> lines=memberCsv.lines().toList();
+        assertThat(lines).hasSize(206); // 1 header + 205 eligible users across 2 non-empty chunks
+        assertThat(lines.get(0)).startsWith("\uFEFF\"Matrícula\";\"Nome\";").endsWith(";\"ID técnico\"");
+
+        List<Long> exportedIds=new ArrayList<>(205);
+        for(String rowLine:lines.subList(1,lines.size())) {
+            List<String> cells=parseCsvCells(rowLine);
+            Long uid=Long.parseLong(cells.get(12));
+            exportedIds.add(uid);
+            assertThat(cells.get(0)).isEqualTo(expectedMemberships.getOrDefault(uid,""));
+        }
+        assertThat(exportedIds)
+            .hasSize(205)
+            .doesNotHaveDuplicates()
+            .isSorted()
+            .containsExactlyElementsOf(expectedEligibleIds)
+            .doesNotContainAnyElementsOf(excludedIds);
+        assertThat(exportedIds.get(0)).isEqualTo(expectedEligibleIds.get(0));
+        assertThat(exportedIds.get(com.jeepclub.backend.shared.export.ExportPages.CHUNK-1)).isEqualTo(expectedEligibleIds.get(199));
+        assertThat(exportedIds.get(com.jeepclub.backend.shared.export.ExportPages.CHUNK)).isEqualTo(expectedEligibleIds.get(200));
+        assertThat(exportedIds.get(204)).isEqualTo(expectedEligibleIds.get(204));
+        assertThat(memberCsv)
+            .contains("Associado Lote 000","Associado Lote 199","Associado Lote 200","Associado Lote 204","7000","7200","7204")
+            .doesNotContain("Associado Lote Inativo","Associado Lote Arquivado","Visitante Externo Ativo","SECRET_STORAGE_SENTINEL");
+
+        // TECHNICAL layout and PDF across the same >200 cadastral selection preserve order, columns, and batch memberships
+        String technicalCsv=csv("/identity/admin/users/export","IDENTITY_USER_EXPORT",
+            "layout","TECHNICAL","name","Associado Lote","status","ACTIVE");
+        List<String> techLines=technicalCsv.lines().toList();
+        assertThat(techLines).hasSize(206);
+        assertThat(techLines.get(0)).startsWith("\uFEFF\"ID\";\"Matrícula\";\"Nome\";");
+        List<Long> techIds=techLines.subList(1,techLines.size()).stream().map(l -> csvCellAsLong(l, 0)).toList();
+        assertThat(techIds).containsExactlyElementsOf(expectedEligibleIds);
+
+        auth("IDENTITY_USER_EXPORT");
+        byte[] pdfBytes=mvc.perform(get("/identity/admin/users/export")
+                .param("format","PDF")
+                .param("name","Associado Lote")
+                .param("status","ACTIVE")
+                .header("Authorization","Bearer export-test"))
+            .andExpect(status().isOk())
+            .andReturn().getResponse().getContentAsByteArray();
+        try(var pdf=org.apache.pdfbox.Loader.loadPDF(pdfBytes)) {
+            assertThat(pdf.getNumberOfPages()).isGreaterThan(1);
+            assertThat(hasInstitutionalSeal(pdf)).isTrue();
+            String pdfText=new org.apache.pdfbox.text.PDFTextStripper().getText(pdf);
+            assertThat(pdfText)
+                .contains("Associado Lote 000","Associado Lote 199","Associado Lote 200","Associado Lote 204","7000","7204","Registro 1","Registro 200","Registro 201","Registro 205")
+                .doesNotContain("Associado Lote Inativo","Associado Lote Arquivado","Visitante Externo Ativo","SECRET_STORAGE_SENTINEL");
         }
     }
     @Test @org.springframework.transaction.annotation.Transactional
@@ -601,20 +711,49 @@ Arguments.of("/billing/admin/refunds/export","BILLING_EXPORT"));}
         var activeNoTowing=vehicle(id(u),"GHI7J89","12345678903",com.jeepclub.backend.vehicles.core.domain.enums.VehicleStatus.ACTIVE,false);
         var secondOwnerVehicle=vehicle(id(secondOwner),"JKL0M12","12345678904",com.jeepclub.backend.vehicles.core.domain.enums.VehicleStatus.ACTIVE,true);
         var inactive=vehicle(id(u),"DEF4G56","12345678902",com.jeepclub.backend.vehicles.core.domain.enums.VehicleStatus.INACTIVE,true);
+        var archived=vehicle(id(u),"PQR6S78","12345678906",com.jeepclub.backend.vehicles.core.domain.enums.VehicleStatus.ARCHIVED,true);
         var legacyDeleted=vehicle(id(u),"MNO3P45","12345678905",com.jeepclub.backend.vehicles.core.domain.enums.VehicleStatus.ACTIVE,true);
-        org.springframework.test.util.ReflectionTestUtils.setField(legacyDeleted,"legacyDeleted",true);em.flush();
+        org.springframework.test.util.ReflectionTestUtils.setField(legacyDeleted,"legacyDeleted",true);
+        seed("vehicles.infra.persistence.entity.VehicleHistoryEntity","vehicleId",888777L,"nickname","Removido",
+            "plate","STU9V01","renavam","12345678907","brand","Jeep","model","Renegade",
+            "manufacturingYear",2020,"modelYear",2021,"seatingCapacity",5,
+            "fuelType",com.jeepclub.backend.vehicles.core.domain.enums.FuelType.FLEX,"engineDisplacement",1.8,
+            "status",com.jeepclub.backend.vehicles.core.domain.enums.VehicleStatus.ACTIVE,"towing",true,
+            "ownerId",id(u),"deletedByUserId",999L,"createdAt",FIXTURE_TIME,"deletedAt",FIXTURE_TIME);
+        em.flush();
 
         String result=csv("/vehicles/admin/export","VEHICLES_VEHICLE_EXPORT","ownerId",id(u).toString());
         assertThat(result.lines().count()).isEqualTo(3);
-        assertThat(result).contains("ABC1D23","GHI7J89","Renegade","12345678901","Proprietário").doesNotContain("DEF4G56","MNO3P45","JKL0M12","PHOTO_SENTINEL");
+        assertThat(result).contains("ABC1D23","GHI7J89","Renegade","12345678901","Proprietário")
+            .doesNotContain("DEF4G56","PQR6S78","MNO3P45","STU9V01","JKL0M12","PHOTO_SENTINEL");
         assertThat(csv("/vehicles/admin/export","VEHICLES_VEHICLE_EXPORT","id",id(active).toString())).contains("ABC1D23").doesNotContain("GHI7J89");
 
         for(String format:List.of("CSV","PDF")) {
+            // Scalar compatibility: existing ACTIVE id + existing different ownerId -> 200 empty export
+            String scalarOwnerMismatch=download("/vehicles/admin/export","VEHICLES_VEHICLE_EXPORT",format,
+                "id",id(active).toString(),"ownerId",id(secondOwner).toString());
+            assertThat(scalarOwnerMismatch).doesNotContain("ABC1D23","JKL0M12");
+            if(format.equals("CSV"))assertThat(scalarOwnerMismatch.lines().count()).isEqualTo(1);
+            else assertThat(scalarOwnerMismatch).contains("Nenhum registro encontrado.");
+
+            // Scalar compatibility: existing ACTIVE id + opposite towing -> 200 empty export
+            String scalarTowingMismatch=download("/vehicles/admin/export","VEHICLES_VEHICLE_EXPORT",format,
+                "id",id(activeNoTowing).toString(),"towing","true");
+            assertThat(scalarTowingMismatch).doesNotContain("GHI7J89","ABC1D23");
+            if(format.equals("CSV"))assertThat(scalarTowingMismatch.lines().count()).isEqualTo(1);
+            else assertThat(scalarTowingMismatch).contains("Nenhum registro encontrado.");
+
+            // Scalar compatibility: existing owner without vehicles via scalar ownerId -> 200 empty export
+            String scalarEmptyOwner=download("/vehicles/admin/export","VEHICLES_VEHICLE_EXPORT",format,
+                "ownerId",id(emptyOwner).toString());
+            if(format.equals("CSV"))assertThat(scalarEmptyOwner.lines().count()).isEqualTo(1);
+            else assertThat(scalarEmptyOwner).contains("Nenhum registro encontrado.");
+
             // Multi-vehicle selection across 2 different owners with duplicate IDs (OR inside list)
             String byVehicleIds=download("/vehicles/admin/export","VEHICLES_VEHICLE_EXPORT",format,
                 "vehicleIds",id(active).toString(),"vehicleIds",id(secondOwnerVehicle).toString(),"vehicleIds",id(active).toString());
             assertThat(byVehicleIds).contains("ABC1D23","JKL0M12","Proprietário","Segundo Proprietário")
-                .doesNotContain("GHI7J89","DEF4G56","MNO3P45","PHOTO_SENTINEL");
+                .doesNotContain("GHI7J89","DEF4G56","PQR6S78","MNO3P45","STU9V01","PHOTO_SENTINEL");
             if(format.equals("CSV"))assertThat(byVehicleIds.lines().count()).isEqualTo(3);
 
             // Multi-owner selection with duplicate ownerIds combined with towing=true (AND across filters)
@@ -622,14 +761,14 @@ Arguments.of("/billing/admin/refunds/export","BILLING_EXPORT"));}
                 "ownerIds",id(u).toString(),"ownerIds",id(secondOwner).toString(),"ownerIds",id(u).toString(),
                 "towing","true");
             assertThat(byOwnersAndTowing).contains("ABC1D23","JKL0M12","Proprietário","Segundo Proprietário")
-                .doesNotContain("GHI7J89","DEF4G56","MNO3P45","PHOTO_SENTINEL");
+                .doesNotContain("GHI7J89","DEF4G56","PQR6S78","MNO3P45","STU9V01","PHOTO_SENTINEL");
             if(format.equals("CSV"))assertThat(byOwnersAndTowing.lines().count()).isEqualTo(3);
 
             // Single owner via ownerIds keeps PDF grouping and towing=false filters only without towing
             String towingFalse=download("/vehicles/admin/export","VEHICLES_VEHICLE_EXPORT",format,
                 "ownerIds",id(u).toString(),"towing","false");
             assertThat(towingFalse).contains("GHI7J89","Proprietário")
-                .doesNotContain("ABC1D23","JKL0M12","DEF4G56","MNO3P45","PHOTO_SENTINEL");
+                .doesNotContain("ABC1D23","JKL0M12","DEF4G56","PQR6S78","MNO3P45","STU9V01","PHOTO_SENTINEL");
             if(format.equals("CSV"))assertThat(towingFalse.lines().count()).isEqualTo(2);
 
             // Combined vehicleIds + ownerIds + towing=false (AND intersection)
@@ -650,15 +789,24 @@ Arguments.of("/billing/admin/refunds/export","BILLING_EXPORT"));}
             if(format.equals("CSV"))assertThat(emptyOwnerExport.lines().count()).isEqualTo(1);
         }
 
-        // 404 Not Found for nonexistent/inactive/legacy-deleted vehicle IDs or nonexistent owner IDs
+        // 404 Not Found for scalar or list nonexistent/inactive/archived/legacy-deleted/hard-deleted vehicle IDs or nonexistent owner IDs
         auth("VEHICLES_VEHICLE_EXPORT");
+        for(String badScalarVehicleId:List.of("987654321",id(inactive).toString(),id(archived).toString(),id(legacyDeleted).toString(),"888777"))
+            mvc.perform(get("/vehicles/admin/export").param("id",badScalarVehicleId).header("Authorization","Bearer export-test"))
+                .andExpect(status().isNotFound()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+        mvc.perform(get("/vehicles/admin/export").param("ownerId","987654321").header("Authorization","Bearer export-test"))
+            .andExpect(status().isNotFound()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
         mvc.perform(get("/vehicles/admin/export").param("vehicleIds","987654321").header("Authorization","Bearer export-test"))
             .andExpect(status().isNotFound()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
         mvc.perform(get("/vehicles/admin/export").param("vehicleIds",id(active).toString(),"987654321").header("Authorization","Bearer export-test"))
             .andExpect(status().isNotFound()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
         mvc.perform(get("/vehicles/admin/export").param("vehicleIds",id(inactive).toString()).header("Authorization","Bearer export-test"))
             .andExpect(status().isNotFound()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+        mvc.perform(get("/vehicles/admin/export").param("vehicleIds",id(archived).toString()).header("Authorization","Bearer export-test"))
+            .andExpect(status().isNotFound()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
         mvc.perform(get("/vehicles/admin/export").param("vehicleIds",id(legacyDeleted).toString()).header("Authorization","Bearer export-test"))
+            .andExpect(status().isNotFound()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+        mvc.perform(get("/vehicles/admin/export").param("vehicleIds","888777").header("Authorization","Bearer export-test"))
             .andExpect(status().isNotFound()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
         mvc.perform(get("/vehicles/admin/export").param("ownerIds","987654321").header("Authorization","Bearer export-test"))
             .andExpect(status().isNotFound()).andExpect(content().contentTypeCompatibleWith("application/problem+json"));
@@ -683,21 +831,101 @@ Arguments.of("/billing/admin/refunds/export","BILLING_EXPORT"));}
     }
     @Test @org.springframework.transaction.annotation.Transactional
     void vehiclesExportExecutesBoundedSqlAcrossChunksWithoutNPlusOne()throws Exception {
-        var u=user("Titular Frota","52998224725");
-        for(int i=0;i<205;i++) {
-            String plate=String.format("EXP%04d",i);
-            String renavam=String.format("90000000%03d",i);
-            vehicle(id(u),plate,renavam,com.jeepclub.backend.vehicles.core.domain.enums.VehicleStatus.ACTIVE,i%2==0);
+        List<Long> selectedOwnerIds=new ArrayList<>();
+        for(int o=0;o<10;o++) {
+            var owner=user("Titular Frota "+o,String.format("81000000%03d",o));
+            selectedOwnerIds.add(id(owner));
         }
+        var unselectedOwner=user("Titular Fora Selecao","81999999999");
+
+        List<Long> expectedEligibleIds=new ArrayList<>();
+        for(int i=0;i<205;i++) {
+            Long ownerId=selectedOwnerIds.get(i%selectedOwnerIds.size());
+            var eligible=vehicle(ownerId,String.format("EXP%04d",i),String.format("90000000%03d",i),
+                com.jeepclub.backend.vehicles.core.domain.enums.VehicleStatus.ACTIVE,true);
+            expectedEligibleIds.add(id(eligible));
+        }
+        expectedEligibleIds.sort(Comparator.naturalOrder());
+
+        // Excluded records: towing=false, INACTIVE, ARCHIVED, legacyDeleted=true, history snapshot, and unselected owner
+        var excludedNoTowingA=vehicle(selectedOwnerIds.get(0),"NTW0001","91000000001",com.jeepclub.backend.vehicles.core.domain.enums.VehicleStatus.ACTIVE,false);
+        var excludedNoTowingB=vehicle(selectedOwnerIds.get(5),"NTW0002","91000000002",com.jeepclub.backend.vehicles.core.domain.enums.VehicleStatus.ACTIVE,false);
+        var excludedInactive=vehicle(selectedOwnerIds.get(1),"INA0001","91000000003",com.jeepclub.backend.vehicles.core.domain.enums.VehicleStatus.INACTIVE,true);
+        var excludedArchived=vehicle(selectedOwnerIds.get(2),"ARC0001","91000000004",com.jeepclub.backend.vehicles.core.domain.enums.VehicleStatus.ARCHIVED,true);
+        var excludedLegacyDeleted=vehicle(selectedOwnerIds.get(3),"LGD0001","91000000005",com.jeepclub.backend.vehicles.core.domain.enums.VehicleStatus.ACTIVE,true);
+        org.springframework.test.util.ReflectionTestUtils.setField(excludedLegacyDeleted,"legacyDeleted",true);
+        seed("vehicles.infra.persistence.entity.VehicleHistoryEntity","vehicleId",888999L,"nickname","Excluido Historico",
+            "plate","HST0001","renavam","91000000006","brand","Jeep","model","Renegade",
+            "manufacturingYear",2020,"modelYear",2021,"seatingCapacity",5,
+            "fuelType",com.jeepclub.backend.vehicles.core.domain.enums.FuelType.FLEX,"engineDisplacement",1.8,
+            "status",com.jeepclub.backend.vehicles.core.domain.enums.VehicleStatus.ACTIVE,"towing",true,
+            "ownerId",selectedOwnerIds.get(4),"deletedByUserId",999L,"createdAt",FIXTURE_TIME,"deletedAt",FIXTURE_TIME);
+        var excludedUnselectedOwner=vehicle(id(unselectedOwner),"UNS0001","91000000007",com.jeepclub.backend.vehicles.core.domain.enums.VehicleStatus.ACTIVE,true);
+        Set<Long> excludedIds=Set.of(
+            id(excludedNoTowingA),id(excludedNoTowingB),id(excludedInactive),
+            id(excludedArchived),id(excludedLegacyDeleted),888999L,id(excludedUnselectedOwner)
+        );
+
+        String[] ownerIdParams=selectedOwnerIds.stream().map(String::valueOf).toArray(String[]::new);
         em.flush();em.clear();
+
         var stats=em.getEntityManagerFactory().unwrap(org.hibernate.SessionFactory.class).getStatistics();
+        boolean previousStatsEnabled=stats.isStatisticsEnabled();
         stats.setStatisticsEnabled(true);stats.clear();
+        String csvResult;
+        long preparedStatements;
         try {
-            String result=csv("/vehicles/admin/export","VEHICLES_VEHICLE_EXPORT","ownerIds",id(u).toString(),"towing","true");
-            assertThat(result.lines().count()).isEqualTo(104); // 1 header + 103 towing=true rows (0..204 step 2)
-            assertThat(stats.getPrepareStatementCount()).isLessThanOrEqualTo(6);
+            auth("VEHICLES_VEHICLE_EXPORT");
+            var request=get("/vehicles/admin/export")
+                .param("format","CSV")
+                .param("ownerIds",ownerIdParams)
+                .param("towing","true")
+                .header("Authorization","Bearer export-test");
+            csvResult=mvc.perform(request).andExpect(status().isOk()).andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+            preparedStatements=stats.getPrepareStatementCount();
         } finally {
-            stats.setStatisticsEnabled(false);
+            stats.clear();
+            stats.setStatisticsEnabled(previousStatsEnabled);
+        }
+
+        // Expected bounded SQL for 2 non-empty chunks (200 + 5 rows across 10 owners):
+        // 1 owner existence batch + 2 * (1 vehicle chunk read + 1 owner details batch) + 1 audit log insert = 6 queries
+        assertThat(preparedStatements).isBetween(5L,7L);
+
+        List<String> lines=csvResult.lines().toList();
+        assertThat(lines).hasSize(206); // 1 header + 205 eligible vehicles across 2 non-empty chunks (200 + 5)
+        List<Long> exportedIds=lines.subList(1,lines.size()).stream().map(line -> csvCellAsLong(line, 0)).toList();
+        assertThat(exportedIds)
+            .hasSize(205)
+            .doesNotHaveDuplicates()
+            .isSorted()
+            .containsExactlyElementsOf(expectedEligibleIds)
+            .doesNotContainAnyElementsOf(excludedIds);
+        // Explicit chunk boundary verification (chunk 1: [0..199], chunk 2: [200..204])
+        assertThat(exportedIds.get(0)).isEqualTo(expectedEligibleIds.get(0));
+        assertThat(exportedIds.get(com.jeepclub.backend.shared.export.ExportPages.CHUNK-1)).isEqualTo(expectedEligibleIds.get(199));
+        assertThat(exportedIds.get(com.jeepclub.backend.shared.export.ExportPages.CHUNK)).isEqualTo(expectedEligibleIds.get(200));
+        assertThat(exportedIds.get(204)).isEqualTo(expectedEligibleIds.get(204));
+        assertThat(csvResult)
+            .contains("EXP0000","EXP0199","EXP0200","EXP0204","Titular Frota 0","Titular Frota 9")
+            .doesNotContain("NTW0001","NTW0002","INA0001","ARC0001","LGD0001","HST0001","UNS0001","Titular Fora Selecao","PHOTO_SENTINEL");
+
+        // PDF format across the same >200 multi-chunk selection without regression
+        auth("VEHICLES_VEHICLE_EXPORT");
+        byte[] pdfBytes=mvc.perform(get("/vehicles/admin/export")
+                .param("format","PDF")
+                .param("ownerIds",ownerIdParams)
+                .param("towing","true")
+                .header("Authorization","Bearer export-test"))
+            .andExpect(status().isOk())
+            .andReturn().getResponse().getContentAsByteArray();
+        try(var pdf=org.apache.pdfbox.Loader.loadPDF(pdfBytes)) {
+            assertThat(pdf.getNumberOfPages()).isGreaterThan(1);
+            assertThat(hasInstitutionalSeal(pdf)).isTrue();
+            String pdfText=new org.apache.pdfbox.text.PDFTextStripper().getText(pdf);
+            assertThat(pdfText)
+                .contains("EXP0000","EXP0199","EXP0200","EXP0204","Registro 1","Registro 200","Registro 201","Registro 205")
+                .doesNotContain("NTW0001","INA0001","ARC0001","LGD0001","HST0001","UNS0001","Titular Fora Selecao");
         }
     }
     private Object vehicle(Long owner,String plate,String renavam,com.jeepclub.backend.vehicles.core.domain.enums.VehicleStatus state)throws Exception {
@@ -742,6 +970,24 @@ Arguments.of("/billing/admin/refunds/export","BILLING_EXPORT"));}
         for(String format:List.of("CSV","PDF"))mvc.perform(get("/admin/events/"+id(event)+"/reports/manifest/export").param("format",format).header("Authorization","Bearer export-test"))
             .andExpect(status().isPayloadTooLarge()).andExpect(content().contentTypeCompatibleWith("application/problem+json"))
             .andExpect(header().doesNotExist("Content-Disposition"));
+    }
+
+    private static List<String> parseCsvCells(String csvLine) {
+        String normalized = csvLine.startsWith("\uFEFF") ? csvLine.substring(1) : csvLine;
+        String[] parts = normalized.split(";", -1);
+        List<String> cells = new ArrayList<>(parts.length);
+        for (String part : parts) {
+            if (part.length() >= 2 && part.startsWith("\"") && part.endsWith("\"")) {
+                cells.add(part.substring(1, part.length() - 1).replace("\"\"", "\""));
+            } else {
+                cells.add(part);
+            }
+        }
+        return cells;
+    }
+
+    private static Long csvCellAsLong(String csvLine, int index) {
+        return Long.parseLong(parseCsvCells(csvLine).get(index));
     }
 
     private static boolean hasInstitutionalSeal(org.apache.pdfbox.pdmodel.PDDocument pdf) throws Exception {

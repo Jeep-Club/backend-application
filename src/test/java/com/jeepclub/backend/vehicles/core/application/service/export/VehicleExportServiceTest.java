@@ -134,6 +134,35 @@ class VehicleExportServiceTest {
         service.export(ExportFormat.PDF, null, null, null, List.of(10L, 10L), false, null, null, null, null);
     }
 
+    @Test
+    void acceptsExactMaxIdsBoundaryAndCharacterizesScalarFilterCompatibility() {
+        List<Long> maxIds = LongStream.rangeClosed(1, VehicleExportService.MAX_IDS).boxed().toList();
+        when(query.countByIds(maxIds)).thenReturn((long) VehicleExportService.MAX_IDS);
+        when(query.read(maxIds, null, null, null, null, null, null, 0)).thenReturn(List.of());
+        when(renderer.render(any(ExportDocument.class), eq(ExportFormat.CSV))).thenAnswer(inv -> {
+            ExportDocument doc = inv.getArgument(0);
+            List<ExportRow> rows = new ArrayList<>();
+            doc.rows().read(rows::add);
+            assertThat(rows).isEmpty();
+            return new ExportFile("veiculos.csv", "text/csv", new byte[]{1});
+        });
+
+        service.export(ExportFormat.CSV, null, maxIds, null, null, null, null, null, null, null);
+
+        // Scalar id + different existing ownerId: both targets exist -> empty export (200), not 404
+        when(users.existsById(20L)).thenReturn(true);
+        when(query.countByIds(List.of(1L))).thenReturn(1L);
+        when(query.read(List.of(1L), List.of(20L), null, null, null, null, null, 0)).thenReturn(List.of());
+        service.export(ExportFormat.CSV, 1L, 20L, null, null, null, null);
+
+        // Scalar nonexistent/inactive id: countByIds == 0 -> NOT_FOUND (404)
+        when(query.countByIds(List.of(999L))).thenReturn(0L);
+        assertThatThrownBy(() -> service.export(ExportFormat.CSV, 999L, null, null, null, null, null))
+                .isInstanceOf(ExportException.class)
+                .extracting(ex -> ((ExportException) ex).reason())
+                .isEqualTo(ExportException.Reason.NOT_FOUND);
+    }
+
     private static UserDetails user(Long id, String name, String cpf) {
         return new UserDetails(id, name, null, null, cpf, null, null, null, true, null, null, null, UserStatus.ACTIVE, null);
     }

@@ -148,6 +148,28 @@ class UserExportServiceTest {
         service.export(filter, List.of(10L, 30L), ExportFormat.CSV, UserExportLayout.TECHNICAL);
     }
 
+    @Test
+    void acceptsExactMaxIdsAndPreservesIdsAcrossResolvedMembershipAndDefaultMemberLayout() {
+        List<Long> maxIds = LongStream.rangeClosed(1, UserExportService.MAX_IDS).boxed().toList();
+        AdminUserFilter base = emptyFilter(null).withIds(maxIds);
+        assertThat(base.resolvedMembership(10L, 20L).ids()).containsExactlyElementsOf(maxIds);
+
+        when(query.countByIds(maxIds)).thenReturn((long) UserExportService.MAX_IDS);
+        when(query.findAll(any(AdminUserFilter.class), eq(EnumSet.allOf(AdminUserField.class)), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of()));
+        when(renderer.render(any(ExportDocument.class), eq(ExportFormat.CSV))).thenAnswer(inv -> {
+            ExportDocument doc = inv.getArgument(0);
+            List<ExportRow> rows = new ArrayList<>();
+            doc.rows().read(rows::add);
+            assertThat(rows).isEmpty();
+            assertThat(doc.columns().get(0)).isEqualTo("Matrícula");
+            assertThat(doc.columns().get(doc.columns().size() - 1)).isEqualTo("ID técnico");
+            return new ExportFile("usuarios.csv", "text/csv", new byte[]{1});
+        });
+
+        service.export(base, ExportFormat.CSV);
+    }
+
     private static AdminUserFilter emptyFilter(Long id) {
         return new AdminUserFilter(id, null, null, null, null, null, null, null, null, null, null, null, null);
     }

@@ -15,7 +15,7 @@ final class PdfExportWriter implements AutoCloseable {
     private static final float SEAL_Y = 766f;
     private static final float SEAL_HEIGHT = 36f;
 
-    private final PDDocument pdf = new PDDocument();
+    private final PDDocument pdf;
     private final PDType0Font font;
     private final PDImageXObject seal;
     private final ExportDocument document;
@@ -25,30 +25,51 @@ final class PdfExportWriter implements AutoCloseable {
     private String group;
     private int rows;
     PdfExportWriter(ExportDocument document, Instant generated) throws IOException {
-        this.document=document; this.generated=generated;
-        try (var input = PDType0Font.class.getResourceAsStream("/org/apache/pdfbox/resources/ttf/LiberationSans-Regular.ttf")) {
-            font=PDType0Font.load(pdf,input);
-        }
-        this.seal = loadSeal(pdf);
-        pdf.getDocumentInformation().setTitle(document.title());
-        pdf.getDocumentInformation().setCreator("Jeep Club");
-        var date=GregorianCalendar.from(generated.atZone(java.time.ZoneOffset.UTC));
-        pdf.getDocumentInformation().setCreationDate(date);
-        page();
-        for (String filter : document.filters()) text("Filtro: " + filter, 10, 500);
-        y-=12;
+        this(new PDDocument(), document, generated, SEAL_RESOURCE);
     }
-    private static PDImageXObject loadSeal(PDDocument pdf) throws IOException {
-        try (var input = PdfExportWriter.class.getResourceAsStream(SEAL_RESOURCE)) {
+    PdfExportWriter(PDDocument pdf, ExportDocument document, Instant generated, String sealResource) throws IOException {
+        this.pdf = Objects.requireNonNull(pdf, "pdf");
+        this.document = Objects.requireNonNull(document, "document");
+        this.generated = Objects.requireNonNull(generated, "generated");
+        try {
+            try (var input = PDType0Font.class.getResourceAsStream("/org/apache/pdfbox/resources/ttf/LiberationSans-Regular.ttf")) {
+                if (input == null) {
+                    throw new IOException("Missing embedded PDF font resource");
+                }
+                font = PDType0Font.load(this.pdf, input);
+            }
+            this.seal = loadSeal(this.pdf, sealResource);
+            this.pdf.getDocumentInformation().setTitle(document.title());
+            this.pdf.getDocumentInformation().setCreator("Jeep Club");
+            var date = GregorianCalendar.from(generated.atZone(java.time.ZoneOffset.UTC));
+            this.pdf.getDocumentInformation().setCreationDate(date);
+            page();
+            for (String filter : document.filters()) text("Filtro: " + filter, 10, 500);
+            y -= 12;
+        } catch (Throwable failure) {
+            try {
+                close();
+            } catch (Throwable closeFailure) {
+                failure.addSuppressed(closeFailure);
+            }
+            throw failure;
+        }
+    }
+    private static PDImageXObject loadSeal(PDDocument pdf, String sealResource) throws IOException {
+        try (var input = PdfExportWriter.class.getResourceAsStream(sealResource)) {
             if (input == null) {
-                throw new IOException("Missing institutional PDF seal resource: " + SEAL_RESOURCE);
+                throw new IOException("Missing institutional PDF seal resource: " + sealResource);
             }
             return PDImageXObject.createFromByteArray(pdf, input.readAllBytes(), "jeep-club-seal");
         }
     }
     private void page() throws IOException {
         if (pdf.getNumberOfPages()>=1000) throw new ExportException(ExportException.Reason.LIMIT);
-        if(stream!=null) stream.close();
+        if (stream != null) {
+            var previous = stream;
+            stream = null;
+            previous.close();
+        }
         var page=new PDPage(PDRectangle.A4); pdf.addPage(page);
         stream=new PDPageContentStream(pdf,page);
         float sealWidth = SEAL_HEIGHT * seal.getWidth() / (float) seal.getHeight();
@@ -118,7 +139,21 @@ final class PdfExportWriter implements AutoCloseable {
     }
     void save(OutputStream output) throws IOException {
         if(rows==0) text("Nenhum registro encontrado.",11,500);
-        stream.close();stream=null;pdf.save(output);
+        if (stream != null) {
+            var current = stream;
+            stream = null;
+            current.close();
+        }
+        pdf.save(output);
     }
-    public void close() throws IOException { if(stream!=null)stream.close();pdf.close(); }
+    @Override
+    public void close() throws IOException {
+        try (pdf) {
+            if (stream != null) {
+                var current = stream;
+                stream = null;
+                current.close();
+            }
+        }
+    }
 }
