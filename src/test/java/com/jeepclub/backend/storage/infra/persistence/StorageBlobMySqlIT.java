@@ -17,15 +17,16 @@ class StorageBlobMySqlIT extends StorageUploadFlowTest {
                 org.assertj.core.api.Assertions.assertThat(row.next() && row.getInt(1) == 1).isTrue();
             }
             var entered = new java.util.concurrent.CountDownLatch(1);
+            var readEnded = new java.util.concurrent.CountDownLatch(1);
             var readFailure = new java.util.concurrent.atomic.AtomicReference<java.sql.SQLException>();
             var pending = executor.submit(() -> {
                 var tx = new org.springframework.transaction.support.TransactionTemplate(manager);
-                tx.setTimeout(20);
+                tx.setTimeout(30);
                 tx.executeWithoutResult(status -> {
                     admission.boundCatalogTransaction();
                     quotaEntityManager.unwrap(org.hibernate.Session.class).doWork(connection -> {
                         org.assertj.core.api.Assertions.assertThat(connection.getNetworkTimeout()).isEqualTo(7000);
-                        try (var blocked = connection.prepareStatement("select get_lock(?,18)")) {
+                        try (var blocked = connection.prepareStatement("select get_lock(?,25)")) {
                             blocked.setString(1, lock);
                             entered.countDown();
                             try {
@@ -33,18 +34,26 @@ class StorageBlobMySqlIT extends StorageUploadFlowTest {
                             } catch (java.sql.SQLException failure) {
                                 readFailure.set(failure);
                                 throw failure;
+                            } finally {
+                                readEnded.countDown();
                             }
                         }
                     });
                 });
             });
             org.assertj.core.api.Assertions.assertThat(entered.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
-            Throwable failure = org.assertj.core.api.Assertions.catchThrowable(
-                    () -> pending.get(12, java.util.concurrent.TimeUnit.SECONDS));
-            org.assertj.core.api.Assertions.assertThat(failure).isInstanceOf(java.util.concurrent.ExecutionException.class);
+            // The driver's connection-failure handling can outlast the seven-second socket read.
+            org.assertj.core.api.Assertions.assertThat(readEnded.await(16, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
             var causes = new java.util.ArrayList<Throwable>();
             for (Throwable cause = readFailure.get(); cause != null; cause = cause.getCause()) causes.add(cause);
             org.assertj.core.api.Assertions.assertThat(causes).anyMatch(java.net.SocketTimeoutException.class::isInstance);
+            try (var release = blocker.prepareStatement("select release_lock(?)")) {
+                release.setString(1, lock);
+                release.executeQuery().close();
+            }
+            Throwable failure = org.assertj.core.api.Assertions.catchThrowable(
+                    () -> pending.get(12, java.util.concurrent.TimeUnit.SECONDS));
+            org.assertj.core.api.Assertions.assertThat(failure).isInstanceOf(java.util.concurrent.ExecutionException.class);
         } finally {
             executor.shutdownNow();
         }
