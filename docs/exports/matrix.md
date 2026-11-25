@@ -7,12 +7,12 @@ O bounded context define colunas e consultas; shared.export define somente o con
 
 | Issue / módulo | Produto / seleção | Campos e restrições | Formatos | Permission |
 | --- | --- | --- | --- | --- |
-| BACK-413 Identity | Usuários: todos, ID, filtros cadastrais atuais | Cadastro, status, datas, existência de foto; sem storage | CSV/PDF | IDENTITY_USER_EXPORT |
+| BACK-413 / BACK-600 Identity | Usuários: todos, ID, ids, filtros cadastrais atuais | Cadastro, status, datas, existência de foto; sem storage | CSV/PDF | IDENTITY_USER_EXPORT |
 | BACK-414 Authentication | Contas por identityId; sessões, refresh e recuperação: todos/ID/filtros existentes | Estados, referências e datas; nunca senha/hash/token | CSV/PDF | AUTHENTICATION_EXPORT |
 | BACK-476 Authorization | Roles e permissions todos/ID; usuários todos/ID com vínculos e permissions efetivas | Nome/CPF por Identity; somente roles ativas concedem acesso | CSV/PDF | AUTHORIZATION_EXPORT |
 | BACK-415 Memberships | Solicitações todos/ID/status/período; bloqueios todos/ID/filtros | Cadastro, decisão, responsáveis, datas; sem activation/version/activeCpf | CSV/PDF | MEMBERSHIP_EXPORT |
 | BACK-417 / BACK-609 Dependents | Operacional todos/id/ids/userId/userIds/name/status; histórico completo separado | Cadastro, vínculo, status/datas, titular público; histórico com executor/data | CSV/PDF | DEPENDENTS_DEPENDENT_EXPORT |
-| BACK-418 Vehicles | ACTIVE todos/ID/ownerId; histórico separado | Dados funcionais completos, possui foto; exclui SOFT_DELETED operacional | CSV/PDF | VEHICLES_VEHICLE_EXPORT |
+| BACK-418 / BACK-600 Vehicles | ACTIVE todos/ID/vehicleIds/ownerId/ownerIds/towing; histórico separado | Dados funcionais completos, possui foto; exclui SOFT_DELETED operacional | CSV/PDF | VEHICLES_VEHICLE_EXPORT |
 | BACK-419 Tools | Todos/ID/userId/nome/status; histórico separado | Nome, descrição, estado, datas, possui foto; sem storage | CSV/PDF | TOOLS_TOOL_EXPORT |
 | BACK-420 Health | Todos/profileId/userId/dependentId; agregado titular/dependentes; histórico separado | Ficha clínica, owners válidos, identificação pública; sem conteúdo clínico em logs | CSV/PDF | HEALTH_MEDICAL_PROFILE_EXPORT |
 | BACK-416 Billing | Definitions × Assignments; Cycles; Charges; Payments; Refunds; todos/ID/filtros | Snapshots, valores/status/datas, usuário e Event públicos; sem receiptStorageKey | CSV/PDF | BILLING_EXPORT |
@@ -26,7 +26,7 @@ A necessidade operacional de cada linha é afirmativa. Colunas de exportação s
 
 | Módulo | Recurso | Necessidade | CSV | PDF | Filtros | Campos incluídos | Excluídos / minimizados | Permission | Volume esperado / limite | Risco LGPD | Filename base |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Identity | Usuários | Sim | Sim | Sim | todos, id, filtros cadastrais | cadastro, datas, status, possui foto | storage da foto | `IDENTITY_USER_EXPORT` | Não medido; CSV 20.000 / PDF 500 | Alto: CPF/contato | `usuarios` |
+| Identity | Usuários | Sim | Sim | Sim | todos, id, ids, filtros cadastrais | cadastro, datas, status, possui foto | storage da foto | `IDENTITY_USER_EXPORT` | Não medido; CSV 20.000 / PDF 500 | Alto: CPF/contato | `usuarios` |
 | Authentication | Contas | Sim | Sim | Sim | todos, identityId | estados, datas, tentativas | passwordHash | `AUTHENTICATION_EXPORT` | Não medido; CSV 20.000 / PDF 500 | Moderado: operação | `contas-autenticacao` |
 | Authentication | Sessões | Sim | Sim | Sim | todos, id, userId, status | usuário, datas, estado | JWT e segredos | `AUTHENTICATION_EXPORT` | Não medido; CSV 20.000 / PDF 500 | Moderado: operação | `sessoes` |
 | Authentication | Refresh tokens | Sim | Sim | Sim | todos, id, userId, status | sessão, datas, estado, substituição | tokenHash | `AUTHENTICATION_EXPORT` | Não medido; CSV 20.000 / PDF 500 | Moderado: operação | `registros-renovacao` |
@@ -38,7 +38,7 @@ A necessidade operacional de cada linha é afirmativa. Colunas de exportação s
 | Memberships | Bloqueios | Sim | Sim | Sim | todos, id, período | CPF, motivo, ator, datas | activeCpf | `MEMBERSHIP_EXPORT` | Não medido; CSV 20.000 / PDF 500 | Alto: CPF/contato | `bloqueios` |
 | Dependents | Dependentes | Sim | Sim | Sim | todos, id, ids, userId, userIds, name, status | cadastro, vínculo, titular | storage, dados médicos | `DEPENDENTS_DEPENDENT_EXPORT` | Não medido; CSV 20.000 / PDF 500 | Alto: CPF/contato | `dependentes` |
 | Dependents | Histórico | Sim | Sim | Sim | todos | snapshot, ator/data exclusão | storage | `DEPENDENTS_DEPENDENT_EXPORT` | Não medido; CSV 20.000 / PDF 500 | Moderado: operação | `historico-dependentes` |
-| Vehicles | Veículos ACTIVE | Sim | Sim | Sim | todos, id, ownerId | dados funcionais, titular, possui foto | foto/storage | `VEHICLES_VEHICLE_EXPORT` | Não medido; CSV 20.000 / PDF 500 | Moderado: operação | `veiculos` |
+| Vehicles | Veículos ACTIVE | Sim | Sim | Sim | todos, id, vehicleIds, ownerId, ownerIds, towing | dados funcionais, titular, possui foto | foto/storage | `VEHICLES_VEHICLE_EXPORT` | Não medido; CSV 20.000 / PDF 500 | Moderado: operação | `veiculos` |
 | Vehicles | Histórico | Sim | Sim | Sim | todos | snapshot, ator/data exclusão | foto/storage | `VEHICLES_VEHICLE_EXPORT` | Não medido; CSV 20.000 / PDF 500 | Moderado: operação | `historico-veiculos` |
 | Tools | Ferramentas | Sim | Sim | Sim | todos, id, userId, nome, status | descrição, status, titular, possui foto | photoStorageKey | `TOOLS_TOOL_EXPORT` | Não medido; CSV 20.000 / PDF 500 | Moderado: operação | `ferramentas` |
 | Tools | Histórico | Sim | Sim | Sim | todos | snapshot, ator/data exclusão | photoStorageKey | `TOOLS_TOOL_EXPORT` | Não medido; CSV 20.000 / PDF 500 | Moderado: operação | `historico-ferramentas` |
@@ -64,6 +64,12 @@ A necessidade operacional de cada linha é afirmativa. Colunas de exportação s
 ## Campos e filtros
 
 As listas explícitas de colunas pertencem aos modelos de exportação do módulo. OpenAPI é a fonte dos endpoints/parâmetros. Billing deriva mês/ano do vencimento e usa EventChargeContext. O PDF por titular agrupa identificação e recursos. CSV permanece plano. A seleção filtrada percorre todos os lotes correspondentes; não aceita paginação HTTP para cortar resultados.
+
+## Identidade visual dos PDFs — BACK-604 / BACK-618 / BACK-619
+
+Todos os 38 fluxos que geram PDF no backend — as 31 exportações cadastrais administrativas, os 6 relatórios operacionais de eventos (`manifest`, `transport`, `financial`, `access`, `health-coverage`, `post-event`) e a ficha médica emergencial individual (`/admin/events/{eventId}/health/{type}/{target}/export`) — utilizam exclusivamente `ExportRenderer` (`DefaultExportRenderer` → `PdfExportWriter`), sem geradores PDFBox duplicados nos módulos.
+
+O selo oficial do Jeep Clube (`src/main/resources/exports/jeepclube-emblema.png`, `256x246`, RGBA, sem chunks de metadados pessoais e sem I/O remoto) é carregado uma única vez por documento `PDDocument` e desenhado no cabeçalho de todas as páginas junto ao título `JEEP CLUB | <título>` e ao timestamp de geração, preservando legibilidade, margens, rodapé de paginação, CSV e headers `Cache-Control: no-store`.
 
 ## Volume e operação
 

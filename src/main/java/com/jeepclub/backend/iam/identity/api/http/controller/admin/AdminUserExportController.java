@@ -11,18 +11,23 @@ import org.springframework.http.ResponseEntity;
 import org.springdoc.core.annotations.ParameterObject;
 import jakarta.validation.Valid;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.constraints.Positive;
 import lombok.RequiredArgsConstructor;
+import java.util.List;
 @RestController @RequiredArgsConstructor @Tag(name="Identity - Exportações")
 public class AdminUserExportController {
     private final UserExportService service;
     @GetMapping(value="/identity/admin/users/export",produces={"text/csv","application/pdf"})
     @PreAuthorize("hasAuthority('IDENTITY_USER_EXPORT')") @RequiredPermission("IDENTITY_USER_EXPORT")
-    @Operation(summary="Exportar usuários",description="Todos, por ID ou filtros cadastrais idênticos à listagem. CSV/PDF contém cadastro, estado, datas e existência de foto. Sem paginação HTTP, sem credenciais ou storage keys. Datas em America/Sao_Paulo. layout=MEMBER (padrão) prioriza Matrícula e deixa ID técnico na última coluna. layout=TECHNICAL preserva cabeçalhos e ordem anteriores; ID significa a chave técnica, nunca matrícula. Ambos usam a matrícula vigente.")
+    @Operation(summary="Exportar usuários",description="Todos, por seleção unitária (id), seleção múltipla repetível (ids, máximo 200, deduplicados, OR entre IDs) ou filtros cadastrais idênticos à listagem (AND entre grupos de filtros). Combinar id+ids retorna 400. CSV/PDF contém cadastro, estado, datas e existência de foto. Sem paginação HTTP, sem credenciais ou storage keys. Datas em America/Sao_Paulo. layout=MEMBER (padrão) prioriza Matrícula e deixa ID técnico na última coluna. layout=TECHNICAL preserva cabeçalhos e ordem anteriores; ID significa a chave técnica, nunca matrícula. Ambos usam a matrícula vigente.")
     @ExportResponse
     public ResponseEntity<byte[]> export(@Valid @ParameterObject @ModelAttribute AdminUserFilterDTO filter,
+            @Parameter(description="Identificadores técnicos de usuários para seleção múltipla (repetível: ids=1&ids=2, máximo 200; não combinar com id).")
+            @RequestParam(required=false) List<@Positive Long> ids,
             @RequestParam(defaultValue="CSV") ExportFormat format,
             @RequestParam(defaultValue="MEMBER") UserExportLayout layout) {
-        return ExportDownload.response(service.export(filter.toFilter(),format,layout));
+        return ExportDownload.response(service.export(filter.toFilter(),ids,format,layout));
     }
 }

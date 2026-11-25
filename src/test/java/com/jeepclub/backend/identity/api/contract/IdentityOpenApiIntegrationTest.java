@@ -305,4 +305,21 @@ class IdentityOpenApiIntegrationTest {
                 .andExpect(jsonPath("$['paths']['/identity/admin/users/{userId}/profile']['put']['requestBody']['content']['application/json']['schema']['$ref']").value("#/components/schemas/IdentityUserProfileData"));
     }
 
+    @Test
+    void administrativeExportDocumentsMultiSelectIdsWithoutPollutingListEndpoint() throws Exception {
+        mockMvc.perform(get("/v3/api-docs")).andExpect(status().isOk())
+                .andExpect(jsonPath("$['paths']['/identity/admin/users/export']['get']['x-required-permissions'][0]")
+                        .value("IDENTITY_USER_EXPORT"))
+                .andExpect(jsonPath("$['paths']['/identity/admin/users/export']['get']['parameters'][*].name")
+                        .value(org.hamcrest.Matchers.hasItems("id", "ids", "format", "layout", "name", "cpf", "status", "membershipNumber")))
+                .andExpect(jsonPath("$['paths']['/identity/admin/users/export']['get']['parameters'][?(@.name == 'ids')].schema.type")
+                        .value(org.hamcrest.Matchers.hasItem("array")))
+                .andExpect(jsonPath("$['paths']['/identity/admin/users/export']['get']['responses']['400']['content']['application/problem+json']['schema']['$ref']")
+                        .value("#/components/schemas/ApiErrorResponse"))
+                .andExpect(jsonPath("$['paths']['/identity/admin/users/export']['get']['responses']['404']['content']['application/problem+json']['schema']['$ref']")
+                        .value("#/components/schemas/ApiErrorResponse"))
+                .andExpect(jsonPath("$['paths']['/identity/admin/users']['get']['parameters'][?(@.name == 'ids')]")
+                        .isEmpty());
+    }
+
 }

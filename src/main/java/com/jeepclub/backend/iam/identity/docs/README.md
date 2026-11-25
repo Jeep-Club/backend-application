@@ -325,9 +325,9 @@ cobertura proporcional conforme as
 [regras globais](../../../../../../../../../docs/architecture/feature-development-rules.md#testes-m%C3%ADnimos).
 
 
-## Exportações CSV/PDF — BACK-410
+## Exportações CSV/PDF — BACK-410 / BACK-600
 
-UserQuery.findByIds e findAfterId oferecem leitura administrativa em lote de até 500, incluindo cadastros desativados para auditoria. Export mantém filtros AdminUserFilter existentes; foto aparece somente como booleano. IDENTITY_USER_EXPORT é independente de READ.
+`UserQuery.findByIds` e `findAfterId` oferecem leitura administrativa em lote de até 500, incluindo cadastros desativados para auditoria. O endpoint `GET /identity/admin/users/export` aceita filtros `AdminUserFilter` (com `id` escalar) e seleção múltipla repetível `ids` (máximo 200, deduplicados, `OR` entre IDs e `AND` com os filtros cadastrais, sem alterar `GET /identity/admin/users`); combinar `id`+`ids` retorna `400`, e qualquer ID inexistente retorna `404`. Foto aparece somente como booleano. `IDENTITY_USER_EXPORT` é independente de `READ`.
 
 Contratos HTTP, limites, segurança e evidências estão em `docs/exports/` na raiz do repositório. As exportações são administrativas, sem paginação HTTP, com auditoria síncrona e `Cache-Control: no-store`.
 
