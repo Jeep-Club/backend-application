@@ -82,6 +82,8 @@ class LocalPhysicalBlobStoreTest {
             }
         })).isInstanceOf(IllegalStateException.class).hasMessage("fixture storage deadline");
         assertThat(childPid.get()).isPositive();
+        var child = ProcessHandle.of(childPid.get());
+        if (child.isPresent()) child.get().onExit().get(10, java.util.concurrent.TimeUnit.SECONDS);
         assertThat(ProcessHandle.of(childPid.get()).filter(ProcessHandle::isAlive)).isEmpty();
         Path directory = providerRoot.resolve("storage-blobs");
         assertThat(directory.resolve(digest + ".bin")).doesNotExist();
@@ -89,7 +91,14 @@ class LocalPhysicalBlobStoreTest {
             assertThat(paths.map(path -> path.getFileName().toString()).toList())
                     .hasSize(1).allMatch(name -> name.startsWith(digest + ".") && name.endsWith(".pending"));
         }
-        physical.putVerified(digest, bytes);
+        long retryDeadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+        while (true) {
+            try { physical.putVerified(digest, bytes); break; }
+            catch (IllegalStateException unavailable) {
+                if (System.nanoTime() >= retryDeadline) throw unavailable;
+                Thread.sleep(10);
+            }
+        }
         assertThat(physical.readVerified(digest, bytes.length)).containsExactly(bytes);
         assertThat(starts.get()).isEqualTo(2);
     }

@@ -12,6 +12,7 @@ import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -20,17 +21,22 @@ import java.util.stream.Collectors;
 public final class StorageProcessSupervisor {
     private final long timeoutNanos;
     private final String operation;
-    private final boolean requireExitBeforeReturn;
     private final Semaphore callers = new Semaphore(2);
     private final Semaphore capacity = new Semaphore(1, true);
     private final Function<Path, ProcessBuilder> command;
+    private final Consumer<Process> terminate;
 
-    public StorageProcessSupervisor(String operation, Duration budget, boolean requireExitBeforeReturn,
+    public StorageProcessSupervisor(String operation, Duration budget,
                                     Function<Path, ProcessBuilder> command) {
+        this(operation, budget, command, Process::destroyForcibly);
+    }
+
+    StorageProcessSupervisor(String operation, Duration budget, Function<Path, ProcessBuilder> command,
+                             Consumer<Process> terminate) {
         this.operation = operation;
         this.timeoutNanos = budget.toNanos();
-        this.requireExitBeforeReturn = requireExitBeforeReturn;
         this.command = command;
+        this.terminate = terminate;
     }
 
     @FunctionalInterface
@@ -76,8 +82,7 @@ public final class StorageProcessSupervisor {
             if (execution.result == null) throw new IllegalStateException(operation + " unavailable");
             return execution.result;
         } finally {
-            if (execution.done.getCount() != 0) execution.stop();
-            if (requireExitBeforeReturn) execution.awaitTermination();
+            if (execution.done.getCount() != 0) execution.requestStop();
         }
     }
 
@@ -91,10 +96,11 @@ public final class StorageProcessSupervisor {
     private final class Execution<T> {
         private final Exchange<T> exchange;
         private final CountDownLatch done = new CountDownLatch(1);
-        private final CountDownLatch terminated = new CountDownLatch(1);
+        private final CountDownLatch stopCompleted = new CountDownLatch(1);
         private final List<ProcessHandle> descendants = new ArrayList<>();
         private volatile Process child;
         private volatile boolean stopping;
+        private boolean stopScheduled;
         private boolean treeObservationFailed;
         private RuntimeException failure;
         private T result;
@@ -124,13 +130,13 @@ public final class StorageProcessSupervisor {
                 Thread.currentThread().interrupt();
                 failure = new IllegalStateException(operation + " interrupted", interrupted);
             } finally {
-                stop();
+                requestStop();
                 try {
                     // Hold the slot across unconfirmed termination. No replacement can start meanwhile.
                     if (child != null) child.waitFor();
-                    for (var descendant : knownDescendants()) descendant.onExit().get();
+                    if (stopScheduled) stopCompleted.await();
+                    for (var descendant : descendants) descendant.onExit().get();
                     if (treeObservationFailed) throw new IOException("Storage worker process tree not confirmed");
-                    terminated.countDown();
                     cleanDirectory(directory);
                     capacity.release();
                 } catch (IOException | InterruptedException | java.util.concurrent.ExecutionException | RuntimeException unsafeCleanup) {
@@ -142,30 +148,22 @@ public final class StorageProcessSupervisor {
             }
         }
 
-        private void awaitTermination() {
-            boolean interrupted = Thread.interrupted();
+        private synchronized void requestStop() {
+            stopping = true;
+            var process = child;
+            if (stopScheduled || process == null || !process.isAlive()) return;
+            stopScheduled = true;
             try {
-                for (;;) {
-                    try {
-                        terminated.await();
-                        return;
-                    } catch (InterruptedException ignored) {
-                        interrupted = true;
-                    }
-                }
-            } finally {
-                if (interrupted) Thread.currentThread().interrupt();
+                var terminator = new Thread(() -> stop(process), "storage-worker-termination");
+                terminator.setDaemon(true);
+                terminator.start();
+            } catch (RuntimeException | Error failedStart) {
+                treeObservationFailed = true;
+                stopCompleted.countDown();
             }
         }
 
-        private synchronized List<ProcessHandle> knownDescendants() {
-            return List.copyOf(descendants);
-        }
-
-        private synchronized void stop() {
-            stopping = true;
-            var process = child;
-            if (process == null || !process.isAlive()) return;
+        private void stop(Process process) {
             try {
                 process.descendants().forEach(handle -> {
                     if (!descendants.contains(handle)) descendants.add(handle);
@@ -175,9 +173,11 @@ public final class StorageProcessSupervisor {
                 treeObservationFailed = true;
             } finally {
                 try {
-                    process.destroyForcibly();
+                    terminate.accept(process);
                 } catch (RuntimeException ignored) {
                     // The transport keeps waiting for observable exit.
+                } finally {
+                    stopCompleted.countDown();
                 }
             }
         }

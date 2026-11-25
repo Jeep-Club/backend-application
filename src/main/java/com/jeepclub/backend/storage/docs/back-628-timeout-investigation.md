@@ -27,15 +27,17 @@ O heap não representa o RSS máximo do processo.
 O provider privado executa escrita, sincronização, publicação atômica e
 leitura de verificação no mesmo processo filho. Há um escritor ativo,
 heap de 128 MiB e orçamento de quatro segundos para admissão e resposta.
-O catálogo mantém o lock por digest enquanto não houver prova de saída
-do escritor. Bloqueio que sobreviva ao pedido de encerramento mantém o
-slot e o chamador em contenção. O limite transacional existente não é
-prova de término físico.
+Ao expirar o prazo, o supervisor solicita o encerramento fora da thread
+da requisição. O erro encerra a transação do catálogo na própria thread
+e segue o fluxo de 503. Um bloqueio que sobreviva ao pedido mantém o slot
+do escritor ocupado até comprovar saída e limpar o diretório temporário.
+Por supervisor há no máximo um transporte e uma thread de terminação
+residuais. Nenhuma conexão ou transação SQL é transferida ao supervisor.
 
 A falha conserva intents e custódia. Arquivo em estágio permanece
 privado, e um retry pode verificar o objeto canônico sob o lock do
 catálogo. O teste de filesystem bloqueia após escrita e sincronização
-reais, antes do rename. Confirma a saída do filho, a ausência do objeto
+reais, antes da publicação. Confirma a saída do filho, a ausência do objeto
 publicado e a capacidade de gravar e verificar em outro processo.
 
 O serviço propaga o mesmo prazo monotônico ao codec síncrono. O processador
@@ -361,14 +363,21 @@ sem impor uma cota de CPU. Os workers executam com a mesma identidade do serviç
 O provider privado supervisiona escrita, force, publicação e verificação em JVM
 filha com heap de 128 MiB e prazo de quatro segundos. A publicação usa hard link
 no mesmo filesystem e exige suporte a essa operação. Um publicador concorrente
-não é sobrescrito. O lock do digest e a capacidade de escrita ficam retidos até
-que a saída do worker seja comprovada. Uma falha pode deixar stage privado para
-investigação. A leitura normal do asset fica fora desse mecanismo.
+não é sobrescrito. O rollback libera o lock do digest mesmo quando ainda
+há I/O físico residual. Esse processo conhece apenas o digest e os bytes da
+tentativa. Pode publicar pela primeira vez o mesmo conteúdo imutável e não
+pode marcar READY, criar vínculo, alterar cobrança ou finalizar o upload.
+O catálogo confirma READY somente após resposta válida do escritor. Uma falha
+pode deixar stage privado ou objeto canônico sem READY para investigação.
+A leitura normal do asset fica fora desse mecanismo.
 
 No MySQL, as mutações de Storage combinam timeout transacional de cinco segundos
 com timeout de rede JDBC de até sete segundos na conexão emprestada. A aquisição
-no pool usa a configuração da aplicação. Falha de conexão ou resposta perdida
-no commit continua sujeita à recuperação de resultado, sem prazo integral provado.
+no pool usa a configuração da aplicação. A leitura bloqueada em MySQL real
+resulta em exceção de socket e o pool continua utilizável depois da falha.
+O driver pode gastar mais de sete segundos no conjunto de leitura e tratamento
+de falha. O timeout também não comprova um teto para escrita de socket, rollback
+ou commit. Resposta perdida no commit continua sujeita à recuperação de resultado.
 
 A migration V27 adiciona uma identidade aleatória de execução ao permit. Cada
 readmissão recebe uma identidade nova e toda mutação verifica o titular atual.

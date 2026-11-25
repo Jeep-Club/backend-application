@@ -33,6 +33,7 @@ class StorageHttpFlowTest {
     @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
     @org.springframework.test.context.bean.override.mockito.MockitoSpyBean MediaGovernance governance;
     @org.springframework.test.context.bean.override.mockito.MockitoSpyBean com.jeepclub.backend.storage.core.repository.BlobCatalog blobs;
+    @org.springframework.test.context.bean.override.mockito.MockitoSpyBean com.jeepclub.backend.storage.core.repository.PhysicalBlobStore physical;
     @Autowired com.jeepclub.backend.storage.core.repository.MediaAdministration administration;
     @Autowired com.jeepclub.backend.storage.core.application.MediaReferenceService references;
     @Autowired org.springframework.transaction.PlatformTransactionManager manager;
@@ -77,6 +78,35 @@ class StorageHttpFlowTest {
                 .value(org.hamcrest.Matchers.hasItem("STORAGE_MEDIA_PREVIEW")))
             .andExpect(jsonPath("$['paths']['/admin/storage/media']['get']['parameters'][*].name")
                 .value(org.hamcrest.Matchers.hasItems("uploader","owner","createdFrom","createdBefore","context","mime","usage","moderation","physicalState","afterId","limit")));
+    }
+
+    @Test void timedOutPhysicalWriterReturnsSanitized503AndRetainsCustody() throws Exception {
+        var owner = users.registerAndAuthenticate(new UserRegistrationData("Timeout fixture", null,
+                "timeout-fixture@example.com", "12345678909", null, null, null, Instant.now()), "Password@123");
+        long actor = query.findByCpf("12345678909").orElseThrow().id();
+        var output = new ByteArrayOutputStream();
+        ImageIO.write(new BufferedImage(31, 29, BufferedImage.TYPE_INT_RGB), "png", output);
+        var image = new MockMultipartFile("file", "image.png", "image/png", output.toByteArray());
+        var marker = ROOT.resolve("timeout-marker-" + java.util.UUID.randomUUID());
+        try (var fixture = new com.jeepclub.backend.storage.infra.process.StorageSupervisorFixture(marker)) {
+            org.mockito.Mockito.doAnswer(invocation -> { fixture.run(); return null; }).when(physical)
+                    .putVerified(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any());
+            String auth = "Bearer " + owner.accessToken();
+            String key = "timeout-fixture-key";
+            String body = mvc.perform(multipart("/storage/media/profile").file(image)
+                    .header("Authorization", auth).header("Idempotency-Key", key))
+                    .andExpect(status().isServiceUnavailable()).andReturn().getResponse().getContentAsString();
+            org.assertj.core.api.Assertions.assertThat(body).doesNotContain("fixture private deadline", "storage-blobs", "sha256");
+            org.assertj.core.api.Assertions.assertThat(fixture.terminating.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            org.assertj.core.api.Assertions.assertThat(fixture.process.get().isAlive()).isTrue();
+            org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject("select count(*) from storage_media_assets where uploaded_by_user_id=?", Long.class, actor)).isZero();
+            org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject("select count(*) from storage_upload_planned_blobs p join storage_upload_permits u on u.id=p.permit_id where u.actor_user_id=?", Long.class, actor)).isPositive();
+            org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject("select count(*) from storage_blobs b join storage_upload_planned_blobs p on p.sha256=b.sha256 join storage_upload_permits u on u.id=p.permit_id where u.actor_user_id=? and b.ready=false", Long.class, actor)).isPositive();
+            org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject("select charged_uploads from storage_upload_budgets where scope_id=?", Long.class, actor)).isEqualTo(1);
+            mvc.perform(multipart("/storage/media/profile").file(image).header("Authorization", auth).header("Idempotency-Key", key))
+                    .andExpect(status().isServiceUnavailable());
+            org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject("select count(*) from storage_media_assets where uploaded_by_user_id=?", Long.class, actor)).isZero();
+        } finally { org.mockito.Mockito.reset(physical); Files.deleteIfExists(marker); }
     }
 
     @Test void idempotencyHeaderReplaysConfirmedUploadAndRejectsDifferentCrop() throws Exception {
@@ -316,3 +346,4 @@ class StorageHttpFlowTest {
         org.assertj.core.api.Assertions.assertThat(denied).doesNotContain("storageKey","sha256","private-images");
     }
 }
+

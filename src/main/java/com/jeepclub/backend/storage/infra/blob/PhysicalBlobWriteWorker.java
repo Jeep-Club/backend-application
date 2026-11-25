@@ -8,7 +8,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.UUID;
 
-/** Runs the private provider's write, force, rename and verification as one operation. */
+/** Runs the private provider's write, force, publication and verification as one operation. */
 public final class PhysicalBlobWriteWorker {
     private static final int PROTOCOL = 0x4a420001;
     static final int MAX_BYTES = 10 * 1024 * 1024;

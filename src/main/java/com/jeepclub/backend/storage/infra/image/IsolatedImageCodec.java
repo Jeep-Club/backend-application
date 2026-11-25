@@ -19,7 +19,7 @@ final class IsolatedImageCodec {
     }
 
     IsolatedImageCodec(Function<Path, ProcessBuilder> command) {
-        supervisor = new StorageProcessSupervisor("Image codec", Duration.ofSeconds(10), false, command);
+        supervisor = new StorageProcessSupervisor("Image codec", Duration.ofSeconds(10), command);
     }
 
     MediaImageProcessor.Processed process(ImageCodecWorker.Request request, Runnable checkDeadline) {

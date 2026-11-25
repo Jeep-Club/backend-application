@@ -26,7 +26,7 @@ public class LocalPhysicalBlobStore implements PhysicalBlobStore {
     }
     LocalPhysicalBlobStore(Path providerRoot, java.util.function.Function<Path, ProcessBuilder> command) {
         root = providerRoot.toAbsolutePath().normalize().resolve("storage-blobs");
-        writer = new StorageProcessSupervisor("Physical blob write", Duration.ofSeconds(4), true,
+        writer = new StorageProcessSupervisor("Physical blob write", Duration.ofSeconds(4),
                 command == null ? this::physicalCommand : command);
     }
     private ProcessBuilder physicalCommand(Path scratch) {
