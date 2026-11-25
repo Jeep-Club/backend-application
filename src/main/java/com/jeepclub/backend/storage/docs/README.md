@@ -8,23 +8,23 @@ registra os limites atuais de cancelamento e as evidências sobre quota e custó
 
 ## Conclusão transacional do upload — BACK-628
 
-O catálogo e a conclusão do permit confirmado participam da mesma transação
-independente. Uma falha antes do commit reverte asset, variantes e vínculos de
-blob; a finalização é então tentada em transação separada, preservando a falha
-original caso a limpeza também falhe. Blobs já gravados continuam sob custódia,
-e reservas cobradas mantêm sua contabilização. Um retry após rollback conhecido
-pode reutilizar os bytes, mas cria nova reserva. Se o resultado do commit for
-desconhecido por perda de conexão, o protocolo atual não oferece chave de
-idempotência para identificar com certeza o asset já criado; retry cego pode
-duplicar o registro lógico e requer reconciliação. Falha na liberação também
-pode deixar o permit em aberto para investigação.
+O catálogo e a conclusão do permit confirmado participam da mesma transação independente. O 201 só confirma o upload após o commit das representações obrigatórias, sem criar referência operacional ao consumidor. Falha antes do primeiro store permite compensação confirmada da reserva/cobrança; depois do início de store, intents, custódia e contabilização conservadora permanecem, ainda que o catálogo reverta. Falha de compensação conserva a falha original e pode deixar permit aberto para investigação.
 
-O [inventário parcial de consumidores da BACK-628](back-628-consumers.md) registra
-as evidências de layout e as decisões técnicas ainda necessárias para presets.
+O POST de perfil aceita `Idempotency-Key` opcional (1–128 caracteres ASCII alfanuméricos, ponto, sublinhado, til ou hífen). A V26 vincula a chave ao ator, operação, contexto, consumidor e fingerprint dos bytes/crops; não persiste a chave original. Replay idêntico de commit confirmado devolve o mesmo 201/mediaId; payload diferente retorna 409; operação ativa ou indeterminada retorna 503 sem novo codec/store/cobrança. A V27 atribui UUID distinto a cada execução e impede compensação ou mutação tardia de um permit readmitido. Readmissão requer compensação pré-store confirmada e intents idênticos quando já registrados. Sem chave, mantém-se o contrato anterior; 503 não comprova rollback nem autoriza retry cego com chave nova. Não há expiração/reuso automático da chave ou purge.
+
+O processamento permanece síncrono: até dois uploads admitidos por instância, um codec e um escritor ativos por supervisor, heaps de 512/128 MiB e prazo cooperativo de 10 s após admissão. O escritor tem orçamento próprio de 4 s. Após timeout, a requisição segue o fluxo de erro e rollback na própria thread; o supervisor solicita encerramento fora dela e retém a vaga até confirmar saída e limpeza. O escritor residual só pode publicar os bytes imutáveis planejados por hard link sem sobrescrita; não confirma READY, vínculos ou cobrança. Timeouts Spring/JDBC limitam operações suportadas, não garantem prazo absoluto para multipart, pool, recuperação de conexão, commit ou rollback. Heap não equivale a RSS, e ActiveProcessorCount não é quota rígida de CPU.
+
+Código funcional auditado em `8261358c9426f75cf72ed15ee9e7797deb35f537`, [CI 45519454119](https://github.com/Jeep-Club/backend-application/actions/runs/45519454119): Maven 2.759 casos, MySQL 637 no gate principal e 637 no ensaio V+1, Publications PostgreSQL 213, sem falhas, erros ou skips nessas execuções; auditoria de migrations aprovada. As duas execuções MySQL não representam casos distintos. A validação não comprova capacidade em produção.
+
+A BACK-636/637/638/639 foi avaliada no recorte backend; F-02 (espera residual do escritor) e F-03 (fencing) foram corrigidos no código e cobertos por regressões. A homologação integrada de CPU/RAM em Linux/Java 17, filesystem alvo e capacidade da VPS foi explicitamente transferida para [BACK-752](https://jeep-club-developers.atlassian.net/browse/BACK-752), gate do release para master. Não foi executada; preservar feature flag e exigir GO/NO-GO antes da ativação. Integração de consumidores, cutover, reconciliação completa e purge permanecem fora deste aceite. A MASTER não é servida pelo resolvedor comum nem pelo preview administrativo genérico; a futura reedição exige contrato privado próprio.
+
+O [inventário de consumidores da BACK-628](back-628-consumers.md) registra as evidências de layout e os presets backend. Homologação visual e integração por superfície são entregas posteriores.
 
 Storage é o bounded context proprietário da identidade lógica de mídias, suas representações, referências e auditoria. A organização de camadas e contratos segue a [arquitetura global](../../../../../../../../docs/architecture/README.md). A capacidade física é provida por `shared.storage` e `platform.storage`; veja o [guia do provider](../../platform/storage/docs/README.md). Provider, namespace e key são localização técnica, não autorização nem identidade de negócio.
 
-## Referências e estado
+## Referências e estado — contexto histórico da fundação
+
+As seções históricas abaixo descrevem os SHAs e marcos originais de BACK-549/BACK-627, não o estado atual do pipeline BACK-628 descrito acima.
 
 Na `develop` `d33af0a08ccd301d6dd4d686ab484292dc5d8027`, a fundação BACK-549 foi integrada pelo [PR #131](https://github.com/Jeep-Club/backend-application/pull/131), merge `5b1faf2de5ebdede4ee4e392b700354dacef2c17`. A migration `src/main/resources/db/migration/V13__storage_catalog_foundation.sql` é histórica e não deve ser alterada. A branch da épica contém trabalho posterior do [PR #139](https://github.com/Jeep-Club/backend-application/pull/139), que não está integrado em `develop` e não é evidência de produção. Nesta página, as afirmações sobre fundação integrada referem-se ao SHA de `develop` acima; funcionalidades posteriores exigem verificação própria.
 

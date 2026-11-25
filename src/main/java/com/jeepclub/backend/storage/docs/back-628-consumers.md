@@ -155,7 +155,7 @@ Fontes menores não sofrem upscale. A integração de exportação e sua qualida
 visual seguem pendentes; não há evidência que justifique reduzir o limite
 atual da variante de carteirinha.
 
-## Divergência a resolver no pipeline
+## Estado final do pipeline e limites de integração
 
 `MediaResolutionService.resolve` recusa a representação de papel MASTER antes
 de ler qualquer provider. Essa regra cobre a rota comum e a prévia administrativa;
@@ -164,12 +164,8 @@ validade da referência. Não existe ainda contrato de acesso privado para reedi
 uma operação futura deve definir sua própria autorização explícita e preservar
 essas verificações. O endpoint legado de imagens permanece independente.
 
-O semáforo de `SynchronousImageProcessor` limita somente processamento na JVM.
-O limite em `MediaUploadService` abrange leitura do payload, reserva SQL,
-gravação física, transação e conclusão, com duas operações simultâneas por
-processo; a recepção multipart anterior ao controller e outras instâncias não
-estão sob esse limite. Não há cancelamento ponta a ponta demonstrado para codec ou I/O já em
-execução. Um deadline verificado apenas após essas chamadas não interromperia o
-trabalho. A reserva de `BlobCatalogAdapter` é transacionada antes do I/O e
-preservada para reconciliação; testes de falhas e concorrência em banco real são
-necessários para sustentar as garantias de custódia e retry.
+O limite em `MediaUploadService` abrange leitura do payload, reserva SQL, codec isolado, gravação física e conclusão, com duas operações admitidas por instância. A recepção multipart anterior ao controller e outras instâncias ficam fora desse semáforo. O codec e o escritor são supervisionados em processos separados, com capacidade retida até saída confirmada e limpeza. Timeout do escritor não espera indefinidamente na requisição; publicação residual é imutável e não conclui o catálogo. A V26 permite replay idempotente do upload confirmado; V27 impede mutações de execução antiga. Intents e custódia são preservados quando I/O ou commit têm resultado indeterminado. Não se promete cancelamento absoluto de I/O/commit nem deadline de transporte.
+
+Código funcional auditado em `8261358c9426f75cf72ed15ee9e7797deb35f537`, [CI 45519454119](https://github.com/Jeep-Club/backend-application/actions/runs/45519454119): Maven 2.759 casos, MySQL 637 no gate principal e 637 no ensaio V+1, Publications PostgreSQL 213, sem falhas, erros ou skips nessas execuções; auditoria de migrations aprovada. As duas execuções MySQL não representam casos distintos. A validação não comprova capacidade em produção.
+
+A matriz de consumidores satisfaz o inventário backend da BACK-636; medidas de layout continuam vinculadas aos SHAs históricos citados, e não constituem homologação visual. Testes de autorização e integração por superfície, reedição privada da MASTER e cutover legado pertencem às entregas posteriores. A prova agregada Linux/VPS e a evidência perceptual complementar no ensaio operacional ficam em [BACK-752](https://jeep-club-developers.atlassian.net/browse/BACK-752); isso não dispensa os critérios funcionais atuais.

@@ -1,6 +1,16 @@
 # BACK-637 — limites HTTP verificados
 
-## Contenção do raster antes do decode
+## Estado final e evidência de aceite
+
+Código funcional auditado em `8261358c9426f75cf72ed15ee9e7797deb35f537`, [CI 45519454119](https://github.com/Jeep-Club/backend-application/actions/runs/45519454119): Maven 2.759 casos, MySQL 637 no gate principal e 637 no ensaio V+1, Publications PostgreSQL 213, sem falhas, erros ou skips nessas execuções; auditoria de migrations aprovada. As duas execuções MySQL não representam casos distintos. A validação não comprova capacidade em produção.
+
+O pipeline usa até dois uploads admitidos por instância e um codec isolado ativo (512 MiB de heap) e um escritor ativo (128 MiB de heap) por supervisor. IPC limitado, validação pré/pós-decode (20 MP, 10.000 px por eixo), orçamento ponderado de raster e verificação de representações limitam o trabalho admitido. O supervisor mantém capacidade até saída e limpeza; o timeout do escritor segue 503 sem aguardar indefinidamente o filho. A escrita residual imutável preserva custódia e não conclui catálogo. V25–V27 preservam intents, idempotência e fencing. O limite de heap não limita RSS total e ActiveProcessorCount não constitui quota de CPU.
+
+`StorageHttpMySqlIT` (5 casos) e `StorageMultipartMySqlIT` (1 caso parametrizado pelo fluxo herdado do socket), `StorageBlobMySqlIT` (66 casos) e `StorageProcessSupervisorTest` executaram sem falhas/skips no CI indicado. O 503 com escritor vivo, preservação de custódia, reposição de capacidade, rollback e fencing possuem regressões. Não confundir cobertura de classes e cenários exercitados com prova universal de todos os modos de falha.
+
+A prova agregada Linux/Java 17 sob limites representativos e homologação da VPS ficam em [BACK-752](https://jeep-club-developers.atlassian.net/browse/BACK-752), pendente e obrigatória antes da ativação. O teste do limite global multipart continua com ressalva de transporte: não há prova de entrega completa do corpo RFC 9457 quando a conexão é encerrada; o arquivo não é aceito e nenhuma persistência indevida ocorre.
+
+## Histórico — contenção do raster antes do decode
 
 O codec reserva unidades de raster depois de inspecionar as dimensões e
 antes da decodificação. O teto compartilhado equivale a duas imagens de
@@ -69,6 +79,4 @@ controller: 10 MiB válidos recebem 201 e 10 MiB + 1 recebe 400; o segundo caso
 não chega à reserva. Verificam MIME ausente ou incompatível,
 assinatura inválida, arquivos truncados e corrompidos, stream com falha, erro
 sanitizado e ausência de asset/blob ou permit aberto para as entradas rejeitadas.
-MockMvc não substitui o parser multipart do servlet. Faltam cobertura completa
-de todos os cenários em MySQL e comprovação de erro estruturado quando o
-transporte é encerrado antes de completar a resposta.
+MockMvc não substitui o parser multipart do servlet. A execução MySQL dos fluxos HTTP e socket foi confirmada no CI de encerramento indicado acima; permanece a limitação de entrega do erro estruturado quando o transporte é encerrado antes de completar a resposta.

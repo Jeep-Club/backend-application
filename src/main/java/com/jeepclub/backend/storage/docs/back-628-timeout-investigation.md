@@ -1,6 +1,23 @@
 # BACK-628 — limites do timeout síncrono
 
+## Estado de encerramento da BACK-628 (BACK-753)
+
+Código funcional auditado em `8261358c9426f75cf72ed15ee9e7797deb35f537`, [CI 45519454119](https://github.com/Jeep-Club/backend-application/actions/runs/45519454119): Maven 2.759 casos, MySQL 637 no gate principal e 637 no ensaio V+1, Publications PostgreSQL 213, sem falhas, erros ou skips nessas execuções; auditoria de migrations aprovada. As duas execuções MySQL não representam casos distintos. A validação não comprova capacidade em produção.
+
+| Issue | Resultado técnico e evidência |
+| --- | --- |
+| BACK-636 | Matriz de superfícies, contratos, presets, crops e decisões em back-628-consumers.md; integração e UI não fazem parte deste aceite. |
+| BACK-637 | Limites de bytes, MIME, dimensões, raster e IPC; StorageMultipartMySqlIT, StorageHttpMySqlIT e SynchronousImageProcessorTest; capacidade agregada no ambiente alvo transferida. |
+| BACK-638 | MASTER privada, limites 2/5 MiB, crops independentes, no upscale, sanitização, WebP/fallback; testes do processador e resolvedor; qualidade restrita aos casos/corpus verificados. |
+| BACK-639 | F-02 resolvido no recorte da espera indefinida do escritor (8261358c); F-03 resolvido com V27. StorageProcessSupervisorTest, timedOutPhysicalWriterReturnsSanitized503AndRetainsCustody (herdado por StorageHttpMySqlIT), testes de fencing, confirmação perdida e lock em StorageBlobMySqlIT. |
+
+A resposta de timeout não aguarda término residual do escritor; a própria thread reverte o catálogo quando aplicável. O supervisor mantém vaga até saída e limpeza, e a publicação imutável por hard link não sobrescreve o canônico nem modifica o catálogo. V25 registra intents, V26 vincula idempotência, V27 impede mutação de execução antiga. Não existe garantia absoluta de prazo de multipart, pool, I/O do SO, rollback, recuperação JDBC ou commit. Uma confirmação de commit pode chegar depois do deadline; resultado incerto não autoriza retry cego. Sem fila assíncrona de negócio.
+
+O benchmark local anterior (Windows/Java 25/MySQL 8.0.46, 10 sucessos, concorrência 2) registrou p50 2.784 ms e p95 5.394 ms; o smoke Linux/Java 17 com 1 GiB e 2 CPUs não é prova integrada de capacidade. Não atribuir esses resultados ao SHA final. A homologação Linux/Java 17 com orçamento agregado e VPS foi transferida por decisão do PO para [BACK-752](https://jeep-club-developers.atlassian.net/browse/BACK-752); não foi executada. A validação antes da ativação continua obrigatória. Sem deploy, cutover ou purge por este encerramento.
+
 ## Verificação por etapa e confirmação de commit
+
+Os detalhes abaixo complementam o estado de encerramento. As seções expressamente históricas preservam decisões e evidências do momento da investigação, não pendências atuais.
 
 ### Codec isolado
 
@@ -54,7 +71,7 @@ possível I/O e que a capacidade em memória volta após o retorno da chamada.
 O teste cobre o prazo cooperativo. Codec e filesystem ainda ocupam o slot
 enquanto suas chamadas estão em voo.
 
-`StorageUploadFlowTest.catalogCommitWithoutAcknowledgementKeepsOneChargedAssetAndNoReference`
+`StorageUploadFlowTest.missingCommitAcknowledgementKeepsCustodyWithEitherDatabaseOutcome`
 simula perda da confirmação imediatamente após delegar o commit ao banco.
 Uma falha sistêmica de transação ou de conexão depois da reserva recebe
 `STORAGE_UNAVAILABLE` (503). Se o commit já ocorreu, o permit concluído
@@ -120,7 +137,7 @@ resultados do catálogo preservam a custódia e uma cobrança, e apenas o
 commit confirmado no banco preserva o vínculo com o asset. Esses ensaios
 não simulam a indisponibilidade prolongada do banco ou a falha de rede.
 
-## Benchmark por socket e MySQL
+## Histórico — benchmark por socket e MySQL
 
 ### Checkpoint de entrega
 
@@ -164,7 +181,7 @@ O corpus opcional é lido ao passar
 `-Dstorage.benchmark.publicGallery=<diretório public/images do frontend>`
 ao [comando diagnóstico](../../../../../../../../docs/testing/progressive-validation.md#diagnósticos-de-storage).
 
-## Prazo cooperativo após admissão
+## Histórico — prazo cooperativo após admissão
 
 `MediaUploadService` mede 10 s com relógio monotônico a partir da aquisição
 do permit em memória. Verifica o prazo após a reserva SQL, a leitura e o
@@ -199,7 +216,7 @@ uma gravação e dentro do callback SQL, verificando 503, contadores, intents,
 custódia, rollback e reutilização do slot. Validar separadamente erro de
 conexão no commit em banco real.
 
-## Diagnóstico anterior à checagem cooperativa
+## Histórico — diagnóstico anterior à checagem cooperativa
 
 No commit-base `ebb3e7d5b6a46c854cedd703e42cdde7d1a2c9d6`, a recepção
 multipart ocorre no servlet antes do controller. O serviço admite até dois
@@ -235,7 +252,7 @@ uma queda de conexão durante commit continua exigindo reconciliação. A decis�
 de estratégia e seus custos operacionais devem ser revisados antes de alegar
 F-02 concluída. Nenhum worker ou fila é introduzido por esta investigação.
 
-## Quota e falhas de gravação
+## Histórico — Quota e falhas de gravação
 
 `charge` antecede o primeiro `BlobCatalog.store`. Uma falha de leitura ou de
 processamento antes de `charge` termina com permit não cobrado e libera a
@@ -262,7 +279,7 @@ decisão em aberto; não se deve interpretar a exceção do port como prova de
 ausência de custódia.
 
 
-## Rastreabilidade da tentativa
+## Histórico — Rastreabilidade da tentativa
 
 Antes do primeiro `store`, a tentativa confirma em transação independente a lista
 ordenada de SHA-256 e tamanhos das representações planejadas. O registro é intenção,
@@ -276,7 +293,7 @@ de idempotência é entregue ao cliente. Isto não limita codec, filesystem, loc
 commit e não resolve a decisão F-02 nem a política de reconciliação de quota.
 
 
-## Compensação anterior ao armazenamento
+## Histórico — Compensação anterior ao armazenamento
 
 A falha antes da primeira chamada ao port de armazenamento libera a reserva e,
 se confirmada, a cobrança, mesmo que a resposta da transação de cobrança tenha
@@ -290,7 +307,7 @@ Os registros de intenção e permits não têm expiração automática: retenç�
 reconciliação permanecem manuais, sem purge autorizado.
 
 
-## Alternativas para F-02
+## Histórico — Alternativas para F-02
 
 O semáforo limita a admissão por processo, mas não termina uma chamada já
 ativa. Um prazo entre etapas pode impedir iniciar trabalho posterior, sem
@@ -319,7 +336,7 @@ existência dos assets e política de retenção antes de uma migration aditiva;
 se altera V25 nem se apagam intents para satisfazer uma constraint.
 
 
-## Limite de transações de admissão
+## Histórico — Limite de transações de admissão
 
 As transações independentes de admissão possuem timeout Spring de cinco
 segundos. Em MySQL 8.0.46 e Connector/J, a regressão de contenção observou
@@ -339,7 +356,7 @@ a contabilidade de tentativas pela soma incompatível de blobs ou assets.
 Um permit aberto pode pertencer a requisição ativa ou a processo encerrado;
 sem lease e fencing, idade isolada não autoriza estorno ou liberação automática.
 
-## Limites adicionais do catálogo — BACK-639
+## Histórico — Limites adicionais do catálogo — BACK-639
 
 As transações isoladas de reserva e bloqueio de blob e a transação de conclusão
 do catálogo também configuram timeout Spring de cinco segundos. Esse limite é
