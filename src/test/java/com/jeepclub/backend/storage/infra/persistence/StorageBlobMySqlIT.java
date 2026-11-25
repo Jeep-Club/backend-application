@@ -7,6 +7,50 @@ import org.springframework.test.context.DynamicPropertySource;
 
 @Testcontainers
 class StorageBlobMySqlIT extends StorageUploadFlowTest {
+    @org.junit.jupiter.api.Test void scopedJdbcNetworkTimeoutEndsARealBlockedReadAndPoolRemainsUsable() throws Exception {
+        String lock = "back628-network-read";
+        var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try (var blocker = java.sql.DriverManager.getConnection(MYSQL.getJdbcUrl(), MYSQL.getUsername(), MYSQL.getPassword());
+             var statement = blocker.prepareStatement("select get_lock(?,0)")) {
+            statement.setString(1, lock);
+            try (var row = statement.executeQuery()) {
+                org.assertj.core.api.Assertions.assertThat(row.next() && row.getInt(1) == 1).isTrue();
+            }
+            var entered = new java.util.concurrent.CountDownLatch(1);
+            var readFailure = new java.util.concurrent.atomic.AtomicReference<java.sql.SQLException>();
+            var pending = executor.submit(() -> {
+                var tx = new org.springframework.transaction.support.TransactionTemplate(manager);
+                tx.setTimeout(20);
+                tx.executeWithoutResult(status -> {
+                    admission.boundCatalogTransaction();
+                    quotaEntityManager.unwrap(org.hibernate.Session.class).doWork(connection -> {
+                        org.assertj.core.api.Assertions.assertThat(connection.getNetworkTimeout()).isEqualTo(7000);
+                        try (var blocked = connection.prepareStatement("select get_lock(?,18)")) {
+                            blocked.setString(1, lock);
+                            entered.countDown();
+                            try {
+                                blocked.executeQuery().close();
+                            } catch (java.sql.SQLException failure) {
+                                readFailure.set(failure);
+                                throw failure;
+                            }
+                        }
+                    });
+                });
+            });
+            org.assertj.core.api.Assertions.assertThat(entered.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            Throwable failure = org.assertj.core.api.Assertions.catchThrowable(
+                    () -> pending.get(12, java.util.concurrent.TimeUnit.SECONDS));
+            org.assertj.core.api.Assertions.assertThat(failure).isInstanceOf(java.util.concurrent.ExecutionException.class);
+            var causes = new java.util.ArrayList<Throwable>();
+            for (Throwable cause = readFailure.get(); cause != null; cause = cause.getCause()) causes.add(cause);
+            org.assertj.core.api.Assertions.assertThat(causes).anyMatch(java.net.SocketTimeoutException.class::isInstance);
+        } finally {
+            executor.shutdownNow();
+        }
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject("select 1", Integer.class)).isEqualTo(1);
+    }
+
     @org.junit.jupiter.api.Test void blobLockTimeoutRetainsExistingCustody() throws Exception {
         byte[] bytes=image(222);
         var original=blobs.store(bytes);

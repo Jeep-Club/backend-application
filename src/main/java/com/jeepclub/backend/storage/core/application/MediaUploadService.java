@@ -141,6 +141,8 @@ public class MediaUploadService {
         requireTimeRemaining(admittedAt);
         return transaction.execute(status -> {
             requireTimeRemaining(admittedAt);
+            admission.boundCatalogTransaction();
+            requireTimeRemaining(admittedAt);
             Instant now=clock.instant(); var audit=new MediaAuditContext(MediaActorKind.USER,actor,now,null);
             var asset=catalog.registerAsset(new MediaAsset(null,MediaOrigin.UPLOAD,context,consumerId,actor,identity.ownerUserId(),MediaSubjectType.valueOf(identity.subjectType().name()),identity.subjectId(),
                 "PHOTO",MediaClassification.CLASSIFIED,MediaPhysicalState.PRESENT,now,now,null),audit);

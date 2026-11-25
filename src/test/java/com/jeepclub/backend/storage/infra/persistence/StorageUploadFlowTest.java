@@ -244,6 +244,28 @@ class StorageUploadFlowTest {
         assertThat(jdbc.queryForObject("select catalog_asset_id from storage_upload_permits where actor_user_id=?",Long.class,actor)).isEqualTo(result.mediaId());
         assertThat(finishCalls.get()).isZero();
     }
+    @Test void compensatedPreWriteRetryReusesOnlyTheSameImmutableIntents() {
+        long actor = 987642L;
+        var identity = new UploadAdmission.RequestIdentity("5".repeat(64), "6".repeat(64), "7".repeat(64));
+        var plan = List.of(new UploadAdmission.PlannedBlob("8".repeat(64), 1024));
+        var first = admission.reserve(actor, identity).permit();
+        admission.charge(first, 1024);
+        admission.recordPlannedBlobs(first, plan);
+        admission.abortBeforeStore(first);
+        var retry = admission.reserve(actor, identity).permit();
+        assertThat(retry.id()).isEqualTo(first.id());
+        assertThat(retry.executionId()).isNotEqualTo(first.executionId());
+        admission.charge(retry, 1024);
+        assertThatThrownBy(() -> admission.recordPlannedBlobs(retry, List.of(new UploadAdmission.PlannedBlob("9".repeat(64), 1024))))
+                .isInstanceOf(IllegalStateException.class);
+        admission.recordPlannedBlobs(retry, plan);
+        assertThat(jdbc.queryForObject("select count(*) from storage_upload_planned_blobs where permit_id=?", Long.class, first.id()))
+                .isEqualTo(1);
+        assertThat(jdbc.queryForObject("select charged_uploads from storage_upload_budgets where scope_id=?", Long.class, actor))
+                .isEqualTo(1);
+        admission.abortBeforeStore(retry);
+    }
+
     @Test void staleExecutionCannotMutateReadmittedPermit() {
         long actor = 987641L;
         var identity = new UploadAdmission.RequestIdentity("d".repeat(64), "e".repeat(64), "f".repeat(64));

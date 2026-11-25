@@ -14,6 +14,9 @@ public class StorageMediaErrors {
     @ExceptionHandler(com.jeepclub.backend.storage.core.repository.UploadAdmission.LimitExceeded.class) public ResponseEntity<ProblemDetail> limited() {return error(429);}
     @ExceptionHandler(com.jeepclub.backend.storage.core.repository.UploadAdmission.PayloadConflict.class) public ResponseEntity<ProblemDetail> conflict() {return error(409);}
     @ExceptionHandler({org.springframework.dao.PessimisticLockingFailureException.class,
+        org.springframework.dao.DataAccessResourceFailureException.class,
+        org.springframework.transaction.CannotCreateTransactionException.class,
+        org.springframework.orm.jpa.JpaSystemException.class,
         com.jeepclub.backend.storage.core.application.MediaUploadService.ProcessingDeadlineExceeded.class,
         org.springframework.dao.QueryTimeoutException.class,org.springframework.transaction.TransactionTimedOutException.class,
         jakarta.persistence.LockTimeoutException.class,jakarta.persistence.QueryTimeoutException.class})

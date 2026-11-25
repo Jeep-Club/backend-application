@@ -32,6 +32,7 @@ public class SqlUploadAdmission implements UploadAdmission {
     }
     private void ensure(long scope) {
         try {tx.executeWithoutResult(status -> {
+            boundCatalogTransaction();
             if(em.find(UploadBudgetEntity.class,scope)!=null) return;
             // Existing permits are a different accounting ledger from blobs/assets.
             // Reconstructing a missing budget from those sources could undercount custody.
@@ -44,7 +45,17 @@ public class SqlUploadAdmission implements UploadAdmission {
                 em.createQuery("select coalesce(sum(v.sizeBytes),0) from MediaVariantEntity v,MediaAssetEntity a where v.mediaId=a.mediaId and a.uploadedByUserId=:actor",Long.class).setParameter("actor",scope).getSingleResult();
             row.setUsedBytes(existing);if(scope!=0) row.setChargedUploads(em.createQuery("select count(a) from MediaAssetEntity a where a.uploadedByUserId=:actor",Long.class).setParameter("actor",scope).getSingleResult());
             em.persist(row);em.flush();
-        });} catch(RuntimeException collision) {if(!Boolean.TRUE.equals(tx.execute(s -> em.find(UploadBudgetEntity.class,scope)!=null))) throw collision;}
+        });} catch(RuntimeException collision) {
+            try {
+                if (!Boolean.TRUE.equals(tx.execute(s -> {
+                    boundCatalogTransaction();
+                    return em.find(UploadBudgetEntity.class,scope)!=null;
+                }))) throw collision;
+            } catch (RuntimeException verification) {
+                if (verification != collision) collision.addSuppressed(verification);
+                throw collision;
+            }
+        }
     }
     private UploadBudgetEntity lock(long scope) {
         var row=em.find(UploadBudgetEntity.class,scope,LockModeType.PESSIMISTIC_WRITE);
@@ -68,6 +79,7 @@ public class SqlUploadAdmission implements UploadAdmission {
         var provisional = new AtomicReference<>(permit);
         try {
             return tx.execute(status -> {
+                boundCatalogTransaction();
                 var global=lock(0);var user=lock(actor);Instant now=Instant.now();
                 UploadPermitEntity prior = identity == null ? null : findRequest(actor, identity);
                 if (prior != null) {
@@ -80,7 +92,7 @@ public class SqlUploadAdmission implements UploadAdmission {
                 user.setWindowAttempts(user.getWindowAttempts()+1);user.setInFlight(user.getInFlight()+1);
                 user.setUsedBytes(user.getUsedBytes()+MAX_RESERVATION);global.setUsedBytes(global.getUsedBytes()+MAX_RESERVATION);
                 if (prior != null) {
-                    // A completed, uncharged permit cannot have reached physical storage.
+                    // Only a completed permit with its reservation or charge safely reversed may restart.
                     var retry = new Permit(prior.getId(), actor, permit.executionId());
                     provisional.set(retry);
                     prior.setExecutionId(retry.executionId());
@@ -99,7 +111,7 @@ public class SqlUploadAdmission implements UploadAdmission {
                 em.persist(row);em.flush();
                 return new KeyedReservation(permit, null);
             });
-        } catch (TransactionSystemException | DataAccessResourceFailureException failure) {
+        } catch (TransactionSystemException | DataAccessResourceFailureException | org.springframework.orm.jpa.JpaSystemException failure) {
             // The permit never reached the upload pipeline, so it could not start a physical write.
             try {
                 abortBeforeStore(provisional.get(), true);
@@ -135,6 +147,7 @@ public class SqlUploadAdmission implements UploadAdmission {
     @Override public void charge(Permit permit,long bytes) {
         if(bytes<=0 || bytes>MAX_RESERVATION) throw new IllegalArgumentException("Invalid representation budget");
         tx.executeWithoutResult(status -> {
+            boundCatalogTransaction();
             var global=lock(0);var user=lock(permit.actor());var row=lockPermit(permit.id());
             requireCurrentExecution(row, permit);
             if(row.isCompleted() || row.isCharged()) throw new IllegalArgumentException("Invalid upload permit");
@@ -146,6 +159,7 @@ public class SqlUploadAdmission implements UploadAdmission {
     @Override public void recordPlannedBlobs(Permit permit,java.util.List<PlannedBlob> blobs) {
         if(blobs==null || blobs.isEmpty()) throw new IllegalArgumentException("Missing planned blobs");
         tx.executeWithoutResult(status -> {
+            boundCatalogTransaction();
             var row=lockPermit(permit.id());
             requireCurrentExecution(row, permit);
             if(row.isCompleted() || !row.isCharged()) throw new IllegalArgumentException("Invalid upload permit");
@@ -155,6 +169,7 @@ public class SqlUploadAdmission implements UploadAdmission {
                 total=Math.addExact(total,blob.sizeBytes());
             }
             if(total!=row.getAccountedBytes()) throw new IllegalArgumentException("Representation budget mismatch");
+            if (row.getRequestKeyHash() != null && reuseIntents(permit, blobs)) return;
             for(int index=0;index<blobs.size();index++) {
                 var blob=blobs.get(index);var planned=new UploadPlannedBlobEntity();
                 planned.setPermitId(permit.id());planned.setPosition(index);planned.setSha256(blob.sha256());planned.setSizeBytes(blob.sizeBytes());em.persist(planned);
@@ -162,11 +177,30 @@ public class SqlUploadAdmission implements UploadAdmission {
             em.flush();
         });
     }
+    private boolean reuseIntents(Permit permit, java.util.List<PlannedBlob> blobs) {
+        var previous = em.createQuery("""
+                select p from UploadPlannedBlobEntity p where p.permitId=:permit order by p.position
+                """, UploadPlannedBlobEntity.class)
+                .setParameter("permit", permit.id())
+                .getResultList();
+        if (previous.isEmpty()) return false;
+        if (previous.size() != blobs.size()) throw new IllegalStateException("Upload representations changed before retry");
+        for (int index = 0; index < blobs.size(); index++) {
+            var stored = previous.get(index);
+            var requested = blobs.get(index);
+            if (stored.getPosition() != index || stored.getSizeBytes() != requested.sizeBytes()
+                    || !stored.getSha256().equals(requested.sha256())) {
+                throw new IllegalStateException("Upload representations changed before retry");
+            }
+        }
+        return true;
+    }
     @Override public void abortBeforeStore(Permit permit) {
         abortBeforeStore(permit, false);
     }
     private void abortBeforeStore(Permit permit, boolean recoveringReservation) {
         tx.executeWithoutResult(status -> {
+            boundCatalogTransaction();
             var global=lock(0);var user=lock(permit.actor());var row=lockPermit(permit.id());
             // The same budget locks serialize this check with the original reservation.
             if (row == null && recoveringReservation) return;
@@ -177,12 +211,23 @@ public class SqlUploadAdmission implements UploadAdmission {
             }
             global.setUsedBytes(global.getUsedBytes()-row.getAccountedBytes());
             user.setUsedBytes(user.getUsedBytes()-row.getAccountedBytes());
-            if(row.isCharged()) user.setChargedUploads(user.getChargedUploads()-1);
+            if(row.isCharged()) {
+                user.setChargedUploads(user.getChargedUploads()-1);
+                // Preserve the historical flag for legacy callers. A keyed permit can restart
+                // only after this explicitly pre-storage compensation is persisted.
+                if (row.getRequestKeyHash() != null) row.setCharged(false);
+            }
             user.setInFlight(user.getInFlight()-1);row.setAccountedBytes(0);row.setCompleted(true);em.flush();
         });
     }
     @Override public void finish(Permit permit) {
-        tx.executeWithoutResult(status -> finishLocked(permit));
+        tx.executeWithoutResult(status -> {
+            boundCatalogTransaction();
+            finishLocked(permit);
+        });
+    }
+    @Override public void boundCatalogTransaction() {
+        StorageJdbcLimits.boundMySqlNetwork(em);
     }
     @Override @org.springframework.transaction.annotation.Transactional(propagation=org.springframework.transaction.annotation.Propagation.MANDATORY)
     public void finishInCatalogTransaction(Permit permit,long mediaId) {

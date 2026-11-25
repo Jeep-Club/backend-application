@@ -348,3 +348,32 @@ deduplicação; uma transação expirada pode continuar ocupando recursos enquan
 o provider não retorna. A exceção original da reserva é preservada caso a
 verificação posterior de colisão também falhe. O teste de contenção MySQL deve
 ser executado no SHA entregue antes de atribuir garantia ao caminho de blob.
+
+## Contenção implementada — BACK-639
+
+O POST continua síncrono. O codec opera em JVM filha com heap de 512 MiB,
+limite de um processo ativo e de dois chamadores por JVM da API, prazo e IPC
+binário limitado. O supervisor confirma a saída antes de devolver a capacidade.
+O worker não carrega o contexto Spring e recebe um ambiente reduzido. O limite
+de heap não limita toda a memória nativa, e ActiveProcessorCount orienta a JVM
+sem impor uma cota de CPU. Os workers executam com a mesma identidade do serviço.
+
+O provider privado supervisiona escrita, force, publicação e verificação em JVM
+filha com heap de 128 MiB e prazo de quatro segundos. A publicação usa hard link
+no mesmo filesystem e exige suporte a essa operação. Um publicador concorrente
+não é sobrescrito. O lock do digest e a capacidade de escrita ficam retidos até
+que a saída do worker seja comprovada. Uma falha pode deixar stage privado para
+investigação. A leitura normal do asset fica fora desse mecanismo.
+
+No MySQL, as mutações de Storage combinam timeout transacional de cinco segundos
+com timeout de rede JDBC de até sete segundos na conexão emprestada. A aquisição
+no pool usa a configuração da aplicação. Falha de conexão ou resposta perdida
+no commit continua sujeita à recuperação de resultado, sem prazo integral provado.
+
+A migration V27 adiciona uma identidade aleatória de execução ao permit. Cada
+readmissão recebe uma identidade nova e toda mutação verifica o titular atual.
+Uma compensação tardia não altera a execução readmitida. Para chave idempotente,
+compensação confirmada antes de iniciar o provider pode liberar a cobrança e
+readmitir a mesma operação. Intents já registrados só podem ser reaproveitados
+se o novo plano reproduzir os mesmos digests e tamanhos na mesma ordem. Depois
+de iniciar o provider, a cobrança incerta e a reserva da chave são preservadas.

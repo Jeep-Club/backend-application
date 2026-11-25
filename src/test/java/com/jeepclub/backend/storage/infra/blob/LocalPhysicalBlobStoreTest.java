@@ -8,6 +8,35 @@ import java.nio.file.Path;
 import static org.assertj.core.api.Assertions.*;
 
 class LocalPhysicalBlobStoreTest {
+    public static final class CompetingPublisher {
+        public static void main(String[] args) throws Exception {
+            Path root = Path.of(args[0]);
+            PhysicalBlobWriteWorker.serve(root, () -> {
+                try {
+                    Files.write(root.resolve("storage-blobs").resolve(args[1] + ".bin"),
+                            new byte[]{3, 2, 1}, java.nio.file.StandardOpenOption.CREATE_NEW);
+                } catch (java.io.IOException failure) {
+                    throw new java.io.UncheckedIOException(failure);
+                }
+            });
+        }
+    }
+
+    @Test void canonicalBlobIsNotOverwrittenWhenAnotherWriterWinsPublication(
+            @org.junit.jupiter.api.io.TempDir Path root) throws Exception {
+        byte[] bytes = {1, 2, 3};
+        String digest = BlobCatalogAdapter.digest(bytes);
+        var physical = new LocalPhysicalBlobStore(root, scratch -> {
+            var command = com.jeepclub.backend.storage.infra.process.StorageProcessSupervisor
+                    .javaWorker(scratch, CompetingPublisher.class, 128);
+            command.command().add(root.toString());
+            command.command().add(digest);
+            return command;
+        });
+        assertThatThrownBy(() -> physical.putVerified(digest, bytes)).isInstanceOf(IllegalStateException.class);
+        assertThat(Files.readAllBytes(root.resolve("storage-blobs").resolve(digest + ".bin"))).containsExactly(3, 2, 1);
+    }
+
     public static final class BlockedBeforePublish {
         public static void main(String[] args) throws Exception {
             PhysicalBlobWriteWorker.serve(Path.of(args[0]), () -> {

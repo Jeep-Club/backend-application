@@ -12,6 +12,8 @@ public interface UploadAdmission {
     void charge(Permit permit,long bytes);
     /** Commit the intended representations before any physical write. */
     void recordPlannedBlobs(Permit permit, java.util.List<PlannedBlob> blobs);
+    /** Apply database-specific communication limits before mutating the catalog. */
+    default void boundCatalogTransaction() {}
     /** Complete within the caller's catalog transaction; failure rolls back the catalog. */
     void finishInCatalogTransaction(Permit permit, long mediaId);
     /** Only when the caller has not invoked the physical storage port. Idempotent. */

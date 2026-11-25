@@ -74,8 +74,15 @@ public class LocalPhysicalBlobStore implements PhysicalBlobStore {
                 ByteBuffer buffer=ByteBuffer.wrap(bytes); while(buffer.hasRemaining()) channel.write(buffer); channel.force(true);
             }
             beforePublish.run();
-            Files.move(stage,target,StandardCopyOption.ATOMIC_MOVE);
+            // A database disconnect can release the digest lock while the writer is still alive.
+            // Publishing with a hard link creates the canonical name atomically without replacing it.
+            try {
+                Files.createLink(target, stage);
+            } catch (FileAlreadyExistsException concurrentPublisher) {
+                // Verify the winning object before removing this private staging link.
+            }
             readVerified(digest,bytes.length);
+            Files.delete(stage);
         } catch (IOException e) { throw new IllegalStateException("Physical blob write failed; custody preserved for reconciliation",e); }
     }
     @Override public byte[] readVerified(String digest,long size) {
